@@ -28,6 +28,7 @@ test("an unconfigured server reports no usable model, then onboards without a re
   const root = await makeWorkspace();
   const server = await startServer(root, {}, { env: withoutProviderKeys() });
   const client = connect(server.wsUrl());
+  await client.open();
   try {
     const hello = await client.waitFor((m) => m.type === "hello");
     assert.equal(hello.credentials.usableModel, false, "no key anywhere: nothing can answer");
@@ -67,6 +68,7 @@ test("a custom OpenAI-compatible endpoint becomes selectable, and is written whe
   const root = await makeWorkspace();
   const server = await startServer(root, {}, { env: withoutProviderKeys() });
   const client = connect(server.wsUrl());
+  await client.open();
   let written;
   try {
     await client.waitFor((m) => m.type === "hello");
@@ -104,6 +106,7 @@ test("a custom OpenAI-compatible endpoint becomes selectable, and is written whe
   const seeded = await makeWorkspace({ ".pi-agent/models.json": written });
   const restarted = await startServer(seeded, {}, { env: withoutProviderKeys() });
   const second = connect(restarted.wsUrl());
+  await second.open();
   try {
     const hello = await second.waitFor((m) => m.type === "hello");
     assert.ok(
@@ -120,6 +123,7 @@ test("a base URL that is not http(s) is refused", async () => {
   const root = await makeWorkspace();
   const server = await startServer(root, {}, { env: withoutProviderKeys() });
   const client = connect(server.wsUrl());
+  await client.open();
   try {
     await client.waitFor((m) => m.type === "hello");
     client.send({ type: "declare_provider", provider: "bad", baseUrl: "file:///etc/passwd", apiKey: "k", models: ["m"] });
