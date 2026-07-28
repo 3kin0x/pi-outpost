@@ -41,7 +41,12 @@ test("an unconfigured server reports no usable model, then onboards without a re
 
     client.send({ type: "set_credential", provider: "anthropic", apiKey: "sk-ant-not-a-real-key" });
 
-    const replaced = await client.waitFor((m) => m.type === "credentials_changed");
+    // The pi SDK may make network calls when registering the key (cache refresh,
+    // provider metadata), so allow longer than the default 60 s waitFor timeout.
+    // CI runners can take 90+ s for the SDK's network calls to time out, so we
+    // grant 180 s — the node --test-timeout (300 s) still has headroom for the
+    // rest of the test after this wait.
+    const replaced = await client.waitFor((m) => m.type === "credentials_changed", 180_000);
     assert.equal(replaced.credentials.usableModel, true, "the agent can answer now");
     const anthropic = replaced.credentials.providers.find((provider) => provider.id === "anthropic");
     assert.equal(anthropic.configured, true);
