@@ -6,6 +6,7 @@ import {
   historyToItems,
   assistantToItem,
   customMessageToItem,
+  messageUsage,
 } from "../src/convert.ts";
 
 // ---------------------------------------------------------------------------
@@ -313,6 +314,56 @@ describe("historyToItems", () => {
 // ---------------------------------------------------------------------------
 // assistantToItem
 // ---------------------------------------------------------------------------
+describe("historyToItems — turn usage", () => {
+  test("replayed assistant turns keep the usage they reported", () => {
+    const items = historyToItems([
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+        usage: { input: 8, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: { total: 0.002 } },
+      },
+    ]);
+    const assistant = items.find((item) => item.kind === "assistant");
+    assert.equal(assistant?.usage?.totalTokens, 12);
+    assert.equal(assistant?.usage?.cost, 0.002);
+  });
+
+  test("a replayed turn that reported nothing carries no usage", () => {
+    const items = historyToItems([{ role: "assistant", content: [{ type: "text", text: "hello" }] }]);
+    const assistant = items.find((item) => item.kind === "assistant");
+    assert.equal(assistant?.usage, undefined);
+  });
+
+  test("a turn that only called tools is still replayed for its usage", () => {
+    // Nothing to show — but it is a turn, and dropping it would make a reopened
+    // session report less than it did while it ran.
+    const items = historyToItems([
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } }],
+        usage: { input: 20, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 23, cost: { total: 0.004 } },
+      },
+    ]);
+    const assistant = items.find((item) => item.kind === "assistant");
+    assert.equal(assistant?.blocks.length, 0);
+    assert.equal(assistant?.usage?.totalTokens, 23);
+    assert.equal(assistant?.usage?.cost, 0.004);
+  });
+
+  test("a tool-only turn without usage stays out of the transcript", () => {
+    const items = historyToItems([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }] },
+    ]);
+    assert.equal(
+      items.some((item) => item.kind === "assistant"),
+      false,
+    );
+  });
+});
+
 describe("assistantToItem", () => {
   test("converts a final assistant message", () => {
     const item = assistantToItem({
@@ -330,6 +381,124 @@ describe("assistantToItem", () => {
       errorMessage: "fail",
     });
     assert.equal(item.errorMessage, "fail");
+  });
+
+  test("carries the turn's usage when the provider reported it", () => {
+    const item = assistantToItem({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: { total: 0.004 } },
+    });
+    assert.equal(item.kind, "assistant");
+    assert.deepEqual(item.usage, {
+      input: 10,
+      output: 5,
+      cacheRead: 2,
+      cacheWrite: 1,
+      totalTokens: 18,
+      cost: 0.004,
+    });
+  });
+
+  test("an unpriced turn yields usage without a cost", () => {
+    // A self-hosted model reports counters and no price. The field must be
+    // missing, not zero: zero would read as "this turn was free".
+    const item = assistantToItem({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+    });
+    assert.equal(item.usage?.totalTokens, 15);
+    assert.equal("cost" in (item.usage ?? {}), false);
+  });
+
+  test("carries no usage when the message reports none", () => {
+    const item = assistantToItem({ role: "assistant", content: [{ type: "text", text: "done" }] });
+    assert.equal(item.usage, undefined);
+  });
+});
+
+describe("messageUsage", () => {
+  const counters = { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 };
+
+  test("reads complete counters", () => {
+    const usage = messageUsage({ role: "assistant", content: "", usage: { ...counters, totalTokens: 18 } });
+    assert.deepEqual(usage, { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18 });
+  });
+
+  test("derives totalTokens when the provider omits it", () => {
+    const usage = messageUsage({ role: "assistant", content: "", usage: { ...counters } });
+    assert.equal(usage?.totalTokens, 18);
+  });
+
+  test("keeps reasoning tokens when reported", () => {
+    const usage = messageUsage({ role: "assistant", content: "", usage: { ...counters, reasoning: 3 } });
+    assert.equal(usage?.reasoning, 3);
+  });
+
+  test("rejects a turn missing a counter", () => {
+    // Half a turn would skew every total built on it; a dropped turn is at least
+    // visible in the turn count.
+    const { cacheWrite: _omitted, ...partial } = counters;
+    assert.equal(messageUsage({ role: "assistant", content: "", usage: partial }), undefined);
+  });
+
+  test("rejects a non-numeric counter", () => {
+    assert.equal(
+      messageUsage({ role: "assistant", content: "", usage: { ...counters, output: "5" } }),
+      undefined,
+    );
+  });
+
+  test("rejects an infinite counter", () => {
+    assert.equal(
+      messageUsage({ role: "assistant", content: "", usage: { ...counters, input: Number.POSITIVE_INFINITY } }),
+      undefined,
+    );
+  });
+
+  test("reports a turn the model priced", () => {
+    const usage = messageUsage({
+      role: "assistant",
+      content: "",
+      usage: { ...counters, cost: { input: 0.002, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.003 } },
+    });
+    assert.equal(usage?.cost, 0.003);
+  });
+
+  test("treats an all-zero breakdown as no price at all", () => {
+    // The SDK computes cost from the model's rates and always fills `total`, so a
+    // model with no rates reports 0 — a self-hosted deployment, not a free bill.
+    const usage = messageUsage({
+      role: "assistant",
+      content: "",
+      usage: { ...counters, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    });
+    assert.equal(usage?.totalTokens, 18);
+    assert.equal("cost" in (usage ?? {}), false);
+  });
+
+  test("keeps a price smaller than a cent", () => {
+    const usage = messageUsage({
+      role: "assistant",
+      content: "",
+      usage: { ...counters, cost: { input: 0.00004, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.00004 } },
+    });
+    assert.equal(usage?.cost, 0.00004);
+  });
+
+  test("ignores a cost object without a numeric total", () => {
+    const usage = messageUsage({
+      role: "assistant",
+      content: "",
+      usage: { ...counters, cost: { input: 0.1 } },
+    });
+    assert.equal(usage?.cost, undefined);
+  });
+
+  test("returns nothing when there is no usage object", () => {
+    assert.equal(messageUsage({ role: "assistant", content: "" }), undefined);
+    assert.equal(messageUsage({ role: "assistant", content: "", usage: null }), undefined);
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * Conversion from SDK AgentMessage history to wire ChatItems.
  */
-import type { AssistantBlock, ChatItem, WireImage } from "@pi-outpost/shared";
+import type { AssistantBlock, ChatItem, TurnUsage, WireImage } from "@pi-outpost/shared";
 import {
   renderCustomMessageHtml,
   renderToolCallHtml,
@@ -32,6 +32,61 @@ interface AnyMessage {
   details?: unknown;
   /** Whether the message is shown in the transcript vs. sent to the LLM only. */
   display?: boolean;
+  /** Billing counters, on finished assistant messages. Shape: pi-ai's `Usage`. */
+  usage?: unknown;
+}
+
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/**
+ * Billing counters off a finished assistant message.
+ *
+ * Deliberately strict: a turn is reported only when the four token counters are
+ * all present and numeric. Half a turn would quietly skew any total built on it,
+ * and a missing turn is honest in a way that a zeroed one is not — the same
+ * reason `cost` stays absent rather than defaulting to 0 for providers that
+ * price nothing.
+ */
+export function messageUsage(message: AnyMessage): TurnUsage | undefined {
+  const usage = message.usage;
+  if (typeof usage !== "object" || usage === null) return undefined;
+  const { input, output, cacheRead, cacheWrite, reasoning, totalTokens, cost } = usage as Record<string, unknown>;
+  if (!isNumber(input) || !isNumber(output) || !isNumber(cacheRead) || !isNumber(cacheWrite)) return undefined;
+
+  const total = isNumber(totalTokens) ? totalTokens : input + output + cacheRead + cacheWrite;
+  const price = messageCost(cost);
+
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    ...(isNumber(reasoning) ? { reasoning } : {}),
+    totalTokens: total,
+    ...(price === undefined ? {} : { cost: price }),
+  };
+}
+
+/**
+ * The price of a turn, or nothing when the model priced it at nothing.
+ *
+ * The SDK always emits a `cost` object and always fills `total` — it computes
+ * the figure from the model's rates rather than reading it off the provider — so
+ * a model with no rates (the self-hosted case) yields `total: 0`. Carrying that
+ * through as a price would put "$0.00" in front of the user as a measured bill
+ * on exactly the deployment that has no bill, and would count the turn as priced.
+ *
+ * A turn is therefore priced only when some component of the breakdown is above
+ * zero. The cost is a turn genuinely charged at exactly 0 (a free tier, an amount
+ * below float resolution) being reported as unpriced instead of as $0.00 — which
+ * says the same thing about the money and does not claim to have measured it.
+ */
+function messageCost(cost: unknown): number | undefined {
+  if (typeof cost !== "object" || cost === null) return undefined;
+  const { input, output, cacheRead, cacheWrite, total } = cost as Record<string, unknown>;
+  if (!isNumber(total)) return undefined;
+  const components = [input, output, cacheRead, cacheWrite, total];
+  return components.some((value) => isNumber(value) && value > 0) ? total : undefined;
 }
 
 export function contentText(content: string | AnyContent[] | undefined): string {
@@ -125,11 +180,18 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
           }
         }
         const blocks = assistantBlocks(message.content);
-        if (blocks.length > 0 || message.errorMessage) {
+        // Replayed history carries what each turn cost, so reopening a session
+        // shows the same totals it showed while it ran. A turn that only called
+        // tools has no block to show and is still emitted for its usage — the
+        // live path keeps such a turn, and dropping it here would make a
+        // reopened session report less than it did while running.
+        const usage = messageUsage(message);
+        if (blocks.length > 0 || message.errorMessage || usage) {
           trailingAssistantItem = {
             kind: "assistant",
             blocks,
             ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+            ...(usage ? { usage } : {}),
           };
           items.push(trailingAssistantItem);
         }
@@ -212,10 +274,12 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
 
 /** Convert a final assistant message to a ChatItem (for assistant_end sync). */
 export function assistantToItem(message: AnyMessage): ChatItem {
+  const usage = messageUsage(message);
   return {
     kind: "assistant",
     blocks: assistantBlocks(message.content),
     ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+    ...(usage ? { usage } : {}),
   };
 }
 
