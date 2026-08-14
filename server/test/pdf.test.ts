@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import {
   buildLines,
+  DEFAULT_TIMEOUT_MS,
   detectTableBlocks,
   extractPdf,
   lineCells,
@@ -41,6 +42,10 @@ async function failureOf(bytes: Uint8Array, options = {}): Promise<PdfError> {
 }
 
 describe("extractPdf", () => {
+  test("allows a cold PDF.js start on supported Windows runners", () => {
+    assert.equal(DEFAULT_TIMEOUT_MS, 30_000);
+  });
+
   test("returns page-attributed text", async () => {
     const result = await extractPdf(await fixture("pdf-text"));
 

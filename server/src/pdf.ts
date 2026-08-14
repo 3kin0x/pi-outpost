@@ -71,7 +71,7 @@ export const DEFAULT_MAX_CHARS = 40_000;
  * failure this option exists to remove.
  */
 export const ABSOLUTE_MAX_CHARS = 400_000;
-export const DEFAULT_TIMEOUT_MS = 20_000;
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
 /* ── Geometry ───────────────────────────────────────────────────────────────── */
 
