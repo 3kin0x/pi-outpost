@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import type { GitFileLogEntry, GitRevision } from "@pi-outpost/shared";
 import { GitFileHistory } from "./GitFileHistory";
 import type { GitFileDiffState, GitFileHistoryState } from "../useAgent";
+import { FILES_SIDEBAR_WIDTH, HISTORY_LIST_WIDTH } from "../util/panelWidth";
 
 function entry(sha: string, parents: string[], subject: string): GitFileLogEntry {
   return { sha, parents, author: "Ada", date: new Date().toISOString(), subject, path: "notes.txt", added: 3, deleted: 1 };
@@ -30,6 +31,67 @@ function row(text: string) {
 }
 
 describe("GitFileHistory", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("Resize the History commit list: resizes by pointer and keyboard within both bounds", () => {
+    setup();
+    const list = screen.getByRole("region", { name: "Commit history" });
+    const diff = screen.getByRole("region", { name: "History diff" });
+    const separator = screen.getByRole("separator", { name: "Resize History commit list" });
+
+    expect(list.style.getPropertyValue("--history-list-width")).toBe("416px");
+    fireEvent.pointerDown(separator, { pointerId: 5, clientX: 416, button: 0, isPrimary: true });
+    fireEvent.pointerMove(separator, { pointerId: 5, clientX: 500 });
+    expect(list.style.getPropertyValue("--history-list-width")).toBe("500px");
+    expect(localStorage.getItem(HISTORY_LIST_WIDTH.storageKey)).toBeNull();
+    fireEvent.pointerMove(separator, { pointerId: 5, clientX: -1000 });
+    expect(list.style.getPropertyValue("--history-list-width")).toBe("224px");
+    fireEvent.pointerMove(separator, { pointerId: 5, clientX: 2000 });
+    expect(list.style.getPropertyValue("--history-list-width")).toBe("640px");
+    fireEvent.pointerUp(separator, { pointerId: 5, clientX: 2000 });
+    expect(localStorage.getItem(HISTORY_LIST_WIDTH.storageKey)).toBe("640");
+
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(list.style.getPropertyValue("--history-list-width")).toBe("624px");
+    fireEvent.keyDown(separator, { key: "Home" });
+    expect(list.style.getPropertyValue("--history-list-width")).toBe("416px");
+    expect(separator).toHaveAttribute("aria-valuenow", "416");
+    expect(diff.className).toMatch(/\bmin-w-0\b/);
+    expect(diff.className).toMatch(/\bflex-1\b/);
+  });
+
+  it("Restore independent panel widths: restores History without changing the Files preference", () => {
+    localStorage.setItem(FILES_SIDEBAR_WIDTH.storageKey, "304");
+    localStorage.setItem(HISTORY_LIST_WIDTH.storageKey, "512");
+
+    const first = setup();
+    expect(screen.getByRole("region", { name: "Commit history" }).style.getPropertyValue("--history-list-width")).toBe("512px");
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize History commit list" }), { key: "ArrowRight" });
+    expect(localStorage.getItem(HISTORY_LIST_WIDTH.storageKey)).toBe("528");
+    expect(localStorage.getItem(FILES_SIDEBAR_WIDTH.storageKey)).toBe("304");
+    first.unmount();
+
+    setup();
+    expect(screen.getByRole("region", { name: "Commit history" }).style.getPropertyValue("--history-list-width")).toBe("528px");
+  });
+
+  it("Preserve the stacked History layout: keeps full-width responsive sizing and hides the desktop separator", () => {
+    setup();
+    const list = screen.getByRole("region", { name: "Commit history" });
+    const separator = screen.getByRole("separator", { name: "Resize History commit list", hidden: true });
+    const scroller = within(list).getByRole("group", { name: "Commits" }).parentElement as HTMLElement;
+
+    expect(list.className).toMatch(/\bw-full\b/);
+    expect(list.className).toMatch(/\bflex\b/);
+    expect(list.className).toMatch(/\bflex-col\b/);
+    expect(list.className).toContain("md:w-[var(--history-list-width)]");
+    expect(scroller.className).toMatch(/\bmin-h-0\b/);
+    expect(scroller.className).toMatch(/\bflex-1\b/);
+    expect(scroller.className).toMatch(/\boverflow-y-auto\b/);
+    expect(separator.className).toMatch(/\bhidden\b/);
+    expect(separator.className).toMatch(/\bmd:block\b/);
+  });
+
   it("lists the file's commits newest first, with the working tree on top", () => {
     setup();
     const rows = within(screen.getByRole("group", { name: "Commits" })).getAllByRole("button", { name: /Working tree|change|commit/ });
