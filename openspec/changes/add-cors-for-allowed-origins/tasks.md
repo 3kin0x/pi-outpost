@@ -1,22 +1,22 @@
 ## 1. The headers
 
-- [ ] 1.1 A helper in `server/src/index.ts` that, given a request and a reply, applies the CORS headers when `originAllowed` accepts the request's `Origin` and does nothing otherwise (design D1, D5). One function, so no route can be half-covered.
-- [ ] 1.2 Apply it to every HTTP route uniformly — a hook rather than a call in each handler (design D3). A per-handler call is a list that a future route joins by being remembered.
-- [ ] 1.3 Echo the exact origin and set `Vary: Origin`; never `*` (design D2). The `Vary` header is the half that is easy to omit and only fails behind a cache.
+- [x] 1.1 A helper in `server/src/index.ts` that, given a request and a reply, applies the CORS headers when `originAllowed` accepts the request's `Origin` and does nothing otherwise (design D1, D5). One function, so no route can be half-covered.
+- [x] 1.2 Apply it to every HTTP route uniformly — a hook rather than a call in each handler (design D3). A per-handler call is a list that a future route joins by being remembered.
+- [x] 1.3 Echo the exact origin and set `Vary: Origin`; never `*` (design D2). The `Vary` header is the half that is easy to omit and only fails behind a cache.
 
 ## 2. Preflight
 
-- [ ] 2.1 Answer `OPTIONS` for an allowed origin with the methods the routes use and the request headers the client sends — `Authorization` above all (design D4).
-- [ ] 2.2 A preflight requires no token and executes no route body (design D4). Assert this, rather than assuming the framework's routing gives it for free.
-- [ ] 2.3 Decide `Access-Control-Max-Age` (design, Open Questions). Short by default; state the number and why in a comment rather than leaving it to the framework.
+- [x] 2.1 Answer `OPTIONS` for an allowed origin with the methods the routes use and the request headers the client sends — `Authorization` above all (design D4).
+- [x] 2.2 A preflight requires no token and executes no route body (design D4). Assert this, rather than assuming the framework's routing gives it for free.
+- [x] 2.3 Decide `Access-Control-Max-Age` (design, Open Questions). Short by default; state the number and why in a comment rather than leaving it to the framework.
 
 ## 3. Tests
 
-- [ ] 3.1 `server/test/`: an allowed origin gets the header and `Vary`; an unknown origin gets neither and the response is otherwise unchanged; the header is never `*`.
-- [ ] 3.2 Every route is covered — assert over the route list rather than a handful of examples, so a route added later fails the test instead of quietly opting out.
-- [ ] 3.3 A local development origin still passes with an empty `allowedOrigins`, which is the configuration every contributor runs.
-- [ ] 3.4 Preflight: allowed origin with `Authorization` is answered; a preflight carries no body and needs no token; an unknown origin's preflight gets no headers.
-- [ ] 3.5 Authentication is untouched: a token-protected route still answers 401 to a cross-origin request with no token, *with* the CORS headers present — the browser must be able to read the 401, or the client cannot tell "refused" from "unreachable".
+- [x] 3.1 `server/test/`: an allowed origin gets the header and `Vary`; an unknown origin gets neither and the response is otherwise unchanged; the header is never `*`.
+- [x] 3.2 Every route is covered — assert over the route list rather than a handful of examples, so a route added later fails the test instead of quietly opting out.
+- [x] 3.3 A local development origin still passes with an empty `allowedOrigins`, which is the configuration every contributor runs.
+- [x] 3.4 Preflight: allowed origin with `Authorization` is answered; a preflight carries no body and needs no token; an unknown origin's preflight gets no headers.
+- [x] 3.5 Authentication is untouched: a token-protected route still answers 401 to a cross-origin request with no token, *with* the CORS headers present — the browser must be able to read the 401, or the client cannot tell "refused" from "unreachable".
 
 ## 4. The browser half
 

@@ -10,7 +10,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import {
   type CreateAgentSessionRuntimeFactory,
@@ -235,8 +235,65 @@ let handleWsConnection: (socket: WebSocket) => void = (socket) => {
 };
 let getHealth: () => { ok: boolean; sessionId?: string } = () => ({ ok: false });
 
+/**
+ * How long a browser may reuse a preflight answer.
+ *
+ * Short on purpose. The round trip it saves is a localhost one in the common
+ * case, and a long cache means a corrected `allowedOrigins` keeps being ignored
+ * by every browser that already asked.
+ */
+const PREFLIGHT_MAX_AGE_SECONDS = 60;
+
+/**
+ * Let a browser on an allowed origin read the response we already decided to send.
+ *
+ * `allowedOrigins` has always gated the WebSocket — which drives an agent that
+ * reads the workspace and, when configured, writes files and runs bash — while
+ * every HTTP route answered without a CORS header, so a cross-origin widget got
+ * a 200 the browser then discarded. The same predicate decides both here.
+ *
+ * SECURITY: this grants no authority. Every route keeps its token check, its
+ * path confinement and its Host check; CORS only decides whether the browser
+ * hands the page a response the server had already produced. The origin is
+ * echoed exactly and never `*`, which would extend to origins the configuration
+ * never named. An origin we do not allow gets no header and no other difference:
+ * withholding it already stops the browser, and changing the status as well
+ * would tell any page which origins a server is configured for.
+ */
+function applyCors(req: FastifyRequest, reply: FastifyReply): boolean {
+  const origin = req.headers.origin;
+  if (origin === undefined || !originAllowed(origin)) return false;
+  reply.header("Access-Control-Allow-Origin", origin);
+  // The response differs by origin; without this a shared cache can serve one
+  // origin's copy to another and undo the decision above.
+  reply.header("Vary", "Origin");
+  return true;
+}
+
 const app = Fastify({ logger: false });
 await app.register(websocket);
+
+// A hook rather than a call in each handler: a per-route list is one a future
+// route joins by being remembered, and this one cannot be half-applied.
+app.addHook("onRequest", async (req, reply) => {
+  const allowed = applyCors(req, reply);
+  if (req.method !== "OPTIONS") return;
+
+  // A preflight is a question about permission, not the request it describes:
+  // it carries no token by design, so requiring one would refuse every
+  // authenticated cross-origin call before it was ever made. Answered here,
+  // before routing, so it never reaches a handler and never touches state.
+  if (allowed) {
+    reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    // Echo what was asked for rather than a fixed list: the client sends
+    // `Authorization` when the server is token-protected, and that header is
+    // what makes the browser preflight in the first place.
+    const asked = req.headers["access-control-request-headers"];
+    reply.header("Access-Control-Allow-Headers", asked ?? "Authorization, Content-Type");
+    reply.header("Access-Control-Max-Age", String(PREFLIGHT_MAX_AGE_SECONDS));
+  }
+  await reply.code(allowed ? 204 : 403).send();
+});
 app.get("/branding", (req, reply) => {
   const auth = req.headers.authorization;
   if (!tokenValid(auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined)) {
