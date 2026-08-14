@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isExternalRef, resolveRelativeHref, isImageFile, isPdfFile, rawFileUrl } from "./workspacePath";
+import { hasPathExtractionTool, isExternalRef, resolveRelativeHref, isImageFile, isPdfFile, rawFileUrl } from "./workspacePath";
 
 describe("isExternalRef", () => {
   it("returns true for http/https URLs", () => {
@@ -88,6 +88,18 @@ describe("isPdfFile", () => {
     expect(isPdfFile("photo.png")).toBe(false);
     expect(isPdfFile("report.pdf.bak")).toBe(false);
     expect(isPdfFile("pdf")).toBe(false);
+  });
+});
+
+describe("hasPathExtractionTool", () => {
+  it("recognizes the binary formats backed by built-in extraction tools", () => {
+    expect(hasPathExtractionTool("docs/report.docx")).toBe(true);
+    expect(hasPathExtractionTool("sheets/budget.XLSX")).toBe(true);
+  });
+
+  it("does not claim unsupported binary formats", () => {
+    expect(hasPathExtractionTool("archive.zip")).toBe(false);
+    expect(hasPathExtractionTool("legacy.xls")).toBe(false);
   });
 });
 

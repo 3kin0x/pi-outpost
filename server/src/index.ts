@@ -56,7 +56,26 @@ import {
 } from "./credentials.ts";
 import { assistantToItem, contentText, customMessageToItem, historyToItems, truncate } from "./convert.ts";
 import { configureExtensionRender, renderToolCallHtml, renderToolResultHtml } from "./extensionRender.ts";
-import { assertWithinRoot, createDirectoryFromBrowser, createFileFromBrowser, FileBrowserError, isPdfPath, listDirectory, MAX_PREVIEW_BYTES, readFileForPreview, readFileRaw, writeFileFromBrowser, resolveBrowserRoot, resolveWritableRoot, searchFiles } from "./fileBrowser.ts";
+import {
+  assertWithinRoot,
+  createDirectoryFromBrowser,
+  createFileFromBrowser,
+  copyFileFromBrowser,
+  deleteFileFromBrowser,
+  FileBrowserError,
+  isPdfPath,
+  listDirectory,
+  MAX_PREVIEW_BYTES,
+  moveFileFromBrowser,
+  openFileNative,
+  readFileForPreview,
+  readFileRaw,
+  renameFileFromBrowser,
+  resolveBrowserRoot,
+  resolveWritableRoot,
+  searchFiles,
+  writeFileFromBrowser,
+} from "./fileBrowser.ts";
 import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus, probeGit } from "./git.ts";
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
@@ -1853,6 +1872,57 @@ async function handleCreateDirectory(socket: WebSocket, dirPath: string, request
   }
 }
 
+async function handleOpenNative(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+  try {
+    await openFileNative(BROWSER_ROOT, filePath);
+    send(socket, { type: "file_operation_result", requestId, operation: "open_native", path: filePath });
+  } catch (error) {
+    sendFileBrowserError(socket, requestId, filePath, error);
+  }
+}
+
+async function handleRenameFile(socket: WebSocket, filePath: string, name: string, requestId: string): Promise<void> {
+  try {
+    const renamedPath = await renameFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, name);
+    send(socket, { type: "file_operation_result", requestId, operation: "rename_file", path: renamedPath, previousPath: filePath });
+    broadcast({ type: "file_changed", path: filePath });
+    broadcast({ type: "file_changed", path: renamedPath });
+  } catch (error) {
+    sendFileBrowserError(socket, requestId, filePath, error);
+  }
+}
+
+async function handleDeleteFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+  try {
+    await deleteFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath);
+    send(socket, { type: "file_operation_result", requestId, operation: "delete_file", path: filePath });
+    broadcast({ type: "file_changed", path: filePath });
+  } catch (error) {
+    sendFileBrowserError(socket, requestId, filePath, error);
+  }
+}
+
+async function handleMoveFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
+  try {
+    const movedPath = await moveFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, destinationDirectory);
+    send(socket, { type: "file_operation_result", requestId, operation: "move_file", path: movedPath, previousPath: filePath });
+    broadcast({ type: "file_changed", path: filePath });
+    broadcast({ type: "file_changed", path: movedPath });
+  } catch (error) {
+    sendFileBrowserError(socket, requestId, filePath, error);
+  }
+}
+
+async function handleCopyFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
+  try {
+    const copiedPath = await copyFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, destinationDirectory);
+    send(socket, { type: "file_operation_result", requestId, operation: "copy_file", path: copiedPath });
+    broadcast({ type: "file_changed", path: copiedPath });
+  } catch (error) {
+    sendFileBrowserError(socket, requestId, filePath, error);
+  }
+}
+
 function sendFileBrowserError(socket: WebSocket, requestId: string, targetPath: string, error: unknown): void {
   if (error instanceof FileBrowserError) {
     send(socket, { type: "file_browser_error", requestId, path: targetPath, message: error.message, reason: error.reason });
@@ -2095,6 +2165,38 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     case "create_directory":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
       handleCreateDirectory(socket, message.path, message.requestId).catch(reportError);
+      break;
+    case "open_native":
+      if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
+      handleOpenNative(socket, message.path, message.requestId).catch(reportError);
+      break;
+    case "rename_file":
+      if (typeof message.path !== "string" || typeof message.name !== "string" || typeof message.requestId !== "string") return;
+      handleRenameFile(socket, message.path, message.name, message.requestId).catch(reportError);
+      break;
+    case "delete_file":
+      if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
+      handleDeleteFile(socket, message.path, message.requestId).catch(reportError);
+      break;
+    case "move_file":
+      if (
+        typeof message.path !== "string" ||
+        typeof message.destinationDirectory !== "string" ||
+        typeof message.requestId !== "string"
+      ) {
+        return;
+      }
+      handleMoveFile(socket, message.path, message.destinationDirectory, message.requestId).catch(reportError);
+      break;
+    case "copy_file":
+      if (
+        typeof message.path !== "string" ||
+        typeof message.destinationDirectory !== "string" ||
+        typeof message.requestId !== "string"
+      ) {
+        return;
+      }
+      handleCopyFile(socket, message.path, message.destinationDirectory, message.requestId).catch(reportError);
       break;
     case "search_files":
       if (typeof message.query !== "string" || typeof message.requestId !== "string") return;

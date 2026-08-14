@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { DirEntry, GitFileState } from "@pi-outpost/shared";
-import type { DirState } from "../useAgent";
+import type { DirState, FileOperationState } from "../useAgent";
+
+const FILE_DRAG_TYPE = "application/x-pi-outpost-file";
+const FILE_COPY_DRAG_TYPE = "application/x-pi-outpost-read-only-file";
+const ROW_ACTION_CLASS =
+  "mr-1 shrink-0 rounded px-1 text-xs text-zinc-400 hover:bg-zinc-200 group-hover:opacity-100 focus-visible:opacity-100 dark:text-zinc-600 dark:hover:bg-zinc-700 [@media(hover:hover)]:opacity-0";
 
 /**
  * The open creation input, threaded down to the directory it belongs to. Kept in
@@ -16,6 +21,16 @@ interface CreationState {
   start: (dir: string) => void;
   cancel: () => void;
   submit: (dir: string, raw: string) => void;
+}
+
+interface RenameState {
+  path: string | null;
+  pending: boolean;
+  localError: string | null;
+  serverError: string | null;
+  start: (path: string) => void;
+  cancel: () => void;
+  submit: (path: string, raw: string) => void;
 }
 
 interface TreeProps {
@@ -37,12 +52,20 @@ interface TreeProps {
   onCreateFile?: (path: string) => void;
   /** Create one directory at this path. */
   onCreateDirectory?: (path: string) => void;
+  onOpenNative?: (path: string) => void;
+  onRenameFile?: (path: string, name: string) => void;
+  onDeleteFile?: (path: string) => void;
+  onMoveFile?: (path: string, destinationDirectory: string) => void;
+  onCopyFile?: (path: string, destinationDirectory: string) => void;
+  fileOperation?: FileOperationState | null;
   /** The server's refusal of the last creation request, if it refused one. */
   createError?: { path: string; message: string } | null;
   /** Path the last creation produced — the only definite sign that it worked. */
   created?: string | null;
   /** Internal: the open input row. Supplied by `FileTree` to its own rows. */
   creation?: CreationState;
+  /** Internal: the active in-tree rename input. */
+  rename?: RenameState;
 }
 
 const GIT_BADGE: Record<GitFileState, { label: string; className: string }> = {
@@ -115,6 +138,44 @@ export function CreationRow({ dir, depth, creation }: { dir: string; depth: numb
   );
 }
 
+function RenameRow({ path: filePath, name, depth, rename }: { path: string; name: string; depth: number; rename: RenameState }) {
+  const [value, setValue] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const error = rename.localError ?? rename.serverError;
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <div style={{ paddingLeft: depth * 12 + 16 }} className="py-0.5">
+      <input
+        ref={inputRef}
+        value={value}
+        disabled={rename.pending}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !rename.pending) {
+            event.preventDefault();
+            rename.submit(filePath, value);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            rename.cancel();
+          }
+        }}
+        onBlur={() => {
+          if (error === null) rename.cancel();
+        }}
+        aria-label={`Rename ${name}`}
+        spellCheck={false}
+        className="w-full rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800 outline-none focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+      />
+      {error !== null && <p className="px-1 pt-0.5 text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 function DirChildren({ path, depth, ...props }: TreeProps & { path: string; depth: number }) {
   const state = props.tree[path];
   const input =
@@ -171,10 +232,21 @@ function TreeNode({
   ...props
 }: TreeProps & { parentPath: string; entry: DirEntry; depth: number }) {
   const [open, setOpen] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
   const fullPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
   const readOnly = isReadOnly(fullPath, props.writableRoot);
+  const lifecyclePending = props.fileOperation?.status === "pending";
 
   if (isDir(entry.type)) {
+    const acceptsDrop = !readOnly && !lifecyclePending;
+    const transferFor = (types: readonly string[]) =>
+      types.includes(FILE_COPY_DRAG_TYPE)
+        ? props.onCopyFile === undefined
+          ? null
+          : "copy"
+        : props.onMoveFile === undefined
+          ? null
+          : "move";
     // Creating needs the directory open: the input row lives among its children,
     // and a name typed into a collapsed directory would have nowhere to appear.
     const startCreating = () => {
@@ -184,7 +256,30 @@ function TreeNode({
     };
     return (
       <div>
-        <div className="group flex w-full items-center rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+        <div
+          className={`group flex w-full items-center rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 ${dropActive ? "bg-blue-50 ring-1 ring-blue-400 dark:bg-blue-950/40" : ""}`}
+          onDragOver={(event) => {
+            if (!acceptsDrop || !Array.from(event.dataTransfer.types).includes(FILE_DRAG_TYPE)) return;
+            const transfer = transferFor(Array.from(event.dataTransfer.types));
+            if (transfer === null) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = transfer;
+            setDropActive(true);
+          }}
+          onDragLeave={() => setDropActive(false)}
+          onDrop={(event) => {
+            if (!acceptsDrop) return;
+            const source = event.dataTransfer.getData(FILE_DRAG_TYPE);
+            const transfer = source ? transferFor(Array.from(event.dataTransfer.types)) : null;
+            if (transfer === null) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setDropActive(false);
+            if (transfer === "copy") props.onCopyFile?.(source, fullPath);
+            else props.onMoveFile?.(source, fullPath);
+          }}
+        >
           <button
             type="button"
             onClick={() => {
@@ -197,6 +292,7 @@ function TreeNode({
           >
             <span className="w-3 shrink-0 text-xs text-zinc-400 dark:text-zinc-600">{open ? "▾" : "▸"}</span>
             <span
+              title={entry.name}
               className={`truncate ${readOnly ? "text-zinc-400 dark:text-zinc-600" : "text-zinc-700 dark:text-zinc-300"}`}
             >
               {entry.name}
@@ -233,6 +329,13 @@ function TreeNode({
   const selected = fullPath === props.openFilePath;
   const gitState = props.gitFiles?.[fullPath];
   const attached = props.attachedPaths?.includes(fullPath) ?? false;
+  const regularFile = entry.type === "file";
+  const nativeOpenable = regularFile || entry.type === "symlink-file";
+  const mutable = regularFile && !readOnly;
+  const transferable = regularFile && (readOnly ? props.onCopyFile !== undefined : props.onMoveFile !== undefined);
+  if (props.rename?.path === fullPath) {
+    return <RenameRow path={fullPath} name={entry.name} depth={depth} rename={props.rename} />;
+  }
   return (
     <div
       className={`group flex w-full items-center rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
@@ -241,14 +344,62 @@ function TreeNode({
     >
       <button
         type="button"
+        draggable={transferable && !lifecyclePending}
+        onDragStart={(event) => {
+          if (!transferable || lifecyclePending) return;
+          event.dataTransfer.effectAllowed = readOnly ? "copy" : "move";
+          event.dataTransfer.setData(FILE_DRAG_TYPE, fullPath);
+          if (readOnly) event.dataTransfer.setData(FILE_COPY_DRAG_TYPE, "copy");
+        }}
         onClick={() => props.onSelectFile(fullPath)}
         style={{ paddingLeft: depth * 12 + 16 }}
         className="flex min-w-0 flex-1 items-center py-0.5 text-left"
       >
-        <span className={`truncate ${readOnly ? "text-zinc-400 dark:text-zinc-600" : "text-zinc-600 dark:text-zinc-400"}`}>
+        <span
+          title={entry.name}
+          className={`truncate ${readOnly ? "text-zinc-400 dark:text-zinc-600" : "text-zinc-600 dark:text-zinc-400"}`}
+        >
           {entry.name}
         </span>
       </button>
+      {nativeOpenable && props.onOpenNative && (
+        <button
+          type="button"
+          disabled={lifecyclePending}
+          onClick={() => props.onOpenNative?.(fullPath)}
+          title="Open with the associated application"
+          aria-label={`Open ${entry.name} with the associated application`}
+          className={ROW_ACTION_CLASS}
+        >
+          ↗
+        </button>
+      )}
+      {mutable && props.onRenameFile && (
+        <button
+          type="button"
+          disabled={lifecyclePending}
+          onClick={() => props.rename?.start(fullPath)}
+          title="Rename file"
+          aria-label={`Rename ${entry.name}`}
+          className={ROW_ACTION_CLASS}
+        >
+          ✎
+        </button>
+      )}
+      {mutable && props.onDeleteFile && (
+        <button
+          type="button"
+          disabled={lifecyclePending}
+          onClick={() => {
+            if (window.confirm(`Delete "${entry.name}" permanently?`)) props.onDeleteFile?.(fullPath);
+          }}
+          title="Delete file"
+          aria-label={`Delete ${entry.name}`}
+          className={`${ROW_ACTION_CLASS} hover:text-red-600 dark:hover:text-red-400`}
+        >
+          ×
+        </button>
+      )}
       {props.onToggleAttachPath && (
         <button
           type="button"
@@ -296,12 +447,22 @@ export function creationRequest(raw: string): { kind: "file" | "directory"; name
   return { kind: directory ? "directory" : "file", name };
 }
 
+export function renameRequest(raw: string): { name: string } | { error: string } {
+  const request = creationRequest(raw);
+  if ("error" in request) return request;
+  if (request.kind === "directory") return { error: "That is a folder name" };
+  return { name: request.name };
+}
+
 /** Lazily-loaded file/directory tree for the sidebar. */
 export function FileTree(props: TreeProps) {
   const [openIn, setOpenIn] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   /** What was asked for, so the input can close once the tree shows it. */
   const [pending, setPending] = useState<{ dir: string; name: string } | null>(null);
+  const [renamePath, setRenamePath] = useState<string | null>(null);
+  const [renameLocalError, setRenameLocalError] = useState<string | null>(null);
+  const [pendingRename, setPendingRename] = useState<string | null>(null);
 
   const canCreate = props.onCreateFile !== undefined || props.onCreateDirectory !== undefined;
   const serverError =
@@ -320,6 +481,21 @@ export function FileTree(props: TreeProps) {
     setPending(null);
     setLocalError(null);
   }, [pending, created]);
+
+  const renameServerError =
+    props.fileOperation?.status === "error" &&
+    props.fileOperation.operation === "rename_file" &&
+    pendingRename === props.fileOperation.path
+      ? props.fileOperation.message
+      : null;
+
+  useEffect(() => {
+    const operation = props.fileOperation;
+    if (operation?.status !== "succeeded" || operation.operation !== "rename_file" || pendingRename !== operation.path) return;
+    setRenamePath(null);
+    setPendingRename(null);
+    setRenameLocalError(null);
+  }, [pendingRename, props.fileOperation]);
 
   const creation: CreationState | undefined = canCreate
     ? {
@@ -350,6 +526,47 @@ export function FileTree(props: TreeProps) {
         },
       }
     : undefined;
+  const rename: RenameState | undefined = props.onRenameFile
+    ? {
+        path: renamePath,
+        pending:
+          pendingRename !== null &&
+          props.fileOperation?.status === "pending" &&
+          props.fileOperation.operation === "rename_file" &&
+          props.fileOperation.path === pendingRename,
+        localError: renameLocalError,
+        serverError: renameServerError,
+        start: (filePath) => {
+          setRenamePath(filePath);
+          setPendingRename(null);
+          setRenameLocalError(null);
+        },
+        cancel: () => {
+          setRenamePath(null);
+          setPendingRename(null);
+          setRenameLocalError(null);
+        },
+        submit: (filePath, raw) => {
+          if (raw.trim() === "") {
+            // An empty inline rename is an abandoned edit, not a recoverable
+            // server error: restore the row instead of trapping focus in a field
+            // that requires the user to retype something before they can leave.
+            setRenamePath(null);
+            setPendingRename(null);
+            setRenameLocalError(null);
+            return;
+          }
+          const request = renameRequest(raw);
+          if ("error" in request) {
+            setRenameLocalError(request.error);
+            return;
+          }
+          setRenameLocalError(null);
+          setPendingRename(filePath);
+          props.onRenameFile?.(filePath, request.name);
+        },
+      }
+    : undefined;
 
   // The root has no row of its own, so its control sits above the listing —
   // without it the workspace root is the one directory nothing can be made in.
@@ -357,6 +574,11 @@ export function FileTree(props: TreeProps) {
 
   return (
     <div className="text-sm">
+      {props.fileOperation?.status === "error" && props.fileOperation.operation !== "rename_file" && (
+        <p role="alert" className="mb-1 rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+          {props.fileOperation.message}
+        </p>
+      )}
       {creation && rootWritable && (
         <button
           type="button"
@@ -367,7 +589,7 @@ export function FileTree(props: TreeProps) {
           + new
         </button>
       )}
-      <DirChildren path="" depth={0} {...props} {...(creation ? { creation } : {})} />
+      <DirChildren path="" depth={0} {...props} {...(creation ? { creation } : {})} {...(rename ? { rename } : {})} />
     </div>
   );
 }

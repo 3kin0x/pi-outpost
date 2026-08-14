@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import type { GitFileState } from "@pi-outpost/shared";
-import type { DirState, OpenFile } from "../useAgent";
+import type { DirState, FileOperationState, OpenFile } from "../useAgent";
+import { FILES_SIDEBAR_WIDTH } from "../util/panelWidth";
 import { FileTree } from "./FileTree";
+import { PanelResizeHandle, useResizablePanelWidth } from "./PanelResizeHandle";
 
 interface SidebarProps {
   tree: Record<string, DirState>;
@@ -19,6 +21,12 @@ interface SidebarProps {
   /** Create an empty file at this path (and open it). */
   onCreateFile?: (path: string) => void;
   onCreateDirectory?: (path: string) => void;
+  onOpenNative?: (path: string) => void;
+  onRenameFile?: (path: string, name: string) => void;
+  onDeleteFile?: (path: string) => void;
+  onMoveFile?: (path: string, destinationDirectory: string) => void;
+  onCopyFile?: (path: string, destinationDirectory: string) => void;
+  fileOperation?: FileOperationState | null;
   /** The server's refusal of the last creation request. */
   createError?: { path: string; message: string } | null;
   /** Path the last creation produced. */
@@ -38,16 +46,28 @@ export function Sidebar({
   onToggleAttachPath,
   onCreateFile,
   onCreateDirectory,
+  onOpenNative,
+  onRenameFile,
+  onDeleteFile,
+  onMoveFile,
+  onCopyFile,
+  fileOperation,
   createError,
   created,
 }: SidebarProps) {
+  const resize = useResizablePanelWidth(FILES_SIDEBAR_WIDTH);
+
   useEffect(() => {
     if (tree[""] === undefined) onExpand("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800">
+    <aside
+      aria-label="Files"
+      style={{ width: resize.width }}
+      className="relative flex shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800"
+    >
       <div className="border-b border-zinc-200 px-3 py-2 text-xs font-semibold uppercase text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
         Files
       </div>
@@ -64,10 +84,22 @@ export function Sidebar({
           onToggleAttachPath={onToggleAttachPath}
           onCreateFile={onCreateFile}
           onCreateDirectory={onCreateDirectory}
+          onOpenNative={onOpenNative}
+          onRenameFile={onRenameFile}
+          onDeleteFile={onDeleteFile}
+          onMoveFile={onMoveFile}
+          onCopyFile={onCopyFile}
+          fileOperation={fileOperation}
           createError={createError}
           created={created}
         />
       </div>
+      <PanelResizeHandle
+        label="Resize Files sidebar"
+        width={resize.width}
+        config={FILES_SIDEBAR_WIDTH}
+        separatorProps={resize.separatorProps}
+      />
     </aside>
   );
 }

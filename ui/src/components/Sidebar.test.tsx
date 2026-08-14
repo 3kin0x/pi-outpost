@@ -1,8 +1,18 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { DirEntry } from "@pi-outpost/shared";
 import { Sidebar } from "./Sidebar";
 import type { DirState, OpenFile } from "../useAgent";
+import {
+  FILES_SIDEBAR_WIDTH,
+} from "../util/panelWidth";
+
+const {
+  defaultWidth: FILES_SIDEBAR_DEFAULT_WIDTH,
+  maxWidth: FILES_SIDEBAR_MAX_WIDTH,
+  minWidth: FILES_SIDEBAR_MIN_WIDTH,
+  storageKey: FILES_SIDEBAR_WIDTH_STORAGE_KEY,
+} = FILES_SIDEBAR_WIDTH;
 
 const file = (name: string): DirEntry => ({ name, type: "file" });
 
@@ -16,6 +26,8 @@ function setup(overrides: Partial<Props> = {}) {
 }
 
 describe("Sidebar", () => {
+  beforeEach(() => localStorage.clear());
+
   it("asks for the root listing on mount, when it has none", () => {
     const { onExpand } = setup({ tree: {} as Record<string, DirState> });
     expect(onExpand).toHaveBeenCalledWith("");
@@ -59,5 +71,101 @@ describe("Sidebar", () => {
   it("forwards the writable zone, so the tree can dim what is read-only", () => {
     setup({ writableRoot: null });
     expect(screen.getByText("readme.md").className).toMatch(/(^|\s)text-zinc-400\b/);
+  });
+
+  it("Resize with pointer input: follows the horizontal pointer and commits only when the drag ends", () => {
+    setup();
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_DEFAULT_WIDTH}px` });
+    fireEvent.pointerDown(separator, { pointerId: 7, clientX: FILES_SIDEBAR_DEFAULT_WIDTH, button: 0, isPrimary: true });
+    fireEvent.pointerMove(separator, { pointerId: 7, clientX: 400 });
+
+    expect(sidebar).toHaveStyle({ width: "400px" });
+    expect(localStorage.getItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY)).toBeNull();
+
+    fireEvent.pointerUp(separator, { pointerId: 7, clientX: 400 });
+    expect(localStorage.getItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY)).toBe("400");
+  });
+
+  it("Enforce resizing bounds: clamps pointer movement at both boundaries", () => {
+    setup();
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+
+    fireEvent.pointerDown(separator, { pointerId: 1, clientX: FILES_SIDEBAR_DEFAULT_WIDTH, button: 0, isPrimary: true });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientX: -1000 });
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_MIN_WIDTH}px` });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientX: 2000 });
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_MAX_WIDTH}px` });
+    fireEvent.pointerUp(separator, { pointerId: 1, clientX: 2000 });
+  });
+
+  it("reverts an interrupted pointer resize without persisting it", () => {
+    setup();
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+
+    fireEvent.pointerDown(separator, { pointerId: 3, clientX: FILES_SIDEBAR_DEFAULT_WIDTH, button: 0, isPrimary: true });
+    fireEvent.pointerMove(separator, { pointerId: 3, clientX: 420 });
+    fireEvent.pointerCancel(separator, { pointerId: 3 });
+
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_DEFAULT_WIDTH}px` });
+    expect(localStorage.getItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY)).toBeNull();
+  });
+
+  it("ignores non-primary pointer buttons", () => {
+    setup();
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+
+    fireEvent.pointerDown(separator, { pointerId: 4, clientX: FILES_SIDEBAR_DEFAULT_WIDTH, button: 2, isPrimary: true });
+    fireEvent.pointerMove(separator, { pointerId: 4, clientX: 420 });
+
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_DEFAULT_WIDTH}px` });
+    expect(localStorage.getItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY)).toBeNull();
+  });
+
+  it("Resize with the keyboard: changes by one step, resets with Home, and updates ARIA", () => {
+    setup();
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    expect(sidebar).toHaveStyle({ width: "304px" });
+    expect(separator).toHaveAttribute("aria-valuenow", "304");
+    expect(localStorage.getItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY)).toBe("304");
+
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_DEFAULT_WIDTH}px` });
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    fireEvent.keyDown(separator, { key: "Home" });
+    expect(sidebar).toHaveStyle({ width: `${FILES_SIDEBAR_DEFAULT_WIDTH}px` });
+  });
+
+  it("Restore the preferred width: restores a completed resize after remounting", () => {
+    const first = setup();
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    first.unmount();
+
+    setup();
+    expect(screen.getByRole("complementary", { name: "Files" })).toHaveStyle({ width: "304px" });
+  });
+
+  it("Recover from an invalid stored preference: defaults malformed values and clamps finite ones", () => {
+    localStorage.setItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY, "not-a-width");
+    const malformed = setup();
+    expect(screen.getByRole("complementary", { name: "Files" })).toHaveStyle({
+      width: `${FILES_SIDEBAR_DEFAULT_WIDTH}px`,
+    });
+    malformed.unmount();
+
+    localStorage.setItem(FILES_SIDEBAR_WIDTH_STORAGE_KEY, "9999");
+    setup();
+    expect(screen.getByRole("complementary", { name: "Files" })).toHaveStyle({
+      width: `${FILES_SIDEBAR_MAX_WIDTH}px`,
+    });
   });
 });

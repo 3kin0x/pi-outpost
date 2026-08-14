@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { WORKTREE_REVISION, type GitRevision } from "@pi-outpost/shared";
 import type { GitFileDiffState, GitFileHistoryState } from "../useAgent";
 import { diffLines } from "../util/diff";
+import { HISTORY_LIST_WIDTH } from "../util/panelWidth";
 import { SplitDiffBlock } from "./DiffBlocks";
+import { PanelResizeHandle, useResizablePanelWidth } from "./PanelResizeHandle";
 import { Rail } from "./graph/Rail";
 import { layoutFileGraph, type FileGraphRow } from "./graph/fileGraph";
 import { ROW_H } from "./graph/lanes";
@@ -62,6 +64,7 @@ export function GitFileHistory({ history, diff, dirty, onFetchDiff, onClearDiff,
   const { base, target } = pair;
   const [focused, setFocused] = useState(0);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const listResize = useResizablePanelWidth(HISTORY_LIST_WIDTH);
 
   const { rows, laneCount } = useMemo(() => layoutFileGraph(history.entries, { dirty }), [history.entries, dirty]);
 
@@ -199,48 +202,62 @@ export function GitFileHistory({ history, diff, dirty, onFetchDiff, onClearDiff,
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <div
-          className="relative max-h-[40%] shrink-0 overflow-y-auto border-b border-zinc-200 md:max-h-none md:w-[26rem] md:border-b-0 md:border-r dark:border-zinc-800"
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              moveFocus(1);
-            } else if (event.key === "ArrowUp") {
-              event.preventDefault();
-              moveFocus(-1);
-            }
-          }}
+          role="region"
+          aria-label="Commit history"
+          style={{ "--history-list-width": `${listResize.width}px` } as CSSProperties}
+          className="relative flex max-h-[40%] w-full shrink-0 flex-col border-b border-zinc-200 md:max-h-none md:w-[var(--history-list-width)] md:border-b-0 md:border-r dark:border-zinc-800"
         >
-          {history.status === "loading" && <div className="px-3 py-2 text-xs text-zinc-500">Reading history…</div>}
-          {history.status === "error" && (
-            <div className="m-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-              {history.error}
-            </div>
-          )}
-          {history.status === "loaded" && history.entries.length === 0 && (
-            <div className="px-3 py-2 text-xs text-zinc-500">No commits touch this file yet.</div>
-          )}
-          {history.status === "loaded" && history.entries.length > 0 && (
-            <div className="relative" role="group" aria-label="Commits">
-              {bracket && <Bracket top={bracket.top} height={bracket.height} baseFirst={baseIndex < targetIndex} />}
-              {rows.map((row, index) => (
-                <HistoryRow
-                  key={row.rev}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  row={row}
-                  laneCount={laneCount}
-                  role={roleOf(row)}
-                  isFocused={index === focused}
-                  onSelect={(role) => select(row, role)}
-                  onFocus={() => setFocused(index)}
-                />
-              ))}
-            </div>
-          )}
+          <div
+            className="min-h-0 flex-1 overflow-y-auto"
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                moveFocus(1);
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                moveFocus(-1);
+              }
+            }}
+          >
+            {history.status === "loading" && <div className="px-3 py-2 text-xs text-zinc-500">Reading history…</div>}
+            {history.status === "error" && (
+              <div className="m-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                {history.error}
+              </div>
+            )}
+            {history.status === "loaded" && history.entries.length === 0 && (
+              <div className="px-3 py-2 text-xs text-zinc-500">No commits touch this file yet.</div>
+            )}
+            {history.status === "loaded" && history.entries.length > 0 && (
+              <div className="relative" role="group" aria-label="Commits">
+                {bracket && <Bracket top={bracket.top} height={bracket.height} baseFirst={baseIndex < targetIndex} />}
+                {rows.map((row, index) => (
+                  <HistoryRow
+                    key={row.rev}
+                    ref={(element) => {
+                      rowRefs.current[index] = element;
+                    }}
+                    row={row}
+                    laneCount={laneCount}
+                    role={roleOf(row)}
+                    isFocused={index === focused}
+                    onSelect={(role) => select(row, role)}
+                    onFocus={() => setFocused(index)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+          <PanelResizeHandle
+            label="Resize History commit list"
+            width={listResize.width}
+            config={HISTORY_LIST_WIDTH}
+            separatorProps={listResize.separatorProps}
+            className="hidden md:block"
+          />
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div role="region" aria-label="History diff" className="min-h-0 min-w-0 flex-1 overflow-auto p-3">
           <DiffPane diff={diff} base={base} target={target} />
         </div>
       </div>

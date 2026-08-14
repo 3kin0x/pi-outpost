@@ -263,6 +263,8 @@ describe("App — session analysis", () => {
 const sidebarToggle = () => screen.getByRole("button", { name: /[◨◧]\s*files/ });
 
 describe("App — panes and handovers", () => {
+  beforeEach(() => localStorage.removeItem("pi-outpost.files-sidebar-width.v1"));
+
   function mount(overrides: Record<string, unknown> = {}) {
     const api = agentApi(agentState(overrides));
     mockUseAgent.mockReturnValue(api);
@@ -277,6 +279,21 @@ describe("App — panes and handovers", () => {
     expect(screen.getByText("Files")).toBeInTheDocument();
     fireEvent.click(sidebarToggle());
     expect(screen.queryByText("Files")).not.toBeInTheDocument();
+  });
+
+  it("keeps the main column flexible while the Files sidebar is resized", () => {
+    mount();
+    fireEvent.click(sidebarToggle());
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    const separator = screen.getByRole("separator", { name: "Resize Files sidebar" });
+    const mainColumn = sidebar.nextElementSibling as HTMLElement;
+
+    fireEvent.pointerDown(separator, { pointerId: 1, clientX: 288, button: 0, isPrimary: true });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientX: 416 });
+
+    expect(sidebar).toHaveStyle({ width: "416px" });
+    expect(mainColumn.className).toMatch(/\bmin-w-0\b/);
+    expect(mainColumn.className).toMatch(/\bflex-1\b/);
   });
 
   it("shows the file viewer over the conversation when a file is open", () => {
@@ -348,6 +365,31 @@ describe("App — attachments", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove readme.md in the prompt" }));
     expect(screen.getByRole("button", { name: "Reference readme.md in the prompt" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it.each(["docs/report.docx", "sheets/budget.xlsx"])(
+    "automatically references a tool-readable binary file: %s",
+    async (path) => {
+      const { api } = mount({
+        openFile: { status: "error", path, message: "Binary file — preview not supported" },
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTitle(`${path} — sent as a reference; the agent reads the file itself`)).toBeInTheDocument(),
+      );
+
+      const box = screen.getByRole("textbox");
+      fireEvent.change(box, { target: { value: "summarize it" } });
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(api.prompt).toHaveBeenCalledWith(expect.stringContaining(`@${path}`), undefined);
+    },
+  );
+
+  it("does not attach an unsupported binary file", async () => {
+    mount({ openFile: { status: "error", path: "archive.zip", message: "Binary file — preview not supported" } });
+
+    await waitFor(() => expect(screen.getByText("Binary file — preview not supported")).toBeInTheDocument());
+    expect(screen.queryByTitle(/archive\.zip — sent as a reference/)).not.toBeInTheDocument();
   });
 
   it("sends the prompt and clears what was attached to it", () => {

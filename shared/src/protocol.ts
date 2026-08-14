@@ -186,8 +186,18 @@ export interface DirEntry {
   type: "file" | "directory" | "symlink-file" | "symlink-directory" | "other";
 }
 
-/** Failure kinds of file-browser operations (list/read/write); carried on file_browser_error. */
-export type FileBrowserErrorReason = "outside-root" | "not-found" | "too-large" | "binary" | "denied" | "conflict";
+/** Failure kinds of file-browser operations; carried on file_browser_error. */
+export type FileBrowserErrorReason =
+  | "outside-root"
+  | "not-found"
+  | "too-large"
+  | "binary"
+  | "denied"
+  | "conflict"
+  | "launcher-failed";
+
+/** Mutating/opening operation acknowledged by file_operation_result. */
+export type FileOperation = "open_native" | "rename_file" | "delete_file" | "move_file" | "copy_file";
 
 /** Working-tree state of one file, scoped to the browser root. */
 export type GitFileState = "modified" | "added" | "deleted" | "untracked" | "conflicted";
@@ -377,6 +387,15 @@ export type ServerMessage =
   | { type: "file_content"; requestId: string; path: string; content: string; size: number; mtimeMs: number }
   | { type: "file_written"; requestId: string; path: string; size: number; mtimeMs: number }
   | {
+      type: "file_operation_result";
+      requestId: string;
+      operation: FileOperation;
+      /** Resulting path; deletion echoes the deleted path. */
+      path: string;
+      /** Previous path for rename and move, so clients can update active views. */
+      previousPath?: string;
+    }
+  | {
       type: "file_browser_error";
       requestId: string;
       path: string;
@@ -435,6 +454,16 @@ export type ClientMessage =
   | { type: "create_file"; path: string; requestId: string }
   /** Create one directory (not a chain of missing parents). */
   | { type: "create_directory"; path: string; requestId: string }
+  /** Ask the host OS to open an existing confined file in its associated application. */
+  | { type: "open_native"; path: string; requestId: string }
+  /** Rename a regular file within its current directory. `name` is one path segment. */
+  | { type: "rename_file"; path: string; name: string; requestId: string }
+  /** Permanently delete one regular file. UI confirmation happens before this message. */
+  | { type: "delete_file"; path: string; requestId: string }
+  /** Move one regular file into an existing directory, preserving its basename. */
+  | { type: "move_file"; path: string; destinationDirectory: string; requestId: string }
+  /** Copy one confined regular file into an existing writable directory, preserving its basename. */
+  | { type: "copy_file"; path: string; destinationDirectory: string; requestId: string }
   | { type: "search_files"; query: string; requestId: string }
   | { type: "list_tree" }
   | { type: "navigate_tree"; entryId: string }

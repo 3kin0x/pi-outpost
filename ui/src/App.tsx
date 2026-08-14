@@ -11,7 +11,7 @@ import { ToolCard } from "./components/ToolCard";
 import { createActionDispatch } from "./presentations/actions";
 import { UserMessage } from "./components/UserMessage";
 import { useTheme } from "./theme/useTheme";
-import { isImageFile, isPdfFile, rawFileUrl } from "./util/workspacePath";
+import { hasPathExtractionTool, isImageFile, isPdfFile, rawFileUrl } from "./util/workspacePath";
 import {
   addPathAttachment,
   imagePreviewToAttachment,
@@ -86,6 +86,11 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     writeFile,
     createFile,
     createDirectory,
+    openNative,
+    renameFile,
+    deleteFile,
+    moveFile,
+    copyFile,
     closeFilePreview,
     searchFiles,
     clearFileSearch,
@@ -157,6 +162,10 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     if (!file) return;
     const path = file.path;
     const loaded = file.status === "loaded";
+    const toolReadableBinary =
+      file.status === "error" &&
+      file.message === "Binary file — preview not supported" &&
+      hasPathExtractionTool(path);
 
     if (activePreviewPathRef.current !== path) {
       activePreviewPathRef.current = path;
@@ -174,12 +183,14 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
         ? loadedPreviewImagePath === path
           ? await imagePreviewToAttachment(path, rawFileUrl(serverUrl, path, authToken))
           : null
-        : isPdfFile(path)
+          : isPdfFile(path)
           ? // A PDF never reaches "loaded" — the text preview refuses it as binary.
             // Its own viewer says when it displayed, and only then is it attachable.
             loadedPreviewPdfPath === path
             ? pdfPreviewToAttachment(path)
             : null
+          : toolReadableBinary
+            ? textPreviewToAttachment(path)
           : loaded
             ? textPreviewToAttachment(path)
             : null;
@@ -386,6 +397,12 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               createFile(path);
             }}
             onCreateDirectory={createDirectory}
+            onOpenNative={openNative}
+            onRenameFile={renameFile}
+            onDeleteFile={deleteFile}
+            onMoveFile={moveFile}
+            onCopyFile={copyFile}
+            fileOperation={state.fileOperation}
             createError={state.createError}
             created={state.created}
           />

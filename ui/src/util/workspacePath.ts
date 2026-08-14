@@ -41,6 +41,11 @@ export function isPdfFile(path: string): boolean {
   return /\.pdf$/i.test(path);
 }
 
+/** Binary workspace formats backed by the always-available path extraction tools. */
+export function hasPathExtractionTool(path: string): boolean {
+  return /\.(docx|xlsx)$/i.test(path);
+}
+
 /**
  * URL of the server's raw-bytes endpoint for a workspace file. `<img>` cannot
  * send headers, so the auth token rides the query string (same trade-off as

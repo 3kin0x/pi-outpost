@@ -228,6 +228,241 @@ describe("FileTree", () => {
     const row = screen.getByText("readme.md").closest("div")!;
     expect(row.className).toMatch(/bg-zinc-100/);
   });
+
+  it("keeps the complete entry name available on hover when the row truncates it", () => {
+    const longName = "a-very-long-document-name-that-does-not-fit.docx";
+    setup({ tree: { "": [dir("a-very-long-directory-name-that-does-not-fit"), file(longName)] } });
+
+    expect(screen.getByText(longName)).toHaveAttribute("title", longName);
+    expect(screen.getByText("a-very-long-directory-name-that-does-not-fit")).toHaveAttribute(
+      "title",
+      "a-very-long-directory-name-that-does-not-fit",
+    );
+  });
+
+  describe("file lifecycle actions", () => {
+    const handlers = () => ({
+      onOpenNative: vi.fn(),
+      onRenameFile: vi.fn(),
+      onDeleteFile: vi.fn(),
+      onMoveFile: vi.fn(),
+      onCopyFile: vi.fn(),
+    });
+
+    it("opens a read-only file with its associated application", () => {
+      const actions = handlers();
+      setup({ ...actions, writableRoot: null });
+
+      fireEvent.click(screen.getByRole("button", { name: "Open readme.md with the associated application" }));
+
+      expect(actions.onOpenNative).toHaveBeenCalledWith("readme.md");
+      expect(screen.queryByRole("button", { name: "Rename readme.md" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Delete readme.md" })).not.toBeInTheDocument();
+    });
+
+    it("renames a writable file in place", () => {
+      const actions = handlers();
+      setup(actions);
+      fireEvent.click(screen.getByRole("button", { name: "Rename readme.md" }));
+      const input = screen.getByRole("textbox", { name: "Rename readme.md" });
+
+      fireEvent.change(input, { target: { value: "guide.md" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(actions.onRenameFile).toHaveBeenCalledWith("readme.md", "guide.md");
+    });
+
+    it("cancels a rename submitted with a blank name", () => {
+      const actions = handlers();
+      setup(actions);
+      fireEvent.click(screen.getByRole("button", { name: "Rename readme.md" }));
+      const input = screen.getByRole("textbox", { name: "Rename readme.md" });
+
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(actions.onRenameFile).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox", { name: "Rename readme.md" })).not.toBeInTheDocument();
+      expect(screen.getByText("readme.md")).toBeInTheDocument();
+      expect(screen.queryByText("A name is required")).not.toBeInTheDocument();
+    });
+
+    it("does not submit the same rename twice while its acknowledgement is pending", () => {
+      const actions = handlers();
+      const view = render(<FileTree tree={tree()} onExpand={vi.fn()} onSelectFile={vi.fn()} {...actions} />);
+      fireEvent.click(screen.getByRole("button", { name: "Rename readme.md" }));
+      const input = screen.getByRole("textbox", { name: "Rename readme.md" });
+      fireEvent.change(input, { target: { value: "guide.md" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      view.rerender(
+        <FileTree
+          tree={tree()}
+          onExpand={vi.fn()}
+          onSelectFile={vi.fn()}
+          {...actions}
+          fileOperation={{ status: "pending", operation: "rename_file", path: "readme.md", requestId: "fileop:1" }}
+        />,
+      );
+
+      expect(input).toBeDisabled();
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(actions.onRenameFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the rename input and typed value after a server refusal", () => {
+      const actions = handlers();
+      const view = render(
+        <FileTree tree={tree()} onExpand={vi.fn()} onSelectFile={vi.fn()} {...actions} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Rename readme.md" }));
+      const input = screen.getByRole("textbox", { name: "Rename readme.md" });
+      fireEvent.change(input, { target: { value: "taken.md" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      view.rerender(
+        <FileTree
+          tree={tree()}
+          onExpand={vi.fn()}
+          onSelectFile={vi.fn()}
+          {...actions}
+          fileOperation={{
+            status: "error",
+            operation: "rename_file",
+            path: "readme.md",
+            message: '"taken.md" already exists',
+            requestId: "fileop:1",
+          }}
+        />,
+      );
+
+      expect(screen.getByText('"taken.md" already exists')).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Rename readme.md" })).toHaveValue("taken.md");
+    });
+
+    it("sends one delete request only after confirmation", () => {
+      const actions = handlers();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      setup(actions);
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete readme.md" }));
+
+      expect(confirm).toHaveBeenCalledWith('Delete "readme.md" permanently?');
+      expect(actions.onDeleteFile).toHaveBeenCalledTimes(1);
+      expect(actions.onDeleteFile).toHaveBeenCalledWith("readme.md");
+      confirm.mockRestore();
+    });
+
+    it("does not request deletion when confirmation is cancelled", () => {
+      const actions = handlers();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      setup(actions);
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete readme.md" }));
+
+      expect(actions.onDeleteFile).not.toHaveBeenCalled();
+      expect(screen.getByText("readme.md")).toBeInTheDocument();
+      confirm.mockRestore();
+    });
+
+    it("disables lifecycle controls and dragging while an operation is pending", () => {
+      setup({
+        ...handlers(),
+        fileOperation: {
+          status: "pending",
+          operation: "rename_file",
+          path: "other.txt",
+          requestId: "fileop:pending",
+        },
+      });
+
+      expect(screen.getByRole("button", { name: "Open readme.md with the associated application" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Rename readme.md" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Delete readme.md" })).toBeDisabled();
+      expect(screen.getByText("readme.md").closest("button")).toHaveAttribute("draggable", "false");
+    });
+
+    it("moves a dragged file onto a writable directory", () => {
+      const actions = handlers();
+      setup(actions);
+      const stored = new Map<string, string>();
+      const dataTransfer = {
+        types: ["application/x-pi-outpost-file"],
+        effectAllowed: "none",
+        dropEffect: "none",
+        setData: (type: string, value: string) => stored.set(type, value),
+        getData: (type: string) => stored.get(type) ?? "",
+      };
+      const fileRow = screen.getByText("readme.md").closest("[draggable='true']")!;
+      const directoryRow = dirToggle("src").parentElement!;
+
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      fireEvent.dragOver(directoryRow, { dataTransfer });
+      fireEvent.drop(directoryRow, { dataTransfer });
+
+      expect(actions.onMoveFile).toHaveBeenCalledWith("readme.md", "src");
+      expect(actions.onCopyFile).not.toHaveBeenCalled();
+    });
+
+    it("copies a dragged read-only file onto a writable directory", () => {
+      const actions = handlers();
+      setup({ ...actions, writableRoot: "src" });
+      const stored = new Map<string, string>();
+      const types = ["application/x-pi-outpost-file"];
+      const dataTransfer = {
+        types,
+        effectAllowed: "none",
+        dropEffect: "none",
+        setData: (type: string, value: string) => {
+          stored.set(type, value);
+          if (!types.includes(type)) types.push(type);
+        },
+        getData: (type: string) => stored.get(type) ?? "",
+      };
+      const fileRow = screen.getByText("readme.md").closest("[draggable='true']")!;
+      const directoryRow = dirToggle("src").parentElement!;
+
+      fireEvent.dragStart(fileRow, { dataTransfer });
+      expect(dataTransfer.effectAllowed).toBe("copy");
+      fireEvent.dragOver(directoryRow, { dataTransfer });
+      expect(dataTransfer.dropEffect).toBe("copy");
+      fireEvent.drop(directoryRow, { dataTransfer });
+
+      expect(actions.onCopyFile).toHaveBeenCalledWith("readme.md", "src");
+      expect(actions.onMoveFile).not.toHaveBeenCalled();
+    });
+
+    it("does not accept a drop on a read-only directory", () => {
+      const actions = handlers();
+      setup({ ...actions, tree: { "": [dir("src"), dir("readonly")] }, writableRoot: "src" });
+      const dataTransfer = {
+        types: ["application/x-pi-outpost-file"],
+        effectAllowed: "move",
+        dropEffect: "none",
+        setData: vi.fn(),
+        getData: () => "src/main.ts",
+      };
+
+      fireEvent.drop(dirToggle("readonly").parentElement!, { dataTransfer });
+
+      expect(actions.onMoveFile).not.toHaveBeenCalled();
+    });
+
+    it("shows a non-rename operation failure in the tree", () => {
+      setup({
+        ...handlers(),
+        fileOperation: {
+          status: "error",
+          operation: "move_file",
+          path: "readme.md",
+          message: "destination already exists",
+          requestId: "fileop:2",
+        },
+      });
+
+      expect(screen.getByRole("alert")).toHaveTextContent("destination already exists");
+    });
+  });
 });
 
 describe("creating", () => {

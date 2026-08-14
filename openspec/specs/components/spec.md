@@ -97,6 +97,103 @@ revision-pair state. Navigation and mutation requests SHALL be emitted through c
 - **WHEN** the user picks two revisions
 - **THEN** the requested revision pair is reported through its diff-request callback
 
+### Requirement: FileTree lifecycle controls
+
+`FileTree` SHALL expose callbacks for opening a file natively, renaming a file, deleting a file, moving a writable file to a directory, and copying a read-only file to a writable directory; it SHALL not perform filesystem operations itself. For a writable file, it SHALL expose rename and delete controls following the tree's existing hover/touch convention. Submitting a blank inline rename SHALL cancel the edit, restore the existing row, and report no rename request. It SHALL show a confirmation naming the target file before reporting a delete request, and cancellation SHALL report no request. It SHALL make a regular file row draggable and accept it only on a directory row that is a valid writable destination, reporting a move for a writable source and a copy for a read-only source. It SHALL expose native opening for any listed file inside the browser root, including a read-only file.
+
+Every truncated file or directory label SHALL expose its complete entry name through the same hover tooltip convention used by the Git tree.
+
+#### Scenario: Cancel a blank file rename
+- **GIVEN** a writable file whose inline rename field is open
+- **WHEN** the user clears the field and submits it
+- **THEN** `FileTree` reports no rename request and restores the existing file row without an error
+
+#### Scenario: Confirm a file deletion
+- **GIVEN** a writable file in `FileTree`
+- **WHEN** the user chooses delete and confirms the dialog
+- **THEN** `FileTree` reports one delete request for that file through its callback
+
+#### Scenario: Cancel a file deletion
+- **WHEN** the user cancels the deletion confirmation
+- **THEN** `FileTree` reports no delete request and keeps the file row displayed
+
+#### Scenario: Drag a file onto a writable folder
+- **GIVEN** a file row and a writable destination directory row
+- **WHEN** the user drops the file row on that directory
+- **THEN** `FileTree` reports the source file and destination directory through its move callback
+
+#### Scenario: Drag a read-only file onto a writable folder
+- **GIVEN** a read-only regular file row and a writable directory row
+- **WHEN** the user drops the file row on that directory
+- **THEN** `FileTree` reports the source file and destination directory through its copy callback and indicates a copy drag effect
+
+#### Scenario: Do not accept an invalid drop destination
+- **GIVEN** a file row and a read-only directory row
+- **WHEN** the user attempts to drop the file on that directory
+- **THEN** `FileTree` does not report a move request
+
+#### Scenario: Open a read-only file natively
+- **GIVEN** a read-only file row
+- **WHEN** the user activates its native-open control
+- **THEN** `FileTree` reports the file path through its native-open callback
+
+#### Scenario: Reveal a truncated entry name
+- **GIVEN** a file or directory name is too long for the fixed-width Files panel
+- **WHEN** the user hovers the truncated label
+- **THEN** the browser tooltip exposes the complete entry name
+
+### Requirement: Resizable Files Sidebar
+
+When the Files sidebar is open, the component layer SHALL expose a focusable vertical resize handle on its right boundary. Pointer movement and keyboard commands on that handle SHALL change the sidebar width within a 224-pixel minimum and a 640-pixel maximum. The default width SHALL remain 288 pixels.
+
+The component layer SHALL persist a valid user-selected width in local browser storage and restore it after the sidebar or application is reopened. Missing, malformed, or out-of-range stored values MUST be ignored or clamped without preventing the sidebar from rendering.
+
+#### Scenario: Resize with pointer input
+- **GIVEN** the Files sidebar is open at its current width
+- **WHEN** the user drags its resize handle horizontally
+- **THEN** the sidebar follows the horizontal pointer position and the main content uses the remaining width
+
+#### Scenario: Enforce resizing bounds
+- **GIVEN** the Files sidebar resize handle is active
+- **WHEN** the user attempts to resize below 224 pixels or above 640 pixels
+- **THEN** the displayed width is clamped to the applicable boundary
+
+#### Scenario: Resize with the keyboard
+- **GIVEN** the Files sidebar resize handle has keyboard focus
+- **WHEN** the user presses Left Arrow or Right Arrow
+- **THEN** the sidebar width decreases or increases by a consistent step within the same bounds
+
+#### Scenario: Restore the preferred width
+- **GIVEN** the user previously completed a resize to a valid width
+- **WHEN** the Files sidebar or application is reopened
+- **THEN** the sidebar restores that width instead of the default
+
+#### Scenario: Recover from an invalid stored preference
+- **GIVEN** the stored sidebar-width preference is missing, malformed, or outside the supported bounds
+- **WHEN** the Files sidebar opens
+- **THEN** the sidebar renders at the default width or the nearest supported boundary without an application error
+
+### Requirement: Resizable File History Split
+
+When file History presents its commit list and diff side by side, the component layer SHALL expose a focusable vertical resize handle between them. Pointer and keyboard resizing SHALL change the commit-list width within the same 224-pixel minimum and 640-pixel maximum, with 416 pixels as its default.
+
+The History width SHALL use a local browser-storage preference distinct from the Files sidebar preference. When the History layout stacks the commit list above the diff, the component layer MUST preserve the stacked layout and MUST NOT expose an inapplicable vertical resize handle.
+
+#### Scenario: Resize the History commit list
+- **GIVEN** file History displays the commit list beside the diff
+- **WHEN** the user drags the separator horizontally or resizes it with Left Arrow or Right Arrow
+- **THEN** the commit-list width changes within 224–640 pixels and the diff uses the remaining width
+
+#### Scenario: Restore independent panel widths
+- **GIVEN** the user saved different valid widths for Files and the History commit list
+- **WHEN** either surface is reopened
+- **THEN** each surface restores its own width without changing the other preference
+
+#### Scenario: Preserve the stacked History layout
+- **GIVEN** file History displays the commit list above the diff in a narrow layout
+- **WHEN** the History surface renders
+- **THEN** the commit list retains its responsive stacked sizing and no vertical resize handle is available
+
 ### Requirement: ExtensionInteractionSurfaces
 
 The component layer SHALL provide distinct surfaces for extension dialogs, notifications, and

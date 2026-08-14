@@ -9,6 +9,7 @@ import type {
   CredentialStatus,
   DirEntry,
   ExtensionUIRequest,
+  FileOperation,
   FileSearchEntry,
   GitFileLogEntry,
   GitFileState,
@@ -59,6 +60,11 @@ export type OpenFile =
 
 /** Composer `@` mention autocomplete: results for the most recently issued search. */
 export type FileSearch = { status: "loading" | "loaded"; query: string; requestId: string; results: FileSearchEntry[] };
+
+export type FileOperationState =
+  | { status: "pending"; operation: FileOperation; path: string; requestId: string }
+  | { status: "succeeded"; operation: FileOperation; path: string; resultPath: string; requestId: string }
+  | { status: "error"; operation: FileOperation; path: string; message: string; requestId: string };
 
 /** Session menu search: results for the most recently issued query (matched server-side, transcripts included). */
 export type SessionSearch = {
@@ -160,6 +166,8 @@ export interface AgentState {
    * which is the refusal it must not mistake for success.
    */
   created: string | null;
+  /** Latest tree lifecycle request, so controls close only on a real acknowledgement and retain errors. */
+  fileOperation: FileOperationState | null;
   extensionPaths: string[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
   versions: { piOutpost: string; piSdk: string } | null;
@@ -204,6 +212,7 @@ const initialState: AgentState = {
   fileSearch: null,
   createError: null,
   created: null,
+  fileOperation: null,
   extensionPaths: [],
   sandbox: null,
   versions: null,
@@ -230,6 +239,7 @@ type Action =
   | { type: "file_save_started"; path: string; requestId: string; content: string }
   | { type: "close_file_preview" }
   | { type: "file_create_started" }
+  | { type: "file_operation_started"; operation: FileOperation; path: string; requestId: string }
   | { type: "file_search_started"; query: string; requestId: string }
   | { type: "file_search_cleared" }
   | { type: "session_search_started"; query: string; requestId: string }
@@ -304,6 +314,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     tree: null,
     // The file tree is cached per BROWSER_ROOT — a replaced session may have a different root.
     fileTree: {},
+    fileOperation: null,
     writableRoot: message.writableRoot,
     gitAvailable: message.gitAvailable === true,
     credentials: message.credentials ?? null,
@@ -356,6 +367,9 @@ function reduce(state: AgentState, action: Action): AgentState {
   }
   if (action.type === "file_search_cleared") return { ...state, fileSearch: null };
   if (action.type === "file_create_started") return { ...state, createError: null, created: null };
+  if (action.type === "file_operation_started") {
+    return { ...state, fileOperation: { status: "pending", operation: action.operation, path: action.path, requestId: action.requestId } };
+  }
   if (action.type === "session_search_started") {
     return {
       ...state,
@@ -577,6 +591,32 @@ function reduce(state: AgentState, action: Action): AgentState {
         openFile: { status: "loaded", path: file.path, content: file.pendingSave.content, size: message.size, mtimeMs: message.mtimeMs },
       };
     }
+    case "file_operation_result": {
+      if (state.fileOperation?.status !== "pending" || state.fileOperation.requestId !== message.requestId) return state;
+      const previousPath = message.previousPath ?? message.path;
+      const openFile =
+        message.operation === "delete_file" && state.openFile?.path === message.path
+          ? null
+          : state.openFile?.path === previousPath
+            ? { ...state.openFile, path: message.path }
+            : state.openFile;
+      const affectsHistory = state.gitFileHistory?.path === previousPath || state.gitFileHistory?.path === message.path;
+      const affectsDiff = state.gitDiff?.path === previousPath || state.gitDiff?.path === message.path;
+      return {
+        ...state,
+        openFile,
+        gitFileHistory: affectsHistory ? null : state.gitFileHistory,
+        gitFileDiff: affectsHistory ? null : state.gitFileDiff,
+        gitDiff: affectsDiff ? null : state.gitDiff,
+        fileOperation: {
+          status: "succeeded",
+          operation: message.operation,
+          path: state.fileOperation.path,
+          resultPath: message.path,
+          requestId: message.requestId,
+        },
+      };
+    }
     case "file_browser_error": {
       if (message.requestId.startsWith("dir:")) {
         return { ...state, fileTree: { ...state.fileTree, [message.path]: { error: message.message } } };
@@ -593,6 +633,19 @@ function reduce(state: AgentState, action: Action): AgentState {
             ...file,
             pendingSave: undefined,
             saveError: { message: message.message, conflict: message.reason === "conflict" },
+          },
+        };
+      }
+      if (message.requestId.startsWith("fileop:")) {
+        if (state.fileOperation?.status !== "pending" || state.fileOperation.requestId !== message.requestId) return state;
+        return {
+          ...state,
+          fileOperation: {
+            status: "error",
+            operation: state.fileOperation.operation,
+            path: state.fileOperation.path,
+            message: message.message,
+            requestId: message.requestId,
           },
         };
       }
@@ -826,6 +879,18 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         if (message.type === "git_status" || (message.type === "git_error" && message.requestId.startsWith("git:"))) {
           gitStatusSettled();
         }
+        if (message.type === "file_operation_result") {
+          // `file_changed` notifications follow the acknowledgement immediately.
+          // Keep the event-handler ref in step before React's next effect so an
+          // old-path notification cannot reread a file that was renamed/deleted.
+          const previousPath = message.previousPath ?? message.path;
+          const openFile = openFileRef.current;
+          if (message.operation === "delete_file" && openFile?.path === message.path) {
+            openFileRef.current = null;
+          } else if (openFile?.path === previousPath) {
+            openFileRef.current = { ...openFile, path: message.path };
+          }
+        }
         dispatch({ type: "server", message });
         // A replaced session may have a different sandbox root — reload the root listing
         if (message.type === "session_replaced") {
@@ -934,6 +999,31 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     createDirectory: (path: string) => {
       dispatch({ type: "file_create_started" });
       sendMessage({ type: "create_directory", path, requestId: `create:${crypto.randomUUID()}` });
+    },
+    openNative: (path: string) => {
+      const requestId = `fileop:${crypto.randomUUID()}`;
+      dispatch({ type: "file_operation_started", operation: "open_native", path, requestId });
+      sendMessage({ type: "open_native", path, requestId });
+    },
+    renameFile: (path: string, name: string) => {
+      const requestId = `fileop:${crypto.randomUUID()}`;
+      dispatch({ type: "file_operation_started", operation: "rename_file", path, requestId });
+      sendMessage({ type: "rename_file", path, name, requestId });
+    },
+    deleteFile: (path: string) => {
+      const requestId = `fileop:${crypto.randomUUID()}`;
+      dispatch({ type: "file_operation_started", operation: "delete_file", path, requestId });
+      sendMessage({ type: "delete_file", path, requestId });
+    },
+    moveFile: (path: string, destinationDirectory: string) => {
+      const requestId = `fileop:${crypto.randomUUID()}`;
+      dispatch({ type: "file_operation_started", operation: "move_file", path, requestId });
+      sendMessage({ type: "move_file", path, destinationDirectory, requestId });
+    },
+    copyFile: (path: string, destinationDirectory: string) => {
+      const requestId = `fileop:${crypto.randomUUID()}`;
+      dispatch({ type: "file_operation_started", operation: "copy_file", path, requestId });
+      sendMessage({ type: "copy_file", path, destinationDirectory, requestId });
     },
     /** Search file/directory names for the composer's `@` mention autocomplete. */
     searchFiles: (query: string) => {
