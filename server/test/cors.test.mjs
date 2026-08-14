@@ -62,11 +62,14 @@ describe("cross-origin responses", () => {
     }
   });
 
-  test("an unknown origin gets no header, and no other difference", async () => {
+  test("an unknown origin gets no allow-origin header and keeps the same status", async () => {
     const allowed = await get("/branding", { Origin: ORIGIN });
     const refused = await get("/branding", { Origin: UNKNOWN });
 
     assert.equal(refused.headers.get("access-control-allow-origin"), null);
+    // The refusal is still an origin-dependent variant. If it omitted Vary, a
+    // cache could reuse it for an allowed origin and break that caller's CORS.
+    assert.equal(refused.headers.get("vary"), "Origin");
     // Same status as the allowed request: withholding the header already stops
     // the browser, and a different status would tell any page which origins a
     // server is configured for.
@@ -80,13 +83,14 @@ describe("cross-origin responses", () => {
     }
   });
 
-  test("a request with no Origin is untouched", async () => {
+  test("a request with no Origin gets no allow-origin header but declares the cache variant", async () => {
     // curl, a native client, the server's own health check: not a browser, so
     // there is nothing to permit and nothing to say.
     const res = await get("/branding");
 
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("access-control-allow-origin"), null);
+    assert.equal(res.headers.get("vary"), "Origin");
   });
 
   test("a local development origin passes with an empty allowlist", async () => {
@@ -137,6 +141,7 @@ describe("preflight", () => {
     assert.equal(res.headers.get("access-control-allow-origin"), ORIGIN);
     assert.match(res.headers.get("access-control-allow-headers") ?? "", /authorization/i);
     assert.match(res.headers.get("access-control-allow-methods") ?? "", /GET/);
+    assert.equal(res.headers.get("vary"), "Origin, Access-Control-Request-Headers");
   });
 
   test("it needs no token and returns no content", async () => {

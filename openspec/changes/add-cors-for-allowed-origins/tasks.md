@@ -12,7 +12,7 @@
 
 ## 3. Tests
 
-- [x] 3.1 `server/test/`: an allowed origin gets the header and `Vary`; an unknown origin gets neither and the response is otherwise unchanged; the header is never `*`.
+- [x] 3.1 `server/test/`: an allowed origin gets the header and `Vary`; requests without an origin and unknown origins get no allow-origin header but still get `Vary: Origin`; a preflight also varies by its requested headers; the header is never `*`.
 - [x] 3.2 Every route is covered — assert over the route list rather than a handful of examples, so a route added later fails the test instead of quietly opting out.
 - [x] 3.3 A local development origin still passes with an empty `allowedOrigins`, which is the configuration every contributor runs.
 - [x] 3.4 Preflight: allowed origin with `Authorization` is answered; a preflight carries no body and needs no token; an unknown origin's preflight gets no headers.

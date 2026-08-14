@@ -17,8 +17,9 @@ The allowed origin SHALL be echoed back exactly as sent. The server SHALL NOT
 answer with `*`: a wildcard would extend to origins the configuration never named,
 and it is not a shorthand for the list — it is a different, larger claim.
 
-Responses that vary by origin SHALL say so (`Vary: Origin`), so a shared cache
-cannot serve one origin's response to another.
+Responses that vary by origin SHALL say so (`Vary: Origin`), including requests
+that omit `Origin` and responses to refused origins, so a shared cache cannot
+serve one origin's response to another.
 
 A request whose `Origin` is not accepted SHALL receive no CORS headers. The
 response itself is unchanged — the request is still served or still refused on its
@@ -61,6 +62,10 @@ server had already decided to send.
 The server SHALL answer a CORS preflight (`OPTIONS`) from an accepted origin with
 the methods and request headers its routes actually use, so the browser proceeds to
 the real request.
+
+When the allowed headers are derived from `Access-Control-Request-Headers`, the
+response SHALL vary on that request header so a shared cache cannot reuse an
+incompatible preflight answer.
 
 Preflight is not optional for this client: when `server.token` is set the widget
 sends `Authorization: Bearer …`, and that header alone makes the browser preflight
