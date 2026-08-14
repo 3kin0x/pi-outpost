@@ -21,5 +21,5 @@
 - [x] 3.1 Enumerate every scenario in the `file`, `api`, and `components` delta specs and record a scenario-to-test matrix with assertion-level coverage.
 - [x] 3.2 Run focused server and UI test suites, then the relevant workspace suites and strict OpenSpec validation.
 - [x] 3.3 Exercise native opening, rename, confirmed deletion, and drag-and-drop move in the running application with Playwright; verify resulting DOM and filesystem state, including a rejected action.
-- [ ] 3.4 Exercise drag-and-drop from a genuinely read-only file into a writable directory; verify that the destination is created and the source remains.
+- [x] 3.4 Exercise drag-and-drop from a genuinely read-only file into a writable directory; verify that the destination is created and the source remains.
 - [x] 3.5 Exercise `.docx`/`.xlsx` automatic attachment and long-name tooltips in the running application.
