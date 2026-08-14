@@ -20,18 +20,18 @@
 
 ## 4. The browser half
 
-- [ ] 4.1 Remove the `test.fail()` marker in `e2e/embed.spec.ts` — the test becomes a regression guard rather than a record of a known gap. Its long comment explaining the gap goes with it; leave a short one naming this change.
-- [ ] 4.2 Extend the smoke test to a token-protected server, so the preflight path is exercised by a real browser (design, Risks). A `curl` proves the server's half; only a browser proves the browser's.
-- [ ] 4.3 Assert the widget shows the server's branding rather than the defaults — the outcome this change exists for, not just the header that enables it.
+- [x] 4.1 Remove the `test.fail()` marker in `e2e/embed.spec.ts` — the test becomes a regression guard rather than a record of a known gap. Its long comment explaining the gap goes with it; leave a short one naming this change.
+- [x] 4.2 Extend the smoke test to a token-protected server, so the preflight path is exercised by a real browser (design, Risks). A `curl` proves the server's half; only a browser proves the browser's.
+- [x] 4.3 Assert the widget shows the server's branding rather than the defaults — the outcome this change exists for, not just the header that enables it.
 
 ## 5. Documentation
 
-- [ ] 5.1 `embed/README.md`: state that the backend must list the host page's origin in `server.allowedOrigins`, and that this is now sufficient for a cross-origin mount rather than sufficient only for the WebSocket.
-- [ ] 5.2 Note next to the route definitions that a new route inherits cross-origin exposure (design, Risks) — the cost uniformity takes on.
+- [x] 5.1 `embed/README.md`: state that the backend must list the host page's origin in `server.allowedOrigins`, and that this is now sufficient for a cross-origin mount rather than sufficient only for the WebSocket.
+- [x] 5.2 Note next to the route definitions that a new route inherits cross-origin exposure (design, Risks) — the cost uniformity takes on.
 
 ## 6. Verification
 
-- [ ] 6.1 Full server suite and coverage gate (lines 92 / branches 86 / functions 90).
-- [ ] 6.2 `npm run test:e2e` green, including the un-failed embed test.
-- [ ] 6.3 `openspec validate add-cors-for-allowed-origins --strict`.
-- [ ] 6.4 Manually verify with a token-protected server and a host page on another origin: branding correct on first paint, no console error, and a workspace image displayed in a message.
+- [x] 6.1 Full server suite and coverage gate (lines 92 / branches 86 / functions 90).
+- [x] 6.2 `npm run test:e2e` green, including the un-failed embed test.
+- [x] 6.3 `openspec validate add-cors-for-allowed-origins --strict`.
+- [x] 6.4 Manually verify with a token-protected server and a host page on another origin: branding correct on first paint, no console error, and a workspace image displayed in a message.

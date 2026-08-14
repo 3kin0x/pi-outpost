@@ -276,6 +276,11 @@ await app.register(websocket);
 
 // A hook rather than a call in each handler: a per-route list is one a future
 // route joins by being remembered, and this one cannot be half-applied.
+//
+// The other side of that: every route added below inherits cross-origin
+// exposure without anyone deciding it. A new route that returns something an
+// allowed origin should not read has to say so itself — uniformity is what makes
+// the rule statable, and this is what it costs.
 app.addHook("onRequest", async (req, reply) => {
   const allowed = applyCors(req, reply);
   if (req.method !== "OPTIONS") return;

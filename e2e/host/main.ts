@@ -27,10 +27,15 @@ declare global {
 
 const container = document.querySelector<HTMLElement>("#widget")!;
 // The server the widget talks to; the test's global setup puts a real one here.
-const serverUrl = new URLSearchParams(location.search).get("server") ?? undefined;
+const params = new URLSearchParams(location.search);
+const serverUrl = params.get("server") ?? undefined;
+// A host that already authenticates its user supplies the token itself, which
+// is what makes the browser preflight every request the widget sends.
+const token = params.get("token") ?? undefined;
 
 const handle: MountHandle = mount(container, {
   ...(serverUrl === undefined ? {} : { serverUrl }),
+  ...(token === undefined ? {} : { token }),
   theme: "light",
 });
 

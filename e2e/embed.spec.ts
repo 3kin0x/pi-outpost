@@ -115,11 +115,7 @@ test("unmount empties the shadow root and leaves the container", async ({ page }
 test("mounting reports no console error", async ({ page }) => {
   const errors: string[] = [];
   page.on("console", (message) => {
-    // The known /branding CORS failure has a test of its own below; counting it
-    // here too would make one defect fail two tests and hide the next one.
-    if (message.type() === "error" && !/branding|ERR_FAILED/.test(message.text())) {
-      errors.push(message.text());
-    }
+    if (message.type() === "error") errors.push(message.text());
   });
   await openHost(page);
   await expect(page.getByTitle("connected")).toBeVisible();
@@ -127,34 +123,61 @@ test("mounting reports no console error", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test.fail(
-  "the branding request survives the origin the widget was mounted from",
-  async ({ page }) => {
-    /*
-     * KNOWN GAP — this test is expected to fail, and says why.
-     *
-     * The server never emits an Access-Control-Allow-Origin header. `allowedOrigins`
-     * gates the WebSocket handshake and the Host check, and nothing else, so
-     * GET /branding answers 200 to a cross-origin fetch and the browser then
-     * discards the response.
-     *
-     * The widget still works: useAgent swallows the failure, and the branding
-     * arrives moments later on the WebSocket's "hello". What is lost is the
-     * reason the route exists — server/src/index.ts starts the HTTP server before
-     * the agent runtime specifically so branding does not wait behind a setup
-     * that "can take a few seconds", because that wait showed up as a flash of
-     * default branding. Cross-origin, that flash is back, and only for embedded
-     * hosts.
-     *
-     * Fixing it means answering with the CORS headers for origins that are
-     * already allowed — a change to what the server exposes, so it belongs in its
-     * own change rather than in the commit that added this harness. When it is
-     * fixed, this test starts passing and Playwright reports it as an unexpected
-     * pass: remove the .fail() then.
-     */
-    const response = await page.request.get(`${process.env.PI_E2E_SERVER_URL}/branding`, {
-      headers: { Origin: process.env.PI_E2E_HOST_URL! },
-    });
-    expect(response.headers()["access-control-allow-origin"]).toBe(process.env.PI_E2E_HOST_URL);
-  },
-);
+test("the branding request survives the origin the widget was mounted from", async ({ page }) => {
+  // This was a recorded gap until the server learned to answer allowed origins
+  // with CORS headers. It matters more than a header: the HTTP branding request
+  // exists to arrive before the agent runtime has finished starting, and a widget
+  // that gets branding only from the WebSocket's "hello" visibly restyles itself
+  // in front of the user seconds after it appears.
+  const response = await page.request.get(`${process.env.PI_E2E_SERVER_URL}/branding`, {
+    headers: { Origin: process.env.PI_E2E_HOST_URL! },
+  });
+  expect(response.headers()["access-control-allow-origin"]).toBe(process.env.PI_E2E_HOST_URL);
+});
+
+test("the widget shows the server's branding, not the defaults", async ({ page }) => {
+  // The outcome the header exists for. Asserted through the interface rather
+  // than the response, because that is where the flash would have been visible.
+  await expect(page.getByRole("banner").getByText("embed smoke")).toBeVisible();
+});
+
+test("a token-protected backend works across origins, preflight and all", async ({ page }) => {
+  // The path no curl-shaped test reaches: `Authorization` is not safelisted, so
+  // the browser sends a preflight of its own accord and refuses to send the real
+  // request until it is answered. A server that handled only the simple case
+  // would fail exactly the deployments that bothered to set a token.
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+
+  const url = new URL(process.env.PI_E2E_HOST_URL!);
+  url.searchParams.set("server", process.env.PI_E2E_GUARDED_URL!);
+  url.searchParams.set("token", process.env.PI_E2E_TOKEN!);
+  await page.goto(url.toString());
+
+  await expect(page.getByTitle("connected")).toBeVisible();
+  // Its own branding, so this is that server answering and not the other one
+  await expect(page.getByRole("banner").getByText("guarded smoke")).toBeVisible();
+  // No token screen: the host supplied it
+  await expect(page.getByRole("textbox", { name: /message pi/i })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("a workspace file is readable from the host page's origin", async ({ page }) => {
+  // /files/raw is what an inline image in a message resolves to, and it is the
+  // route the "every route" decision is really about — the one place workspace
+  // content leaves the server. Fetched from the page so the browser applies its
+  // own rules, which is the whole question; a request from the test runner would
+  // answer a different one.
+  const status = await page.evaluate(
+    async ([base, token]) => {
+      const res = await fetch(`${base}/files/raw?path=readme.md&token=${encodeURIComponent(token!)}`);
+      return { ok: res.ok, text: (await res.text()).slice(0, 20) };
+    },
+    [process.env.PI_E2E_GUARDED_URL!, process.env.PI_E2E_TOKEN!],
+  );
+
+  expect(status.ok).toBe(true);
+  expect(status.text).toContain("guarded workspace");
+});
