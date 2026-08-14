@@ -95,11 +95,15 @@ describe("hasPathExtractionTool", () => {
   it("recognizes the binary formats backed by built-in extraction tools", () => {
     expect(hasPathExtractionTool("docs/report.docx")).toBe(true);
     expect(hasPathExtractionTool("sheets/budget.XLSX")).toBe(true);
+    expect(hasPathExtractionTool("decks/kickoff.pptx")).toBe(true);
+    expect(hasPathExtractionTool("decks/KICKOFF.PPTX")).toBe(true);
   });
 
   it("does not claim unsupported binary formats", () => {
     expect(hasPathExtractionTool("archive.zip")).toBe(false);
     expect(hasPathExtractionTool("legacy.xls")).toBe(false);
+    // `.ppt` is the legacy binary format, which no extraction tool reads
+    expect(hasPathExtractionTool("legacy.ppt")).toBe(false);
   });
 });
 

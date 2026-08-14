@@ -22,6 +22,7 @@
  * never used as filesystem paths.
  */
 import { renderMarkdownTable } from "./markdownTable.ts";
+import { parseRelationships as parseOoxmlRelationships } from "./ooxml.ts";
 import { scanXml, XmlError } from "./xml.ts";
 import {
   formatForStyle,
@@ -229,33 +230,12 @@ export function parseWorkbook(xml: string): WorkbookInfo {
  * holds the sheet, and assuming `sheetN.xml` matches the Nth `<sheet>` element
  * is wrong on any workbook whose sheets have been reordered or deleted. It is
  * the kind of assumption that holds on every fixture one would write by hand.
+ *
+ * The parsing itself lives in `ooxml.ts`, shared with the presentation reader;
+ * a workbook's targets are relative to `xl/`, which is all this adds.
  */
 export function parseRelationships(xml: string): Map<string, string> {
-  const targets = new Map<string, string>();
-  scanXml(xml, (event) => {
-    if (event.kind !== "open") return;
-    if (event.name !== "Relationship" && !event.name.endsWith(":Relationship")) return;
-    const id = event.attributes.Id;
-    const target = event.attributes.Target;
-    if (id !== undefined && target !== undefined) targets.set(id, resolvePart(target));
-  });
-  return targets;
-}
-
-/**
- * A relationship target as a package part name. Targets are relative to the part
- * that declares them — `xl/` here — and never touch the filesystem, so this is
- * name arithmetic rather than path resolution.
- */
-function resolvePart(target: string): string {
-  const raw = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
-  const segments: string[] = [];
-  for (const segment of raw.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") segments.pop();
-    else segments.push(segment);
-  }
-  return segments.join("/");
+  return parseOoxmlRelationships(xml, "xl");
 }
 
 /**

@@ -43,7 +43,7 @@ export function isPdfFile(path: string): boolean {
 
 /** Binary workspace formats backed by the always-available path extraction tools. */
 export function hasPathExtractionTool(path: string): boolean {
-  return /\.(docx|xlsx)$/i.test(path);
+  return /\.(docx|xlsx|pptx)$/i.test(path);
 }
 
 /**

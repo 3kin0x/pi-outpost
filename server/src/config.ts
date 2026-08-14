@@ -97,6 +97,19 @@ export interface XlsxConfig {
 /** Default spreadsheet ceiling — 25 MiB, matching the other two. */
 export const DEFAULT_XLSX_MAX_BYTES = 26_214_400;
 
+export interface PptxConfig {
+  /**
+   * Largest presentation the extraction tool will open, in bytes. Default: 25 MiB.
+   * The same ceiling as the other document formats — a deck's size is mostly its
+   * images, which this reader never turns into output, so the slide and character
+   * caps in the reader are what bound one call.
+   */
+  maxBytes: number;
+}
+
+/** Default presentation ceiling — 25 MiB, matching the other three. */
+export const DEFAULT_PPTX_MAX_BYTES = 26_214_400;
+
 export interface PdfConfig {
   /**
    * Largest PDF the raw-file route will serve, in bytes. Default: 25 MiB.
@@ -196,6 +209,8 @@ export interface AppConfig {
   /** Word handling (size ceiling for the extraction tool). */
   docx: DocxConfig;
   xlsx: XlsxConfig;
+  /** PowerPoint handling (size ceiling for the extraction tool). */
+  pptx: PptxConfig;
 }
 
 /** Launch-time options from the command line — the top of the precedence chain. */
@@ -358,6 +373,7 @@ export function loadConfig(
     pdf: { maxBytes: DEFAULT_PDF_MAX_BYTES },
     docx: { maxBytes: DEFAULT_DOCX_MAX_BYTES },
     xlsx: { maxBytes: DEFAULT_XLSX_MAX_BYTES },
+    pptx: { maxBytes: DEFAULT_PPTX_MAX_BYTES },
   };
 
   let raw: Record<string, unknown>;
@@ -512,6 +528,16 @@ export function loadConfig(
         fail(`"xlsx.maxBytes" must be a positive integer (bytes)`);
       }
       config.xlsx.maxBytes = xlsx.maxBytes;
+    }
+  }
+
+  if (raw.pptx !== undefined) {
+    const pptx = asObject(raw.pptx, "pptx");
+    if (pptx.maxBytes !== undefined) {
+      if (typeof pptx.maxBytes !== "number" || !Number.isInteger(pptx.maxBytes) || pptx.maxBytes <= 0) {
+        fail(`"pptx.maxBytes" must be a positive integer (bytes)`);
+      }
+      config.pptx.maxBytes = pptx.maxBytes;
     }
   }
 
