@@ -53,10 +53,9 @@ In Next.js, the component doing this must be a client component (`"use client"`)
 
 ## Server-side configuration
 
-Two things to set on the pi-outpost server, whatever the deployment topology:
+Configure this on the pi-outpost server, whatever the deployment topology:
 
-- **`server.allowedOrigins`** — the widget's WebSocket carries the *host page's* origin (e.g. `https://your-app.example.com`), not pi-outpost's own. Add it explicitly; even same-domain deployments need this (only `localhost`/`127.0.0.1` are trusted automatically).
-- **CORS** — `/branding` and `/health` are plain HTTP endpoints with no CORS headers. They work with zero extra config when the widget and the backend share an origin (recommended: reverse-proxy pi-outpost under your own domain). A genuinely cross-origin deployment needs a CORS layer in front.
+- **`server.allowedOrigins`** — the widget carries the *host page's* origin (e.g. `https://your-app.example.com`), not pi-outpost's own. Add it explicitly; even same-domain deployments need this (only `localhost`/`127.0.0.1` are trusted automatically). Listing it is all a cross-origin mount needs: the server answers those origins with the CORS headers the browser requires on every HTTP route, and applies the same allowlist to the WebSocket handshake. It grants no authority of its own — a token-protected route still wants its token.
 
 ## License
 

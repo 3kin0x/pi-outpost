@@ -316,6 +316,11 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     }
   }, [state.branding, state.extensionTitle, embedded, accentTarget]);
 
+  // The embed has no server-rendered shell to hide its defaults. Leave its
+  // shadow root empty until the independent HTTP branding request settles, so
+  // the first visible frame already carries the server's identity.
+  if (embedded && !state.brandingReady) return null;
+
   if (state.authRequired) {
     return (
       <ThemeContext.Provider value={theme}>

@@ -189,6 +189,34 @@ describe("hello message handling", () => {
     expect(result.current.state.branding.title).toBe("Test");
     expect(result.current.state.items).toHaveLength(2);
   });
+
+  it("keeps WebSocket branding when the earlier HTTP request settles without branding", async () => {
+    let settleBranding!: (response: { ok: boolean }) => void;
+    vi.stubGlobal("fetch", () => new Promise<{ ok: boolean }>((resolve) => (settleBranding = resolve)));
+    const { result } = renderHook(() => useAgent());
+
+    act(() =>
+      mockWs!.receive({
+        type: "hello",
+        sessionId: "sess_abc",
+        branding: { title: "From WebSocket" },
+        model: "",
+        thinkingLevel: "off",
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        contextUsage: null,
+        gitAvailable: false,
+      }),
+    );
+    await waitFor(() => expect(result.current.state.branding.title).toBe("From WebSocket"));
+
+    await act(async () => settleBranding({ ok: false }));
+
+    expect(result.current.state.brandingReady).toBe(true);
+    expect(result.current.state.branding.title).toBe("From WebSocket");
+  });
 });
 
 // ---------------------------------------------------------------------------

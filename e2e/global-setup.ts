@@ -117,11 +117,30 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: onlyOneFakeProvider() },
   );
 
+  // A second server, token-protected. The widget then sends `Authorization`,
+  // which is not a CORS-safelisted header, so the browser preflights every
+  // request — the one path a curl-shaped test cannot exercise, because curl
+  // never sends a preflight of its own accord.
+  const guarded = await startServer(
+    await makeWorkspace({ "readme.md": "# guarded workspace\n" }),
+    {
+      server: { allowedOrigins: [host.url], token: E2E_TOKEN },
+      branding: { title: "guarded smoke" },
+    },
+    { env: onlyOneFakeProvider() },
+  );
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
+  process.env.PI_E2E_GUARDED_URL = guarded.base;
+  process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await guarded.stop();
     await server.stop();
     await host.close();
   };
 }
+
+/** Not a secret: a literal the guarded test server checks against. */
+const E2E_TOKEN = "e2e-smoke-token";
