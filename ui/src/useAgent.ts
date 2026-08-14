@@ -119,6 +119,8 @@ export interface AgentState {
   connected: boolean;
   /** The server refused our token (WS close 4401): show the token screen, stop reconnecting. */
   authRequired: boolean;
+  /** The independent branding request has settled, so an embed may paint without a default-brand flash. */
+  brandingReady: boolean;
   branding: Branding;
   sessionId: string;
   model: string;
@@ -175,6 +177,7 @@ export interface AgentState {
 const initialState: AgentState = {
   connected: false,
   authRequired: false,
+  brandingReady: false,
   branding: {},
   sessionId: "",
   model: "",
@@ -238,6 +241,7 @@ type Action =
   | { type: "git_file_history_closed" }
   | { type: "git_file_diff_started"; base: GitRevision; target: GitRevision; requestId: string }
   | { type: "git_file_diff_cleared" }
+  | { type: "branding_settled" }
   | { type: "branding_loaded"; branding: Branding };
 
 /** Update the in-flight assistant item; append a new one when none exists (upsert). */
@@ -274,6 +278,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
   return {
     ...state,
     connected: true,
+    brandingReady: true,
     branding: message.branding,
     sessionId: message.sessionId,
     model: message.model,
@@ -324,7 +329,8 @@ function reduce(state: AgentState, action: Action): AgentState {
   }
   // Fetched independently of the WS "hello" so it renders before the session is ready
   // (see the /branding fetch below); "hello" still wins if it arrives with a different value.
-  if (action.type === "branding_loaded") return { ...state, branding: action.branding };
+  if (action.type === "branding_settled") return { ...state, brandingReady: true };
+  if (action.type === "branding_loaded") return { ...state, brandingReady: true, branding: action.branding };
   if (action.type === "dismiss_notification") {
     return { ...state, notifications: state.notifications.filter((n) => n.id !== action.id) };
   }
@@ -757,9 +763,11 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     })
       .then((res) => (res.ok ? (res.json() as Promise<Branding>) : null))
       .then((branding) => {
-        if (!cancelled && branding) dispatch({ type: "branding_loaded", branding });
+        if (!cancelled) dispatch(branding ? { type: "branding_loaded", branding } : { type: "branding_settled" });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) dispatch({ type: "branding_settled" });
+      });
     return () => {
       cancelled = true;
     };

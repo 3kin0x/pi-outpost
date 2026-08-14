@@ -10,19 +10,12 @@
  */
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
+import { HTTP_ROUTE_CASES } from "./cors-route-cases.mjs";
 import { connect, makeWorkspace, startServer } from "./harness.mjs";
 
 const ORIGIN = "https://app.example.com";
 const UNKNOWN = "https://evil.example";
 const TOKEN = "test-token-cors";
-
-/** Every route a browser can reach, with what it takes to be answered. */
-const ROUTES = [
-  { path: "/branding", label: "branding" },
-  { path: "/health", label: "health" },
-  { path: "/files/raw?path=readme.md", label: "files/raw" },
-  { path: "/", label: "the static app" },
-];
 
 describe("cross-origin responses", () => {
   let server;
@@ -44,6 +37,7 @@ describe("cross-origin responses", () => {
 
   const get = (path, headers = {}) => fetch(`${server.base}${path}`, { headers });
 
+  // openlore: {"domain":"api","requirement":"CrossOriginResponses","scenario":"AllowedOriginReadsTheResponse","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("an allowed origin is echoed back, with Vary", async () => {
     const res = await get("/branding", { Origin: ORIGIN });
 
@@ -53,15 +47,17 @@ describe("cross-origin responses", () => {
     assert.equal(res.headers.get("vary"), "Origin");
   });
 
+  // openlore: {"domain":"api","requirement":"CrossOriginResponses","scenario":"EveryRouteAnswersTheSameWay","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("every route answers the same way", async () => {
     // Asserted over the list rather than a favourite example: a route added
     // later should fail this test instead of quietly opting out.
-    for (const { path, label } of ROUTES) {
+    for (const { path, label } of HTTP_ROUTE_CASES) {
       const res = await get(path, { Origin: ORIGIN });
       assert.equal(res.headers.get("access-control-allow-origin"), ORIGIN, `${label} sent no allow-origin`);
     }
   });
 
+  // openlore: {"domain":"api","requirement":"CrossOriginResponses","scenario":"UnknownOriginGetsNoHeader","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("an unknown origin gets no allow-origin header and keeps the same status", async () => {
     const allowed = await get("/branding", { Origin: ORIGIN });
     const refused = await get("/branding", { Origin: UNKNOWN });
@@ -76,8 +72,9 @@ describe("cross-origin responses", () => {
     assert.equal(refused.status, allowed.status);
   });
 
+  // openlore: {"domain":"api","requirement":"CrossOriginResponses","scenario":"NeverAWildcard","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("the allowed origin is never a wildcard", async () => {
-    for (const { path, label } of ROUTES) {
+    for (const { path, label } of HTTP_ROUTE_CASES) {
       const res = await get(path, { Origin: ORIGIN });
       assert.notEqual(res.headers.get("access-control-allow-origin"), "*", `${label} answered with a wildcard`);
     }
@@ -93,6 +90,7 @@ describe("cross-origin responses", () => {
     assert.equal(res.headers.get("vary"), "Origin");
   });
 
+  // openlore: {"domain":"api","requirement":"CrossOriginResponses","scenario":"LocalDevelopmentStillWorks","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("a local development origin passes with an empty allowlist", async () => {
     // The configuration every contributor runs: vite on 5173, server on 3141.
     const bare = await startServer(await makeWorkspace({ "readme.md": "# x\n" }));
@@ -127,6 +125,7 @@ describe("preflight", () => {
   const preflight = (headers) =>
     fetch(`${guarded.base}/branding`, { method: "OPTIONS", headers });
 
+  // openlore: {"domain":"api","requirement":"PreflightRequests","scenario":"PreflightForAnAuthenticatedRequest","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("an authenticated request's preflight is answered", async () => {
     // Authorization is not a safelisted header, so the browser preflights every
     // call to a token-protected server. Answering the real request while
@@ -144,6 +143,7 @@ describe("preflight", () => {
     assert.equal(res.headers.get("vary"), "Origin, Access-Control-Request-Headers");
   });
 
+  // openlore: {"domain":"api","requirement":"PreflightRequests","scenario":"PreflightCarriesNoContent","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("it needs no token and returns no content", async () => {
     // A preflight carries no credentials by design; requiring one would refuse
     // every authenticated cross-origin call before it was ever made.
@@ -164,6 +164,7 @@ describe("preflight", () => {
     assert.equal((await res.text()).length, 0);
   });
 
+  // openlore: {"domain":"api","requirement":"PreflightRequests","scenario":"PreflightFromAnUnknownOrigin","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/api/spec.md"}
   test("an unknown origin's preflight is refused and told nothing", async () => {
     const res = await preflight({ Origin: UNKNOWN, "Access-Control-Request-Method": "GET" });
 

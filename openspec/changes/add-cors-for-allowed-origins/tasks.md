@@ -17,12 +17,15 @@
 - [x] 3.3 A local development origin still passes with an empty `allowedOrigins`, which is the configuration every contributor runs.
 - [x] 3.4 Preflight: allowed origin with `Authorization` is answered; a preflight carries no body and needs no token; an unknown origin's preflight gets no headers.
 - [x] 3.5 Authentication is untouched: a token-protected route still answers 401 to a cross-origin request with no token, *with* the CORS headers present — the browser must be able to read the 401, or the client cannot tell "refused" from "unreachable".
+- [x] 3.6 Make the HTTP route cases a shared test inventory and compare it with every literal Fastify `GET` registration, so adding a route without a CORS case fails.
+- [x] 3.7 Add explicit scenario-to-test references to both delta specs, so coverage is reviewable without inferring it from test names.
 
 ## 4. The browser half
 
 - [x] 4.1 Remove the `test.fail()` marker in `e2e/embed.spec.ts` — the test becomes a regression guard rather than a record of a known gap. Its long comment explaining the gap goes with it; leave a short one naming this change.
 - [x] 4.2 Extend the smoke test to a token-protected server, so the preflight path is exercised by a real browser (design, Risks). A `curl` proves the server's half; only a browser proves the browser's.
 - [x] 4.3 Assert the widget shows the server's branding rather than the defaults — the outcome this change exists for, not just the header that enables it.
+- [x] 4.4 Block WebSocket messages in Playwright and record painted branding frames, proving HTTP branding appears before the session and no default title is visibly painted first.
 
 ## 5. Documentation
 

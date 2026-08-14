@@ -112,6 +112,7 @@ test("unmount empties the shadow root and leaves the container", async ({ page }
   expect(after.shadowChildren).toBe(0);
 });
 
+// openlore: {"domain":"embed","requirement":"ReachTheBackendFromAnotherOrigin","scenario":"NoConsoleErrorFromMounting","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/embed/spec.md"}
 test("mounting reports no console error", async ({ page }) => {
   const errors: string[] = [];
   page.on("console", (message) => {
@@ -135,10 +136,39 @@ test("the branding request survives the origin the widget was mounted from", asy
   expect(response.headers()["access-control-allow-origin"]).toBe(process.env.PI_E2E_HOST_URL);
 });
 
-test("the widget shows the server's branding, not the defaults", async ({ page }) => {
-  // The outcome the header exists for. Asserted through the interface rather
-  // than the response, because that is where the flash would have been visible.
-  await expect(page.getByRole("banner").getByText("embed smoke")).toBeVisible();
+// openlore: {"domain":"embed","requirement":"ReachTheBackendFromAnotherOrigin","scenario":"BrandingArrivesBeforeTheSession","specFile":"openspec/changes/add-cors-for-allowed-origins/specs/embed/spec.md"}
+test.describe("BrandingArrivesBeforeTheSession", () => {
+  test("paints HTTP branding before any session message, without painting the default first", async ({ context }) => {
+    // The suite's shared page has already navigated in beforeEach. Use a fresh
+    // page so interception and frame sampling precede this widget's first mount.
+    const page = await context.newPage();
+    // A mocked socket opens but never sends `hello`, so the only possible source
+    // of branding is the cross-origin HTTP request.
+    await page.routeWebSocket(/\/ws(?:\?|$)/, () => {});
+    await page.addInitScript(() => {
+      const tracked = window as Window & { __brandingFrames?: string[] };
+      tracked.__brandingFrames = [];
+      let previous = "";
+      const sample = () => {
+        const title = document.querySelector("#widget")?.shadowRoot?.querySelector("header span.text-lg")?.textContent?.trim();
+        if (title && title !== previous) {
+          tracked.__brandingFrames?.push(title);
+          previous = title;
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+
+    await openHost(page);
+    await expect(page.getByRole("banner").getByText("embed smoke")).toBeVisible();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+
+    const frames = await page.evaluate(
+      () => (window as Window & { __brandingFrames?: string[] }).__brandingFrames ?? [],
+    );
+    expect(frames).toEqual(["embed smoke"]);
+  });
 });
 
 test("a token-protected backend works across origins, preflight and all", async ({ page }) => {

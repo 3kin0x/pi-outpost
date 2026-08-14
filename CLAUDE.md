@@ -58,6 +58,37 @@ See https://github.com/clay-good/OpenLore for details.
 - ALWAYS use `rg` (ripgrep) instead of `grep` for code search and file inspection.
 - NEVER run recursive `grep -r` commands. `rg` is faster and respects `.gitignore`.
 
+## Spec scenario coverage
+
+Before calling a feature complete, prove that every applicable OpenSpec scenario
+is covered by testing:
+
+1. Follow the OpenLore workflow above, then enumerate every `#### Scenario:` in
+   the relevant main and delta specs. Verify the list with
+   `rg '^#### Scenario:' openspec/` so scenarios cannot be silently omitted.
+2. Produce an explicit scenario-to-test matrix. Classify every scenario as
+   `covered`, `partial`, or `uncovered`, and include the test file and test name.
+   Prefer the exact scenario name in the test title or a machine-readable
+   `openlore` coverage annotation when the test framework supports it.
+3. Read the assertions, not only the test names or suite result. A scenario is
+   `covered` only when its GIVEN/WHEN/THEN contract would make the test fail if
+   broken. Timing, ordering, negative cases, security boundaries, and observable
+   outcomes must be checked at the real boundary described by the spec.
+4. Use OpenLore's available coverage, inventory, impact, and spec-drift tools
+   when relevant. If an MCP tool is unavailable, use its CLI or `rg` fallback
+   and report that fallback.
+5. For enumerated surfaces such as routes, commands, or schemas, compare tests
+   against the production inventory/source of truth. A hand-maintained test-only
+   list is not sufficient proof that newly added cases are covered.
+6. Run focused tests first, then the relevant suites and strict OpenSpec
+   validation. UI or agent-behaviour scenarios must also follow the Playwright
+   running-app rule below.
+
+Do not mark OpenSpec tasks complete or report the feature done while a required
+scenario is `partial` or `uncovered`. If a correct test exposes a product bug,
+keep the assertion strong: fix the implementation when in scope, otherwise
+report the blocker instead of weakening the test.
+
 ## UI and UX changes: test them in the running app
 
 Any change that touches the interface **or the way it is used** — a component, a
