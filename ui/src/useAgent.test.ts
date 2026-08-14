@@ -561,6 +561,162 @@ describe("file creation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// File lifecycle operations
+// ---------------------------------------------------------------------------
+describe("file lifecycle operations", () => {
+  function lastSent() {
+    return JSON.parse(mockWs!.sent[mockWs!.sent.length - 1]) as Record<string, unknown>;
+  }
+
+  async function withLoadedFile(path = "draft.docx") {
+    const result = await connected();
+    act(() => result.current.readFile(path));
+    act(() =>
+      mockWs!.receive({
+        type: "file_content",
+        requestId: lastRequestId(),
+        path,
+        content: "draft",
+        size: 5,
+        mtimeMs: 10,
+      }),
+    );
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("loaded"));
+    return result;
+  }
+
+  it("sends typed lifecycle requests with correlated ids", async () => {
+    const result = await connected();
+
+    act(() => result.current.openNative("report.docx"));
+    expect(lastSent()).toMatchObject({ type: "open_native", path: "report.docx" });
+    expect(String(lastSent().requestId)).toMatch(/^fileop:/);
+
+    act(() => result.current.renameFile("report.docx", "final.docx"));
+    expect(lastSent()).toMatchObject({ type: "rename_file", path: "report.docx", name: "final.docx" });
+
+    act(() => result.current.deleteFile("report.docx"));
+    expect(lastSent()).toMatchObject({ type: "delete_file", path: "report.docx" });
+
+    act(() => result.current.moveFile("report.docx", "archive"));
+    expect(lastSent()).toMatchObject({ type: "move_file", path: "report.docx", destinationDirectory: "archive" });
+
+    act(() => result.current.copyFile("readonly.docx", "archive"));
+    expect(lastSent()).toMatchObject({ type: "copy_file", path: "readonly.docx", destinationDirectory: "archive" });
+  });
+
+  it("moves an open viewer to the acknowledged rename path", async () => {
+    const result = await withLoadedFile();
+    act(() => result.current.renameFile("draft.docx", "final.docx"));
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_operation_result",
+        requestId: lastRequestId(),
+        operation: "rename_file",
+        previousPath: "draft.docx",
+        path: "final.docx",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.openFile?.path).toBe("final.docx"));
+    expect(result.current.state.fileOperation).toMatchObject({ status: "succeeded", resultPath: "final.docx" });
+  });
+
+  it("keeps a read-only source open after its copy is acknowledged", async () => {
+    const result = await withLoadedFile("readonly.docx");
+    act(() => result.current.copyFile("readonly.docx", "archive"));
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_operation_result",
+        requestId: lastRequestId(),
+        operation: "copy_file",
+        path: "archive/readonly.docx",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.fileOperation?.status).toBe("succeeded"));
+    expect(result.current.state.openFile?.path).toBe("readonly.docx");
+  });
+
+  it("does not reread a stale source path when rename notifications follow the acknowledgement", async () => {
+    const result = await withLoadedFile();
+    act(() => result.current.renameFile("draft.docx", "final.docx"));
+    const requestId = lastRequestId();
+    const sentBeforeResult = mockWs!.sent.length;
+
+    act(() => {
+      mockWs!.receive({
+        type: "file_operation_result",
+        requestId,
+        operation: "rename_file",
+        previousPath: "draft.docx",
+        path: "final.docx",
+      });
+      mockWs!.receive({ type: "file_changed", path: "draft.docx" });
+      mockWs!.receive({ type: "file_changed", path: "final.docx" });
+    });
+
+    const followUps = mockWs!.sent.slice(sentBeforeResult).map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(followUps).not.toContainEqual(expect.objectContaining({ type: "read_file", path: "draft.docx" }));
+    expect(followUps).toContainEqual(expect.objectContaining({ type: "read_file", path: "final.docx" }));
+  });
+
+  it("moves an open viewer to the acknowledged destination path", async () => {
+    const result = await withLoadedFile("inbox/report.docx");
+    act(() => result.current.moveFile("inbox/report.docx", "archive"));
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_operation_result",
+        requestId: lastRequestId(),
+        operation: "move_file",
+        previousPath: "inbox/report.docx",
+        path: "archive/report.docx",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.openFile?.path).toBe("archive/report.docx"));
+  });
+
+  it("closes the viewer after the displayed file is deleted", async () => {
+    const result = await withLoadedFile("delete-me.txt");
+    act(() => result.current.deleteFile("delete-me.txt"));
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_operation_result",
+        requestId: lastRequestId(),
+        operation: "delete_file",
+        path: "delete-me.txt",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.openFile).toBeNull());
+  });
+
+  it("keeps the viewer and exposes a correlated operation error", async () => {
+    const result = await withLoadedFile();
+    act(() => result.current.renameFile("draft.docx", "taken.docx"));
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_browser_error",
+        requestId: lastRequestId(),
+        path: "draft.docx",
+        message: '"taken.docx" already exists',
+        reason: "conflict",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.fileOperation?.status).toBe("error"));
+    expect(result.current.state.openFile?.path).toBe("draft.docx");
+    expect(result.current.state.fileOperation).toMatchObject({ operation: "rename_file", path: "draft.docx" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // File writes and errors — routed by requestId prefix
 // ---------------------------------------------------------------------------
 describe("file writes", () => {

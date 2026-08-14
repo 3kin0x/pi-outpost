@@ -9,7 +9,7 @@
  * are the difference between a refused request and a corrupted file.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -22,6 +22,11 @@ import {
   readFileRaw,
   createFileFromBrowser,
   createDirectoryFromBrowser,
+  copyFileFromBrowser,
+  deleteFileFromBrowser,
+  moveFileFromBrowser,
+  openFileNative,
+  renameFileFromBrowser,
   resolveBrowserRoot,
   resolveWritableRoot,
   searchFiles,
@@ -410,6 +415,159 @@ describe("file browser", () => {
       assert.equal(await reasonOf(() => createDirectoryFromBrowser(root, undefined, "../outside/evil")), "outside-root");
       assert.equal(await reasonOf(() => createDirectoryFromBrowser(root, undefined, "empty")), "conflict");
       assert.equal(await reasonOf(() => createDirectoryFromBrowser(root, undefined, "scratch/..")), "denied");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Native opening and file lifecycle
+  // -------------------------------------------------------------------------
+  describe("openFileNative", () => {
+    test("launches a confined read-only file without a shell command", async () => {
+      const calls: Array<{ command: string; args: string[] }> = [];
+
+      await openFileNative(
+        root,
+        "readme.md",
+        async (command, args) => {
+          calls.push({ command, args });
+        },
+        "darwin",
+      );
+
+      assert.deepEqual(calls, [{ command: "open", args: [path.join(root, "readme.md")] }]);
+    });
+
+    test("never invokes the launcher for an escaping path", async () => {
+      let launched = false;
+
+      assert.equal(
+        await reasonOf(() =>
+          openFileNative(root, "../outside/secret.txt", async () => {
+            launched = true;
+          }),
+        ),
+        "outside-root",
+      );
+      assert.equal(launched, false);
+    });
+
+    test("reports a launcher failure with a machine-readable reason", async () => {
+      assert.equal(
+        await reasonOf(() =>
+          openFileNative(root, "readme.md", async () => {
+            throw new Error("no associated application");
+          }),
+        ),
+        "launcher-failed",
+      );
+    });
+  });
+
+  describe("file lifecycle", () => {
+    test("renames a writable regular file and preserves its content", async () => {
+      write("lifecycle/draft.docx", "draft");
+
+      const result = await renameFileFromBrowser(root, undefined, "lifecycle/draft.docx", "final.docx");
+
+      assert.equal(result, "lifecycle/final.docx");
+      assert.equal((await readFileForPreview(root, result)).content, "draft");
+      assert.equal(statSync(path.join(root, "lifecycle/draft.docx"), { throwIfNoEntry: false }), undefined);
+    });
+
+    test("refuses a rename collision without changing either file", async () => {
+      write("lifecycle/collision-source.txt", "source");
+      write("lifecycle/collision-target.txt", "target");
+
+      assert.equal(
+        await reasonOf(() => renameFileFromBrowser(root, undefined, "lifecycle/collision-source.txt", "collision-target.txt")),
+        "conflict",
+      );
+      assert.equal((await readFileForPreview(root, "lifecycle/collision-source.txt")).content, "source");
+      assert.equal((await readFileForPreview(root, "lifecycle/collision-target.txt")).content, "target");
+    });
+
+    test("deletes a writable regular file", async () => {
+      write("lifecycle/delete-me.txt", "gone");
+
+      await deleteFileFromBrowser(root, undefined, "lifecycle/delete-me.txt");
+
+      assert.equal(statSync(path.join(root, "lifecycle/delete-me.txt"), { throwIfNoEntry: false }), undefined);
+    });
+
+    test("moves a file into a writable directory and refuses a collision", async () => {
+      mkdirSync(path.join(root, "lifecycle/archive"), { recursive: true });
+      write("lifecycle/report.docx", "report");
+
+      const result = await moveFileFromBrowser(root, undefined, "lifecycle/report.docx", "lifecycle/archive");
+
+      assert.equal(result, "lifecycle/archive/report.docx");
+      assert.equal((await readFileForPreview(root, result)).content, "report");
+      assert.equal(statSync(path.join(root, "lifecycle/report.docx"), { throwIfNoEntry: false }), undefined);
+
+      write("lifecycle/duplicate.txt", "source");
+      write("lifecycle/archive/duplicate.txt", "target");
+      assert.equal(
+        await reasonOf(() => moveFileFromBrowser(root, undefined, "lifecycle/duplicate.txt", "lifecycle/archive")),
+        "conflict",
+      );
+      assert.equal((await readFileForPreview(root, "lifecycle/duplicate.txt")).content, "source");
+      assert.equal((await readFileForPreview(root, "lifecycle/archive/duplicate.txt")).content, "target");
+    });
+
+    test("copies a read-only file into a writable directory without removing the source", async () => {
+      mkdirSync(path.join(root, "copy-zone/archive"), { recursive: true });
+      write("copy-source.txt", "source");
+
+      const result = await copyFileFromBrowser(root, "copy-zone", "copy-source.txt", "copy-zone/archive");
+
+      assert.equal(result, "copy-zone/archive/copy-source.txt");
+      assert.equal((await readFileForPreview(root, result)).content, "source");
+      assert.equal((await readFileForPreview(root, "copy-source.txt")).content, "source");
+
+      assert.equal(
+        await reasonOf(() => copyFileFromBrowser(root, "copy-zone", "copy-source.txt", "copy-zone/archive")),
+        "conflict",
+      );
+      assert.equal((await readFileForPreview(root, "copy-zone/archive/copy-source.txt")).content, "source");
+    });
+
+    test("refuses lifecycle mutations outside the writable zone", async () => {
+      write("lifecycle-zone/inside.txt", "inside");
+      write("lifecycle-outside.txt", "outside");
+      mkdirSync(path.join(root, "lifecycle-zone/destination"), { recursive: true });
+
+      assert.equal(await reasonOf(() => renameFileFromBrowser(root, "lifecycle-zone", "lifecycle-outside.txt", "renamed.txt")), "denied");
+      assert.equal(await reasonOf(() => deleteFileFromBrowser(root, null, "lifecycle-zone/inside.txt")), "denied");
+      assert.equal(
+        await reasonOf(() => moveFileFromBrowser(root, "lifecycle-zone", "lifecycle-outside.txt", "lifecycle-zone/destination")),
+        "denied",
+      );
+      assert.equal((await readFileForPreview(root, "lifecycle-outside.txt")).content, "outside");
+    });
+
+    test("refuses escaping mutation paths", async () => {
+      assert.equal(await reasonOf(() => deleteFileFromBrowser(root, undefined, "../outside/secret.txt")), "outside-root");
+      assert.equal(
+        await reasonOf(() => moveFileFromBrowser(root, undefined, "readme.md", "../outside")),
+        "outside-root",
+      );
+      assert.equal(
+        await reasonOf(() => copyFileFromBrowser(root, undefined, "../outside/secret.txt", "empty")),
+        "outside-root",
+      );
+      assert.equal((await readFileForPreview(root, "readme.md")).content, "# hello\n");
+    });
+
+    test("refuses lifecycle mutations through an intermediate symlink outside the root", async (t) => {
+      if (!symlinksAvailable) return t.skip("symlinks unavailable on this platform");
+
+      assert.equal(await reasonOf(() => deleteFileFromBrowser(root, undefined, "escape-dir/secret.txt")), "outside-root");
+      assert.equal(
+        await reasonOf(() => renameFileFromBrowser(root, undefined, "escape-dir/secret.txt", "renamed.txt")),
+        "outside-root",
+      );
+      assert.equal(await reasonOf(() => moveFileFromBrowser(root, undefined, "escape-dir/secret.txt", "empty")), "outside-root");
+      assert.equal(readFileSync(path.join(outside, "secret.txt"), "utf8"), "SECRET\n");
     });
   });
 

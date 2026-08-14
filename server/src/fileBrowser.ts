@@ -5,9 +5,10 @@
  * (SECURITY: reuses sandbox.ts's realResolve/isWithin — never reinvent path
  * confinement here).
  */
-import type { Dirent } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import type { DirEntry, FileBrowserErrorReason, FileSearchEntry } from "@pi-outpost/shared";
 import type { AppConfig } from "./config.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
@@ -261,6 +262,212 @@ export async function createDirectoryFromBrowser(
   } catch (error) {
     throw creationError(error, relPath);
   }
+}
+
+type NativeLauncher = (command: string, args: string[]) => Promise<void>;
+
+/** Spawn an OS launcher without a shell and wait until it reports success/failure. */
+async function launchNative(command: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { shell: false, stdio: "ignore", windowsHide: true });
+    let settled = false;
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) resolve();
+      else reject(new Error(`${command} exited with code ${code ?? "unknown"}`));
+    });
+  });
+}
+
+/** Open one confined regular file with the host platform's associated application. */
+export async function openFileNative(
+  root: string,
+  relPath: string,
+  launcher: NativeLauncher = launchNative,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const resolved = await resolveConfined(root, relPath);
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(resolved);
+  } catch {
+    throw new FileBrowserError("not-found", `"${relPath}" does not exist`);
+  }
+  if (!stat.isFile()) throw new FileBrowserError("not-found", `"${relPath}" is not a file`);
+
+  const invocation =
+    platform === "darwin"
+      ? { command: "open", args: [resolved] }
+      : platform === "win32"
+        ? { command: "explorer.exe", args: [resolved] }
+        : { command: "xdg-open", args: [resolved] };
+  try {
+    await launcher(invocation.command, invocation.args);
+  } catch (error) {
+    throw new FileBrowserError("launcher-failed", `Cannot open "${relPath}": ${(error as Error).message}`);
+  }
+}
+
+/** Resolve an existing non-symlink regular file inside the browser root. */
+async function resolveRegularFile(root: string, relPath: string): Promise<string> {
+  const resolved = await resolveConfined(root, relPath);
+  try {
+    // Reject a symlink in the final segment: mutating or copying its resolved
+    // target would make the visible tree entry's behavior surprising.
+    if (!(await fs.lstat(path.resolve(root, relPath))).isFile()) {
+      throw new FileBrowserError("not-found", `"${relPath}" is not a regular file`);
+    }
+  } catch (error) {
+    if (error instanceof FileBrowserError) throw error;
+    throw new FileBrowserError("not-found", `"${relPath}" does not exist`);
+  }
+  // Operate through the canonical path we just confined. Returning the lexical
+  // path would reopen a race where an intermediate symlink is retargeted.
+  return resolved;
+}
+
+/** Resolve an existing regular file and prove it is inside the writable zone. */
+async function resolveWritableFile(
+  root: string,
+  writableRel: string | null | undefined,
+  relPath: string,
+): Promise<string> {
+  if (writableRel === null) throw new FileBrowserError("denied", "The sandbox is read-only");
+  const resolved = await resolveRegularFile(root, relPath);
+  const writableRoot = writableRel === undefined ? root : path.resolve(root, writableRel);
+  if (!isWithin(writableRoot, resolved)) {
+    throw new FileBrowserError("denied", `"${relPath}" is outside the writable zone`);
+  }
+  return resolved;
+}
+
+/** Resolve an existing destination directory and prove it is writable. */
+async function resolveWritableDirectory(
+  root: string,
+  writableRel: string | null | undefined,
+  relPath: string,
+): Promise<string> {
+  if (writableRel === null) throw new FileBrowserError("denied", "The sandbox is read-only");
+  const resolved = await resolveConfined(root, relPath);
+  const writableRoot = writableRel === undefined ? root : path.resolve(root, writableRel);
+  if (!isWithin(writableRoot, resolved)) {
+    throw new FileBrowserError("denied", `"${relPath}" is outside the writable zone`);
+  }
+  try {
+    if (!(await fs.stat(resolved)).isDirectory()) {
+      throw new FileBrowserError("not-found", `"${relPath}" is not a directory`);
+    }
+  } catch (error) {
+    if (error instanceof FileBrowserError) throw error;
+    throw new FileBrowserError("not-found", `"${relPath}" does not exist`);
+  }
+  return resolved;
+}
+
+/** Translate lifecycle syscalls into stable browser errors. */
+function lifecycleError(error: unknown, relPath: string, verb: "rename" | "delete" | "move" | "copy"): FileBrowserError {
+  if (error instanceof FileBrowserError) return error;
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "EEXIST") return new FileBrowserError("conflict", `"${relPath}" already exists`);
+  if (code === "ENOENT" || code === "ENOTDIR") return new FileBrowserError("not-found", `"${relPath}" does not exist`);
+  if (code === "EXDEV") return new FileBrowserError("denied", "Cannot move a file across filesystems");
+  if (code === "EACCES" || code === "EPERM") return new FileBrowserError("denied", `Cannot ${verb} "${relPath}"`);
+  return new FileBrowserError("denied", `Cannot ${verb} "${relPath}": ${(error as Error).message}`);
+}
+
+/**
+ * Move a regular file without an overwrite race. A hard link is created with
+ * EEXIST semantics before the source is removed; if removal fails, the new link
+ * is rolled back. This deliberately refuses cross-filesystem moves.
+ */
+async function linkThenUnlink(source: string, destination: string, destinationRel: string, verb: "rename" | "move"): Promise<void> {
+  try {
+    await fs.link(source, destination);
+  } catch (error) {
+    throw lifecycleError(error, destinationRel, verb);
+  }
+  try {
+    await fs.unlink(source);
+  } catch (error) {
+    await fs.unlink(destination).catch(() => {});
+    throw lifecycleError(error, destinationRel, verb);
+  }
+}
+
+/** Rename one regular file within its current directory, never overwriting. */
+export async function renameFileFromBrowser(
+  root: string,
+  writableRel: string | null | undefined,
+  relPath: string,
+  name: string,
+): Promise<string> {
+  assertCreatableName(name);
+  if (name.includes("/")) throw new FileBrowserError("denied", `"${name}" is a path, not a name`);
+  const source = await resolveWritableFile(root, writableRel, relPath);
+  const parentRel = relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/")) : "";
+  await resolveWritableDirectory(root, writableRel, parentRel);
+  const destinationRel = parentRel ? `${parentRel}/${name}` : name;
+  const destination = await resolveConfined(root, destinationRel);
+  await linkThenUnlink(source, destination, destinationRel, "rename");
+  return destinationRel;
+}
+
+/** Permanently delete one writable regular file. */
+export async function deleteFileFromBrowser(
+  root: string,
+  writableRel: string | null | undefined,
+  relPath: string,
+): Promise<void> {
+  const source = await resolveWritableFile(root, writableRel, relPath);
+  try {
+    await fs.unlink(source);
+  } catch (error) {
+    throw lifecycleError(error, relPath, "delete");
+  }
+}
+
+/** Move one regular file into an existing writable directory, never overwriting. */
+export async function moveFileFromBrowser(
+  root: string,
+  writableRel: string | null | undefined,
+  relPath: string,
+  destinationDirectory: string,
+): Promise<string> {
+  const source = await resolveWritableFile(root, writableRel, relPath);
+  const destinationDir = await resolveWritableDirectory(root, writableRel, destinationDirectory);
+  const name = relPath.split("/").pop() ?? "";
+  const destinationRel = destinationDirectory ? `${destinationDirectory}/${name}` : name;
+  const destination = path.join(destinationDir, name);
+  await resolveConfined(root, destinationRel);
+  await linkThenUnlink(source, destination, destinationRel, "move");
+  return destinationRel;
+}
+
+/** Copy one confined regular file into an existing writable directory, never overwriting. */
+export async function copyFileFromBrowser(
+  root: string,
+  writableRel: string | null | undefined,
+  relPath: string,
+  destinationDirectory: string,
+): Promise<string> {
+  const source = await resolveRegularFile(root, relPath);
+  const destinationDir = await resolveWritableDirectory(root, writableRel, destinationDirectory);
+  const name = relPath.split("/").pop() ?? "";
+  const destinationRel = destinationDirectory ? `${destinationDirectory}/${name}` : name;
+  const destination = path.join(destinationDir, name);
+  await resolveConfined(root, destinationRel);
+  try {
+    await fs.copyFile(source, destination, constants.COPYFILE_EXCL);
+  } catch (error) {
+    throw lifecycleError(error, destinationRel, "copy");
+  }
+  return destinationRel;
 }
 
 /**

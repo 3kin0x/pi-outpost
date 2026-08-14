@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { GitFileState } from "@pi-outpost/shared";
-import type { DirState, OpenFile } from "../useAgent";
+import type { DirState, FileOperationState, OpenFile } from "../useAgent";
 import { FileTree } from "./FileTree";
 
 interface SidebarProps {
@@ -19,6 +19,12 @@ interface SidebarProps {
   /** Create an empty file at this path (and open it). */
   onCreateFile?: (path: string) => void;
   onCreateDirectory?: (path: string) => void;
+  onOpenNative?: (path: string) => void;
+  onRenameFile?: (path: string, name: string) => void;
+  onDeleteFile?: (path: string) => void;
+  onMoveFile?: (path: string, destinationDirectory: string) => void;
+  onCopyFile?: (path: string, destinationDirectory: string) => void;
+  fileOperation?: FileOperationState | null;
   /** The server's refusal of the last creation request. */
   createError?: { path: string; message: string } | null;
   /** Path the last creation produced. */
@@ -38,6 +44,12 @@ export function Sidebar({
   onToggleAttachPath,
   onCreateFile,
   onCreateDirectory,
+  onOpenNative,
+  onRenameFile,
+  onDeleteFile,
+  onMoveFile,
+  onCopyFile,
+  fileOperation,
   createError,
   created,
 }: SidebarProps) {
@@ -64,6 +76,12 @@ export function Sidebar({
           onToggleAttachPath={onToggleAttachPath}
           onCreateFile={onCreateFile}
           onCreateDirectory={onCreateDirectory}
+          onOpenNative={onOpenNative}
+          onRenameFile={onRenameFile}
+          onDeleteFile={onDeleteFile}
+          onMoveFile={onMoveFile}
+          onCopyFile={onCopyFile}
+          fileOperation={fileOperation}
           createError={createError}
           created={created}
         />

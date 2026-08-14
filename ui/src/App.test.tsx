@@ -350,6 +350,31 @@ describe("App — attachments", () => {
     expect(screen.getByRole("button", { name: "Reference readme.md in the prompt" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it.each(["docs/report.docx", "sheets/budget.xlsx"])(
+    "automatically references a tool-readable binary file: %s",
+    async (path) => {
+      const { api } = mount({
+        openFile: { status: "error", path, message: "Binary file — preview not supported" },
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTitle(`${path} — sent as a reference; the agent reads the file itself`)).toBeInTheDocument(),
+      );
+
+      const box = screen.getByRole("textbox");
+      fireEvent.change(box, { target: { value: "summarize it" } });
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(api.prompt).toHaveBeenCalledWith(expect.stringContaining(`@${path}`), undefined);
+    },
+  );
+
+  it("does not attach an unsupported binary file", async () => {
+    mount({ openFile: { status: "error", path: "archive.zip", message: "Binary file — preview not supported" } });
+
+    await waitFor(() => expect(screen.getByText("Binary file — preview not supported")).toBeInTheDocument());
+    expect(screen.queryByTitle(/archive\.zip — sent as a reference/)).not.toBeInTheDocument();
+  });
+
   it("sends the prompt and clears what was attached to it", () => {
     const { api } = mount({ fileTree: { "": [{ name: "readme.md", type: "file" }] } });
     fireEvent.click(sidebarToggle());
