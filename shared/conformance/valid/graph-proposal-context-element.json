@@ -1,0 +1,24 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "data": {
+    "nodes": [
+      {
+        "id": "existing",
+        "ref": "EL-1"
+      },
+      {
+        "id": "fresh",
+        "label": "Fresh"
+      }
+    ],
+    "edges": [
+      {
+        "from": "fresh",
+        "to": "existing",
+        "kind": "reference"
+      }
+    ]
+  }
+}

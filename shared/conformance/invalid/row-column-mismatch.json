@@ -1,0 +1,15 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "a",
+      "b"
+    ],
+    "rows": [
+      [
+        "only-one"
+      ]
+    ]
+  }
+}

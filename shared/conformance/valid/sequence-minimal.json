@@ -1,0 +1,13 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "sequence",
+  "data": {
+    "participants": [
+      {
+        "id": "p",
+        "label": "P"
+      }
+    ],
+    "messages": []
+  }
+}

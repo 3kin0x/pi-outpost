@@ -54,7 +54,7 @@ import {
   validBaseUrl,
   validProviderId,
 } from "./credentials.ts";
-import { assistantToItem, contentText, customMessageToItem, historyToItems, truncate } from "./convert.ts";
+import { assistantToItem, contentText, customMessageToItem, historyToItems, structuredExchangeField, truncate } from "./convert.ts";
 import { configureExtensionRender, renderToolCallHtml, renderToolResultHtml } from "./extensionRender.ts";
 import {
   assertWithinRoot,
@@ -80,6 +80,7 @@ import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitSh
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
+import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
 import {
@@ -205,7 +206,19 @@ if (cli.command === "login") {
   }
 }
 
-let sandboxedTools = config.sandbox ? await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes) : undefined;
+/**
+ * Reads nothing and writes nothing: it validates a document the agent composed and
+ * hands it to the interface. There is no path argument to confine, so unlike every
+ * other custom tool it is the same tool on both sides of the sandbox.
+ */
+const structuredExchangeTool = createStructuredExchangeToolDefinition();
+
+let sandboxedTools = config.sandbox
+  ? [
+      ...(await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes)),
+      structuredExchangeTool,
+    ]
+  : undefined;
 let BROWSER_ROOT = await resolveBrowserRoot(config);
 let WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
 let GIT = await probeGit(BROWSER_ROOT);
@@ -640,6 +653,7 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
                 maxBytes: config.pptx.maxBytes,
                 writableRoot: await fs.realpath(cwd),
               }),
+              structuredExchangeTool,
             ],
           }),
     })),
@@ -1171,6 +1185,7 @@ function bindSession(): () => void {
           ...(rendered
             ? { outputHtml: rendered.expanded, outputHtmlCollapsed: rendered.collapsed }
             : {}),
+          ...structuredExchangeField(event.result?.details),
         });
         {
           const args = pendingFileMutations.get(event.toolCallId);

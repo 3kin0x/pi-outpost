@@ -198,6 +198,8 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
         break;
       }
       case "toolResult": {
+        // Same detection as the live tool_end path — they must agree, or a result
+        // renders while it streams and turns into raw output on reload.
         const call = message.toolCallId ? pendingCalls.get(message.toolCallId) : undefined;
         if (message.toolCallId) pendingCalls.delete(message.toolCallId);
 
@@ -223,6 +225,7 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
           ...(rendered
             ? { outputHtml: rendered.expanded, outputHtmlCollapsed: rendered.collapsed }
             : {}),
+          ...structuredExchangeField(message.details),
         });
         break;
       }
@@ -270,6 +273,32 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
   }
 
   return items;
+}
+
+
+/**
+ * A tool result's structured-exchange document, carried on to the client.
+ *
+ * Deliberately not validated here. The client validates on receipt — that is where
+ * the rendering decision is made, and a verdict reached anywhere else would have to
+ * be trusted rather than checked. This only declines to forward things that plainly
+ * are not envelopes, so the wire does not carry every extension's private metadata.
+ *
+ * Serialized rather than passed through as an object: an approved proposal is handed
+ * on byte for byte from here, and a value that has been parsed and re-serialised
+ * again is no longer the document that was validated.
+ */
+export function structuredExchangeField(details: unknown): { structured?: string } {
+  if (details === null || typeof details !== "object") return {};
+  const schema = (details as { schema?: unknown }).schema;
+  if (typeof schema !== "string" || !schema.startsWith("urn:structured-exchange:")) return {};
+  try {
+    return { structured: JSON.stringify(details) };
+  } catch {
+    // Circular or otherwise unserialisable: not something a producer could have
+    // sent as JSON in the first place, so there is nothing here to forward.
+    return {};
+  }
 }
 
 /** Convert a final assistant message to a ChatItem (for assistant_end sync). */

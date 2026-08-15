@@ -561,3 +561,46 @@ describe("customMessageToItem", () => {
     assert.equal(item.text, "plain");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Structured-exchange payloads through history replay
+//
+// The bug this covers was invisible live: a result rendered while it streamed and
+// became raw output the moment the page was reloaded, because only the live
+// tool_end path carried the payload and history replay did not.
+// ---------------------------------------------------------------------------
+describe("structured exchange survives a reload", () => {
+  const envelope = {
+    schema: "urn:structured-exchange:1",
+    kind: "graph",
+    data: { nodes: [{ id: "a", label: "A" }], edges: [] },
+  };
+
+  const toolResult = (details: unknown) => [
+    { role: "assistant" as const, content: [{ type: "toolCall" as const, toolCallId: "t1", toolName: "present_structure", args: {} }] },
+    { role: "toolResult" as const, toolCallId: "t1", toolName: "present_structure", content: "some text", details },
+  ];
+
+  test("replayed history carries the structured document", () => {
+    const items = historyToItems(toolResult(envelope) as never);
+    const tool = items.find((item) => item.kind === "tool") as Extract<(typeof items)[0], { kind: "tool" }>;
+
+    assert.ok(tool, "expected a tool item");
+    assert.equal(tool.structured, JSON.stringify(envelope));
+  });
+
+  test("a result with no structured document carries none", () => {
+    const items = historyToItems(toolResult({ somethingElse: true }) as never);
+    const tool = items.find((item) => item.kind === "tool") as Extract<(typeof items)[0], { kind: "tool" }>;
+
+    assert.equal(tool.structured, undefined);
+  });
+
+  test("details that are not an envelope are not forwarded", () => {
+    for (const details of [null, undefined, "a string", 42, { schema: "urn:something-else:1" }]) {
+      const items = historyToItems(toolResult(details) as never);
+      const tool = items.find((item) => item.kind === "tool") as Extract<(typeof items)[0], { kind: "tool" }>;
+      assert.equal(tool.structured, undefined, `expected ${JSON.stringify(details)} not to be forwarded`);
+    }
+  });
+});

@@ -8,6 +8,7 @@ import {
 } from "./builtin";
 import { gitDiffPresentation } from "./GitDiffView";
 import { codeSearchPresentation } from "./CodeSearchView";
+import { structuredExchangePresentation } from "./StructuredExchangeView";
 import type { Presentation, ToolItem } from "./types";
 
 /**
@@ -18,6 +19,11 @@ import type { Presentation, ToolItem } from "./types";
  */
 export const PRESENTATIONS: readonly Presentation[] = [
   extensionHtmlPresentation,
+  // Data a producer declared about itself, validated against the published
+  // schema, outranks every entry below it — those infer a shape from output, and
+  // a declaration beats a guess. It stays under the extension's own rendering:
+  // an extension owns the presentation of its tool more authoritatively still.
+  structuredExchangePresentation,
   fileEditPresentation,
   fileWritePresentation,
   gitDiffPresentation,

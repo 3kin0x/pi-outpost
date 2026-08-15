@@ -1,0 +1,18 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "data": {
+    "nodes": [
+      {
+        "id": "ledger",
+        "ref": "EL-7",
+        "label": "Ledger",
+        "set": {
+          "label": "General Ledger"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

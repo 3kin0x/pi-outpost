@@ -46,6 +46,18 @@ export type ChatItem =
       outputHtmlCollapsed?: string;
       /** HTML from pi's renderCall (re-invoked server-side). */
       callHtml?: string;
+      /**
+       * A structured-exchange document the tool declared for itself, exactly as it
+       * arrived. Carried separately from `output` because it is not display text
+       * and never reaches the model — the SDK's own `details` channel is defined
+       * as metadata the LLM does not see.
+       *
+       * Kept as the raw serialized form rather than a parsed object: an approved
+       * proposal has to be handed on byte for byte, and a value that has been
+       * through a parse and a re-serialise is no longer the document that was
+       * validated and shown.
+       */
+      structured?: string;
     }
   | {
       /** Extension-defined message (pi.sendMessage() with a customType) — see extensions.md#message-and-entry-rendering. */
@@ -377,6 +389,8 @@ export type ServerMessage =
       text: string;
       outputHtml?: string;
       outputHtmlCollapsed?: string;
+      /** Serialized structured-exchange document, when the tool declared one. */
+      structured?: string;
     }
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "context_usage"; usage: ContextUsage }

@@ -1,0 +1,30 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "removals": [
+    {
+      "type": "relationship",
+      "ref": "REL-1"
+    }
+  ],
+  "data": {
+    "nodes": [
+      {
+        "id": "a",
+        "ref": "EL-1"
+      },
+      {
+        "id": "c",
+        "ref": "EL-3"
+      }
+    ],
+    "edges": [
+      {
+        "from": "a",
+        "to": "c",
+        "kind": "composition"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "left",
+      "right"
+    ],
+    "rows": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "c",
+        null
+      ]
+    ]
+  }
+}
