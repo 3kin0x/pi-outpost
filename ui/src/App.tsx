@@ -18,6 +18,7 @@ import {
   pdfPreviewToAttachment,
   type Attachment,
   filesToAttachments,
+  needsUpload,
   removeAttachment,
   replacePreviewAttachment,
   textPreviewToAttachment,
@@ -86,6 +87,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     writeFile,
     createFile,
     createDirectory,
+    uploadFile,
     openNative,
     renameFile,
     deleteFile,
@@ -142,13 +144,52 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
   // Session analysis drawer: closed until asked for, from the model bar's usage indicator.
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [attachmentErrors, setAttachmentErrors] = useState<string[]>([]);
+  // Files being copied into the workspace right now — the composer shows one chip
+  // each and refuses to send while any of them is outstanding.
+  const [pendingUploads, setPendingUploads] = useState<{ id: string; name: string }[]>([]);
+  const uploadCounterRef = useRef(0);
+  // Overlapping drops form one "wave": the first to start clears what is on
+  // screen, and every batch in the wave adds to it (see attachFiles).
+  const batchesInFlightRef = useRef(0);
   // Counter, not boolean: dragenter/dragleave fire for every child crossed
   const [dragDepth, setDragDepth] = useState(0);
 
+  /**
+   * Files supplied from outside the workspace. The ones that need a copy travel to
+   * the server first, so this is asynchronous where it used to be immediate — and
+   * the pending chips exist because the composer must not send a prompt whose
+   * attachments have not resolved yet.
+   *
+   * Pending entries carry an id rather than being keyed by name: dropping two
+   * files called the same thing is ordinary, and clearing "the one named X" would
+   * clear the wrong one.
+   */
   async function attachFiles(files: Iterable<File>) {
-    const { attachments: added, errors } = await filesToAttachments(files);
-    if (added.length > 0) setAttachments((current) => [...current, ...added]);
-    setAttachmentErrors(errors);
+    const list = [...files];
+    const pending = list
+      .filter(needsUpload)
+      .map((file) => ({ id: `${uploadCounterRef.current++}`, name: file.name }));
+    if (pending.length > 0) setPendingUploads((current) => [...current, ...pending]);
+    // A batch clears the errors on screen only if it is the first one in flight.
+    // This used to be a plain replace, which was safe while attaching was
+    // synchronous; now that a batch spans a round trip, two overlapping drops
+    // would race and the second one's (usually empty) errors would wipe the
+    // first's before anyone had read them.
+    if (batchesInFlightRef.current === 0) setAttachmentErrors([]);
+    batchesInFlightRef.current++;
+    try {
+      const { attachments: added, errors } = await filesToAttachments(list, uploadFile);
+      if (added.length > 0) setAttachments((current) => [...current, ...added]);
+      if (errors.length > 0) setAttachmentErrors((current) => [...current, ...errors]);
+    } finally {
+      batchesInFlightRef.current--;
+      // Cleared whatever the outcome: a failed upload contributes an error and no
+      // attachment, and leaving its chip up would block submission forever.
+      if (pending.length > 0) {
+        const done = new Set(pending.map((entry) => entry.id));
+        setPendingUploads((current) => current.filter((entry) => !done.has(entry.id)));
+      }
+    }
   }
 
   useEffect(() => {
@@ -371,7 +412,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           // Above the header (z-30) too: a drop target the header punches a hole in reads as broken.
           <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center border-2 border-dashed bg-white/70 backdrop-blur-sm dark:bg-zinc-950/70" style={{ borderColor: "var(--accent, #3b82f6)" }}>
             <p className="text-lg font-medium text-zinc-700 dark:text-zinc-200">
-              Drop files to attach (images &amp; text)
+              Drop files to attach (images, documents &amp; text)
             </p>
           </div>
         )}
@@ -618,6 +659,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
                 fileSearch={state.fileSearch}
                 prefill={state.editorPrefill}
                 attachments={attachments}
+                pendingUploads={pendingUploads}
                 onAttach={(files) => void attachFiles(files)}
                 onMentionPaths={setDraftMentions}
                 onRemoveAttachment={handleRemoveAttachment}

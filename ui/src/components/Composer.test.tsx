@@ -155,6 +155,70 @@ describe("Composer", () => {
     });
   });
 
+  describe("uploads in flight", () => {
+    const uploaded: Attachment = {
+      kind: "path",
+      name: "uploads/report.pdf",
+      data: "uploads/report.pdf",
+      mimeType: "text/plain",
+      source: "manual",
+    };
+    const send = () => screen.getByLabelText("Send message");
+
+    it("shows a chip for a file still being copied into the workspace", () => {
+      setup({ pendingUploads: [{ id: "1", name: "report.pdf" }] });
+      expect(screen.getByText("report.pdf")).toBeInTheDocument();
+      expect(screen.getByText("uploading")).toBeInTheDocument();
+    });
+
+    it("refuses to send while an upload is outstanding", () => {
+      const { onSend } = setup({ pendingUploads: [{ id: "1", name: "report.pdf" }] });
+      type("what is in this?");
+
+      expect(send()).toBeDisabled();
+      // Enter is the other way in, and it must not slip past the same guard
+      fireEvent.keyDown(box(), { key: "Enter" });
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("says why Enter did nothing, rather than swallowing it", () => {
+      // The button explains itself by being disabled; Enter has no such affordance
+      const { rerenderWith } = setup({ pendingUploads: [{ id: "1", name: "report.pdf" }] });
+      type("what is in this?");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+      fireEvent.keyDown(box(), { key: "Enter" });
+      expect(screen.getByRole("status")).toHaveTextContent(/finish uploading/i);
+
+      // …and the hint goes away on its own once the upload lands
+      rerenderWith({ pendingUploads: [] });
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("sends the written path exactly once when the upload settles", () => {
+      const { onSend, rerenderWith } = setup({ pendingUploads: [{ id: "1", name: "report.pdf" }] });
+      type("what is in this?");
+
+      rerenderWith({ pendingUploads: [], attachments: [uploaded] });
+      expect(send()).toBeEnabled();
+      fireEvent.keyDown(box(), { key: "Enter" });
+
+      expect(onSend).toHaveBeenCalledTimes(1);
+      const [prompt] = onSend.mock.calls[0];
+      expect(prompt.match(/@uploads\/report\.pdf/g)).toHaveLength(1);
+    });
+
+    it("does not mention the path twice when the draft already names it", () => {
+      const { onSend, rerenderWith } = setup({ pendingUploads: [{ id: "1", name: "report.pdf" }] });
+      rerenderWith({ pendingUploads: [], attachments: [uploaded] });
+      type("summarise @uploads/report.pdf please");
+      fireEvent.keyDown(box(), { key: "Enter" });
+
+      const [prompt] = onSend.mock.calls[0];
+      expect(prompt.match(/@uploads\/report\.pdf/g)).toHaveLength(1);
+    });
+  });
+
   describe("slash commands", () => {
     it("suggests commands as the name is typed", () => {
       setup();

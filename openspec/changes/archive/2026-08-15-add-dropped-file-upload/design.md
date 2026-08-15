@@ -46,11 +46,17 @@ Rejected as a larger surface for a smaller gain.
 
 **Upload cap of 25 MiB raw.** Matches `DEFAULT_PDF_MAX_BYTES` / docx / xlsx / pptx: a document the agent's
 tools can read must be one the upload accepts, or the feature has a hole in the middle. Base64 makes
-that ~34 MiB on the wire, so `@fastify/websocket` must be registered with an explicit `maxPayload`
-above that — the default is far below it, and an exceeded default closes the socket rather than
-answering, which is the one failure the composer cannot report. The cap is checked twice: in the
-browser before reading the file (fast, and avoids a pointless 34 MiB send) and on the server before
-decoding (authoritative).
+that ~34 MiB on the wire, so `@fastify/websocket` is registered with an explicit `maxPayload` above
+it — an exceeded limit closes the socket rather than answering, which is the one failure the
+composer cannot report. The cap is checked twice: in the browser before reading the file (fast, and
+avoids a pointless 34 MiB send) and on the server before decoding (authoritative).
+
+*Corrected during implementation.* This paragraph originally said the default was "far below" the
+cap. It is not — `ws` defaults to 100 MB — so the explicit value pins the limit rather than raising
+it. That makes the number's other job the important one: a `prompt` may carry `MAX_IMAGES` ×
+`MAX_IMAGE_BYTES` (60 MB), far more than an upload, so the limit is `max()` of both. Sizing it to
+the upload alone would have torn the socket down on a four-image prompt the server's own validator
+accepts.
 
 **A dedicated `uploads/` directory under the writable root, not the tree's current directory.**
 A dropped file is not a statement about where in the project it belongs; scattering desktop files
@@ -66,13 +72,39 @@ path. The client attaches what came back. A supplied name must already be one sa
 separators, `.`, `..`, control characters, and blank names are refused as invalid. This preserves
 the established file-creation contract rather than silently changing what the user named.
 
-**Images are uploaded *and* attached as bytes under the limit.** The model cannot see a path, and
-the agent cannot supply image bytes itself — that is why `imagePreviewToAttachment` exists. The
-workspace copy stays available to the user and can be attached by path later; the current prompt
-uses its image bytes. Above 7 MB the bytes are dropped and only the path reference remains, which turns
-today's outright rejection into a degraded success. The two attachments must not both mention the
-path, or the prompt would carry the file twice — the image attachment stays the bytes-only kind it
-is today, and the path reference is added separately only when bytes are absent.
+**An image under the limit is attached as bytes and *not* uploaded.** The model cannot see a path,
+and the agent cannot supply image bytes itself — that is why `imagePreviewToAttachment` exists — so
+the bytes are what the prompt has to carry, and the copy would be a file nothing ever references.
+Writing it anyway would dirty the user's working tree on every pasted screenshot (the likeliest
+attachment there is), add a full round trip of latency before Enter is accepted, and accumulate
+`image.png`, `image-1.png`, … that nothing cleans up, since GC is a Non-Goal. Above 7 MB the bytes
+are useless to the model and the path reference is the only route left, so *that* is uploaded —
+turning today's outright rejection into a degraded success.
+
+*Revised during implementation.* The original decision uploaded both, on the reasoning that the
+copy "stays available to the user and can be attached by path later". Nothing referenced it and
+nothing removed it, so the cost was real and the benefit hypothetical.
+
+**Text above the inline limit is uploaded rather than refused.** A 600 KB log or CSV is one of the
+likeliest things to be dropped, the agent reads a path perfectly well, and the alternative is an
+error about a 512 KB limit for a file the feature could serve. Only text takes this route: a binary
+with no extraction tool behind it has nothing useful to offer at a path either.
+
+**The destination is decided by the server, not the client.** The request carries a destination so
+that a client and server which disagree say so, but the server accepts exactly
+`<writableRoot>/uploads` and refuses everything else — including paths that are confined and
+writable. Without that pin, `upload_file` would be the broadest write in the protocol: arbitrary
+binary content, 25 MB, anywhere in the writable zone, creating parent directories on the way, while
+`create_directory` next to it refuses to create a chain from a typo. Confinement is checked first
+so an escaping path still reports `outside-root`, which is the more useful answer.
+
+**The temporary file is created exclusively, under an unpredictable name.** `writeFile` opens with
+`O_TRUNC` and follows a symlink at the final component, and the uploads directory sits in the zone
+the agent's own tools write to — so a guessable temporary name is one the agent can pre-create as a
+link pointing out of the sandbox, redirecting the next upload's bytes. `wx` refuses to follow a
+link, and a crypto-random suffix is not guessable to begin with. The confinement check is also
+repeated *after* `mkdir -p`, because a destination that did not exist was never checked against a
+real inode.
 
 **Classification lives in the browser, enforcement on the server.** `filesToAttachments` decides
 *what a file should become* from its MIME type and extension; the server decides *whether it may be
