@@ -194,7 +194,9 @@ export type FileBrowserErrorReason =
   | "binary"
   | "denied"
   | "conflict"
-  | "launcher-failed";
+  | "launcher-failed"
+  /** The request itself is malformed — a name that is a path, an undecodable body. */
+  | "invalid";
 
 /** Mutating/opening operation acknowledged by file_operation_result. */
 export type FileOperation = "open_native" | "rename_file" | "delete_file" | "move_file" | "copy_file";
@@ -386,6 +388,12 @@ export type ServerMessage =
   | { type: "directory_listing"; requestId: string; path: string; entries: DirEntry[] }
   | { type: "file_content"; requestId: string; path: string; content: string; size: number; mtimeMs: number }
   | { type: "file_written"; requestId: string; path: string; size: number; mtimeMs: number }
+  /**
+   * An upload landed. `path` is what the server actually wrote, which is not
+   * always what was asked for — a taken name is disambiguated server-side, and
+   * the client must reference the answer rather than its own request.
+   */
+  | { type: "file_uploaded"; requestId: string; path: string }
   | {
       type: "file_operation_result";
       requestId: string;
@@ -454,6 +462,17 @@ export type ClientMessage =
   | { type: "create_file"; path: string; requestId: string }
   /** Create one directory (not a chain of missing parents). */
   | { type: "create_directory"; path: string; requestId: string }
+  /**
+   * Store a file the user supplied from outside the workspace (a drop, the
+   * composer's attach button). Base64 because the payload is binary: a UTF-8 body
+   * cannot carry a PDF or an image unchanged.
+   *
+   * Distinct from `write_file` (no mtime precondition, creates rather than
+   * replaces) and from `create_file` (carries content, and may create the
+   * destination directory). `name` is one path segment; `destinationDirectory` is
+   * browser-root-relative. Answered by `file_uploaded` with the written path.
+   */
+  | { type: "upload_file"; destinationDirectory: string; name: string; contentBase64: string; requestId: string }
   /** Ask the host OS to open an existing confined file in its associated application. */
   | { type: "open_native"; path: string; requestId: string }
   /** Rename a regular file within its current directory. `name` is one path segment. */

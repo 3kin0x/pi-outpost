@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { UploadError } from "./uploads";
 import {
+  classifyDroppedFile,
   filesToAttachments,
   composePrompt,
   mentionedPaths,
@@ -14,14 +16,63 @@ import {
 } from "./attachments";
 
 // ---------------------------------------------------------------------------
+// classifyDroppedFile
+// ---------------------------------------------------------------------------
+
+/** A `File` of a stated size — the real bytes are irrelevant to the size branches. */
+function sized(name: string, type: string, size: number, content = "x"): File {
+  const file = new File([content], name, { type });
+  Object.defineProperty(file, "size", { value: size });
+  return file;
+}
+
+/** Stands in for the server: echoes back a path under the uploads directory. */
+function stubUpload(written?: (name: string) => string) {
+  return vi.fn(async (name: string) => (written ? written(name) : `uploads/${name}`));
+}
+
+describe("classifyDroppedFile", () => {
+  it("routes formats with a path-based extraction tool to an upload", () => {
+    expect(classifyDroppedFile(sized("report.pdf", "application/pdf", 900_000))).toBe("extraction-tool");
+    // The extension decides even when the browser supplies no type at all
+    expect(classifyDroppedFile(sized("report.pdf", "", 900_000))).toBe("extraction-tool");
+    expect(classifyDroppedFile(sized("notes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 40_000))).toBe(
+      "extraction-tool",
+    );
+    expect(classifyDroppedFile(sized("budget.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 40_000))).toBe(
+      "extraction-tool",
+    );
+    expect(classifyDroppedFile(sized("deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", 40_000))).toBe(
+      "extraction-tool",
+    );
+  });
+
+  it("routes images to the image branch whatever their size", () => {
+    expect(classifyDroppedFile(sized("shot.png", "image/png", 1024))).toBe("image");
+    expect(classifyDroppedFile(sized("huge.jpg", "image/jpeg", 20 * 1024 * 1024))).toBe("image");
+  });
+
+  it("inlines small text and refuses a binary with no tool behind it", () => {
+    expect(classifyDroppedFile(sized("readme.txt", "text/plain", 400))).toBe("inline-text");
+    expect(classifyDroppedFile(sized("archive.zip", "application/zip", 900_000))).toBe("unsupported");
+    expect(classifyDroppedFile(sized("enormous.zip", "application/zip", 30 * 1024 * 1024))).toBe("unsupported");
+  });
+
+  it("uploads text too big to inline, and refuses it only past the upload cap", () => {
+    expect(classifyDroppedFile(sized("huge.txt", "text/plain", 600 * 1024))).toBe("extraction-tool");
+    expect(classifyDroppedFile(sized("server.log", "text/plain", 5 * 1024 * 1024))).toBe("extraction-tool");
+    expect(classifyDroppedFile(sized("giant.log", "text/plain", 30 * 1024 * 1024))).toBe("unsupported");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // filesToAttachments
 // ---------------------------------------------------------------------------
 describe("filesToAttachments", () => {
   it("converts image files to image attachments", async () => {
-    const file = new File(["fake-png"], "screenshot.png", { type: "image/png" });
-    Object.defineProperty(file, "size", { value: 1024 });
+    const file = sized("screenshot.png", "image/png", 1024, "fake-png");
 
-    const { attachments, errors } = await filesToAttachments([file]);
+    const { attachments, errors } = await filesToAttachments([file], stubUpload());
 
     expect(errors).toEqual([]);
     expect(attachments).toHaveLength(1);
@@ -37,8 +88,9 @@ describe("filesToAttachments", () => {
 
   it("converts text files to text attachments", async () => {
     const file = new File(["hello world"], "readme.txt", { type: "text/plain" });
+    const upload = stubUpload();
 
-    const { attachments, errors } = await filesToAttachments([file]);
+    const { attachments, errors } = await filesToAttachments([file], upload);
 
     expect(errors).toEqual([]);
     expect(attachments).toHaveLength(1);
@@ -49,52 +101,238 @@ describe("filesToAttachments", () => {
       mimeType: "text/plain",
       source: "manual",
     });
+    // Inline text keeps travelling in the prompt — nothing is copied into the workspace
+    expect(upload).not.toHaveBeenCalled();
   });
 
-  it("rejects oversized images", async () => {
-    const file = new File([], "huge.png", { type: "image/png" });
-    Object.defineProperty(file, "size", { value: 8 * 1024 * 1024 }); // > 7 MB
+  it("uploads a PDF and attaches the written path instead of its bytes", async () => {
+    const file = sized("Salon ALL AMERICAN.pdf", "application/pdf", 900_000, "%PDF-1.7");
+    const upload = stubUpload(() => "uploads/Salon ALL AMERICAN.pdf");
 
-    const { attachments, errors } = await filesToAttachments([file]);
+    const { attachments, errors } = await filesToAttachments([file], upload);
 
-    expect(attachments).toHaveLength(0);
-    expect(errors[0]).toContain("image too large");
+    expect(errors).toEqual([]);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(attachments).toEqual([
+      { name: "uploads/Salon ALL AMERICAN.pdf", kind: "path", data: "uploads/Salon ALL AMERICAN.pdf", mimeType: "text/plain", source: "manual" },
+    ]);
   });
 
-  it("rejects oversized text files", async () => {
-    const file = new File([], "huge.txt", { type: "text/plain" });
-    Object.defineProperty(file, "size", { value: 600 * 1024 }); // > 512 KB
+  it("references the path the server wrote, not the name it was asked for", async () => {
+    const file = sized("report.pdf", "application/pdf", 2048, "%PDF-1.7");
+    const upload = stubUpload(() => "uploads/report-1.pdf");
 
-    const { attachments, errors } = await filesToAttachments([file]);
+    const { attachments } = await filesToAttachments([file], upload);
+
+    expect(attachments[0].data).toBe("uploads/report-1.pdf");
+  });
+
+  it("attaches an image within the limit as bytes, with no copy in the workspace", async () => {
+    const file = sized("shot.png", "image/png", 1024, "fake-png");
+    const upload = stubUpload();
+
+    const { attachments } = await filesToAttachments([file], upload);
+
+    // The prompt already carries the file; a copy nothing references would just
+    // dirty the working tree on every pasted screenshot.
+    expect(upload).not.toHaveBeenCalled();
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0].kind).toBe("image");
+    expect(attachments.some((attachment) => attachment.kind === "path")).toBe(false);
+  });
+
+  it("references an oversized image by path rather than refusing it", async () => {
+    const file = sized("huge.png", "image/png", 8 * 1024 * 1024); // > 7 MB, under the upload cap
+    const upload = stubUpload(() => "uploads/huge.png");
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
+
+    expect(errors).toEqual([]);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({ kind: "path", data: "uploads/huge.png" });
+  });
+
+  it("rejects a file past the upload cap without reading or sending it", async () => {
+    const file = sized("enormous.pdf", "application/pdf", 26 * 1024 * 1024);
+    const upload = stubUpload();
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
 
     expect(attachments).toHaveLength(0);
-    expect(errors[0]).toContain("file too large");
+    expect(errors[0]).toContain("too large to upload");
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("reports a read-only workspace as such, leaving no attachment behind", async () => {
+    const file = sized("report.pdf", "application/pdf", 2048, "%PDF-1.7");
+    const upload = vi.fn(async () => {
+      throw new UploadError("the workspace is read-only", "denied");
+    });
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
+
+    expect(attachments).toEqual([]);
+    expect(errors[0]).toContain("read-only");
+    expect(errors[0]).not.toContain("512 KB");
+  });
+
+  it("attaches an image's bytes even in a workspace that cannot be written", async () => {
+    // Pasting a screenshot worked before uploads existed, and a read-only sandbox
+    // must not take that away — the attachment never needed a copy.
+    const file = sized("shot.png", "image/png", 1024, "fake-png");
+    const upload = vi.fn(async () => {
+      throw new UploadError("the workspace is read-only", "denied");
+    });
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
+
+    expect(errors).toEqual([]);
+    expect(upload).not.toHaveBeenCalled();
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({ name: "shot.png", kind: "image", mimeType: "image/png" });
+    expect(attachments[0].data).toBeTruthy();
+  });
+
+  it("fails an oversized image whose only route was the path", async () => {
+    const file = sized("huge.png", "image/png", 8 * 1024 * 1024);
+    const upload = vi.fn(async () => {
+      throw new UploadError("the workspace is read-only", "denied");
+    });
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
+
+    expect(attachments).toEqual([]);
+    expect(errors[0]).toContain("read-only");
+  });
+
+  it("keeps the batch alive when a file cannot be read at all", async () => {
+    const unreadable = new File(["x"], "vanished.txt", { type: "text/plain" });
+    Object.defineProperty(unreadable, "text", {
+      value: () => Promise.reject(new DOMException("NotReadableError")),
+    });
+    const ok = new File(["still here"], "ok.txt", { type: "text/plain" });
+
+    const { attachments, errors } = await filesToAttachments([unreadable, ok], stubUpload());
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0].name).toBe("ok.txt");
+    expect(errors[0]).toContain("vanished.txt");
+  });
+
+  it("reports a server-side upload failure without inventing a path", async () => {
+    const file = sized("report.pdf", "application/pdf", 2048, "%PDF-1.7");
+    const upload = vi.fn(async () => {
+      // No reason: an unexpected server error carries none
+      throw new UploadError("disk is full");
+    });
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
+
+    expect(attachments).toEqual([]);
+    expect(errors[0]).toContain("upload failed");
+    expect(errors[0]).toContain("disk is full");
+  });
+
+  it("passes a malformed-request refusal through in the server's own words", async () => {
+    const file = sized("CON.pdf", "application/pdf", 2048, "%PDF-1.7");
+    const upload = vi.fn(async () => {
+      throw new UploadError('"CON.pdf" is a reserved device name', "invalid");
+    });
+
+    const { errors } = await filesToAttachments([file], upload);
+
+    expect(errors[0]).toBe('CON.pdf: "CON.pdf" is a reserved device name');
+    expect(errors[0]).not.toContain("upload failed");
+  });
+
+  it("reports the server's own size refusal", async () => {
+    const file = sized("report.pdf", "application/pdf", 2048, "%PDF-1.7");
+    const upload = vi.fn(async () => {
+      throw new UploadError("Uploads are limited to 25 MB", "too-large");
+    });
+
+    const { errors } = await filesToAttachments([file], upload);
+
+    expect(errors[0]).toContain("too large to upload");
+  });
+
+  it("references text too large to inline instead of refusing it", async () => {
+    const file = sized("server.log", "text/plain", 600 * 1024); // > 512 KB, well under the upload cap
+    const upload = stubUpload(() => "uploads/server.log");
+
+    const { attachments, errors } = await filesToAttachments([file], upload);
+
+    expect(errors).toEqual([]);
+    expect(attachments).toEqual([
+      { name: "uploads/server.log", kind: "path", data: "uploads/server.log", mimeType: "text/plain", source: "manual" },
+    ]);
+  });
+
+  it("refuses text past the upload cap against that cap, not the inline limit", async () => {
+    const file = sized("giant.log", "text/plain", 30 * 1024 * 1024);
+
+    const { attachments, errors } = await filesToAttachments([file], stubUpload());
+
+    expect(attachments).toHaveLength(0);
+    expect(errors[0]).toContain("too large to upload");
+    expect(errors[0]).not.toContain("512 KB");
+  });
+
+  it("names an unsupported binary's own type instead of the text limit", async () => {
+    const file = sized("archive.zip", "application/zip", 900 * 1024);
+
+    const { attachments, errors } = await filesToAttachments([file], stubUpload());
+
+    expect(attachments).toHaveLength(0);
+    expect(errors[0]).toContain("unsupported file type");
+    expect(errors[0]).toContain("application/zip");
+    expect(errors[0]).not.toContain("512 KB");
   });
 
   it("rejects binary text files (null byte)", async () => {
     const file = new File(["\0"], "binary.bin", { type: "application/octet-stream" });
 
-    const { attachments, errors } = await filesToAttachments([file]);
+    const { attachments, errors } = await filesToAttachments([file], stubUpload());
 
     expect(attachments).toHaveLength(0);
     expect(errors[0]).toContain("unsupported binary file");
   });
 
-  it("handles mixed files with partial errors", async () => {
+  it("settles every file in a mixed drop: one refusal keeps the rest", async () => {
     const ok = new File(["small"], "ok.txt", { type: "text/plain" });
-    const oversized = new File([], "big.bin", { type: "application/octet-stream" });
-    Object.defineProperty(oversized, "size", { value: 600 * 1024 });
+    const pdf = sized("report.pdf", "application/pdf", 2048, "%PDF-1.7");
+    const refused = sized("archive.zip", "application/zip", 900 * 1024);
+    const upload = stubUpload();
 
-    const { attachments, errors } = await filesToAttachments([ok, oversized]);
+    const { attachments, errors } = await filesToAttachments([ok, pdf, refused], upload);
 
-    expect(attachments).toHaveLength(1);
+    expect(attachments.map((attachment) => attachment.kind)).toEqual(["text", "path"]);
     expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("archive.zip");
+  });
+
+  it("runs the uploads of a multi-file drop concurrently", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const upload = vi.fn(async (name: string) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return `uploads/${name}`;
+    });
+    const files = ["a.pdf", "b.pdf", "c.pdf"].map((name) => sized(name, "application/pdf", 2048, "%PDF-1.7"));
+
+    const { attachments } = await filesToAttachments(files, upload);
+
+    expect(attachments).toHaveLength(3);
+    expect(peak).toBeGreaterThan(1);
   });
 
   it("assigns text/plain default MIME for typeless text files", async () => {
     const file = new File(["data"], "foo", {});
 
-    const { attachments } = await filesToAttachments([file]);
+    const { attachments } = await filesToAttachments([file], stubUpload());
 
     expect(attachments[0].mimeType).toBe("text/plain");
   });

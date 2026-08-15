@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ChatItem, TurnUsage } from "@pi-outpost/shared";
 import App from "./App";
+import { UploadError } from "./uploads";
 
 // Mock useAgent to return a controlled state without WebSocket dependency
 const mockUseAgent = vi.fn();
@@ -85,6 +86,7 @@ function agentApi(state: ReturnType<typeof agentState>) {
     listDirectory: vi.fn(),
     readFile: vi.fn(),
     writeFile: vi.fn(),
+    uploadFile: vi.fn(async (name: string) => `uploads/${name}`),
     closeFilePreview: vi.fn(),
     searchFiles: vi.fn(),
     clearFileSearch: vi.fn(),
@@ -492,6 +494,118 @@ describe("App — dropping files", () => {
     const huge = new File([new Uint8Array(600 * 1024)], "big.txt", { type: "text/plain" });
     fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [huge]) });
     await waitFor(() => expect(screen.getByText(/big\.txt/)).toBeInTheDocument());
+  });
+
+  /** The composer's hidden file input — what the attach button clicks. */
+  const attachInput = () => document.querySelector('input[type="file"]') as HTMLInputElement;
+
+  it("copies a dropped PDF into the workspace and references the path it wrote", async () => {
+    const { api } = mount();
+    const dropped = new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" });
+
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [dropped]) });
+
+    await waitFor(() => expect(screen.getByText("uploads/report.pdf")).toBeInTheDocument());
+    expect(api.uploadFile).toHaveBeenCalledWith("report.pdf", expect.any(String));
+  });
+
+  it("produces the same attachment from the attach button as from a drop", async () => {
+    const { api, unmount } = mount();
+    const file = new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" });
+
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [file]) });
+    await waitFor(() => expect(screen.getByText("uploads/report.pdf")).toBeInTheDocument());
+    const droppedTitle = screen.getByText("uploads/report.pdf").closest("span")?.getAttribute("title");
+    const droppedUploadArgs = api.uploadFile.mock.calls[0];
+    unmount();
+
+    const second = mount();
+    fireEvent.change(attachInput(), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByText("uploads/report.pdf")).toBeInTheDocument());
+
+    expect(screen.getByText("uploads/report.pdf").closest("span")?.getAttribute("title")).toBe(droppedTitle);
+    expect(second.api.uploadFile.mock.calls[0]).toEqual(droppedUploadArgs);
+  });
+
+  it("shows a pending chip and blocks sending until the upload settles", async () => {
+    // The deferred is built before the mock is installed: the upload only starts
+    // once the file has been read, so capturing `resolve` from inside the mock
+    // would race the assertion below.
+    let release: (path: string) => void = () => {};
+    const held = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const { api } = mount();
+    api.uploadFile.mockReturnValue(held);
+    const dropped = new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" });
+
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [dropped]) });
+
+    await waitFor(() => expect(document.querySelector('[data-pending-upload="report.pdf"]')).toBeInTheDocument());
+    expect(screen.getByLabelText("Send message")).toBeDisabled();
+
+    await act(async () => {
+      release("uploads/report.pdf");
+    });
+    await waitFor(() => expect(document.querySelector('[data-pending-upload="report.pdf"]')).not.toBeInTheDocument());
+    expect(screen.getByText("uploads/report.pdf")).toBeInTheDocument();
+    expect(screen.getByLabelText("Send message")).toBeEnabled();
+  });
+
+  it("keeps both refusals when two drops overlap", async () => {
+    // attachFiles spans a round trip now, so two drops can be in flight at once.
+    // A plain replace would let the second one's result erase the first's error
+    // before anyone read it.
+    let release: (path: string) => void = () => {};
+    const held = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const { api } = mount();
+    api.uploadFile.mockReturnValueOnce(held);
+
+    // This drop stays in flight, holding the wave open across the two below
+    const slow = new File(["%PDF-1.7"], "slow.pdf", { type: "application/pdf" });
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [slow]) });
+    await waitFor(() => expect(document.querySelector('[data-pending-upload="slow.pdf"]')).toBeInTheDocument());
+
+    const refusedFirst = new File([new Uint8Array(900 * 1024)], "first.zip", { type: "application/zip" });
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [refusedFirst]) });
+    await waitFor(() => expect(screen.getByText(/first\.zip/)).toBeInTheDocument());
+
+    const refusedSecond = new File([new Uint8Array(900 * 1024)], "second.zip", { type: "application/zip" });
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [refusedSecond]) });
+    await waitFor(() => expect(screen.getByText(/second\.zip/)).toBeInTheDocument());
+
+    expect(screen.getByText(/first\.zip/)).toBeInTheDocument();
+    await act(async () => {
+      release("uploads/slow.pdf");
+    });
+  });
+
+  it("attaches a pasted image without copying it into the workspace", async () => {
+    const { api } = mount();
+    const pasted = new File(["fake-png"], "shot.png", { type: "image/png" });
+
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [pasted]) });
+
+    await waitFor(() => expect(screen.getByAltText("shot.png")).toBeInTheDocument());
+    expect(api.uploadFile).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-pending-upload]')).not.toBeInTheDocument();
+  });
+
+  it("leaves no attachment and clears the pending chip when an upload fails", async () => {
+    const { api } = mount();
+    api.uploadFile.mockRejectedValue(new UploadError("the workspace is read-only", "denied"));
+    const dropped = new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" });
+
+    fireEvent.drop(dropZone(), { dataTransfer: dataTransfer(["Files"], [dropped]) });
+
+    await waitFor(() => expect(screen.getByText(/read-only/)).toBeInTheDocument());
+    expect(document.querySelector('[data-pending-upload="report.pdf"]')).not.toBeInTheDocument();
+    expect(screen.queryByText("uploads/report.pdf")).not.toBeInTheDocument();
+    // Still disabled only because the draft is empty — not because a failed upload
+    // is being waited on forever
+    expect(screen.getByLabelText("Send message")).toHaveAttribute("title", "send");
   });
 });
 

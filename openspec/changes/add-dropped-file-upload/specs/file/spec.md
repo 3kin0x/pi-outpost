@@ -19,6 +19,16 @@ The final segment SHALL be a name, not a route: a segment containing a path sepa
 `.` or `..`, SHALL be refused, as SHALL an empty or whitespace-only name. The system SHALL not
 rewrite a supplied name before storing it.
 
+A name SHALL also be refused when another platform would resolve it to something other than what it
+says — a trailing dot or space, a `:`, or a reserved device name — and when it is too long to be a
+single path component. These are refused on every platform, not only the one that would misread
+them: a workspace is shared, and the no-overwrite guarantee depends on the name the filesystem
+resolves being the name that was checked.
+
+The temporary file the write goes through SHALL NOT be openable by name by anything else: it SHALL
+be created exclusively, under an unpredictable name, so that a pre-existing entry at that path —
+including a symlink pointing out of the sandbox — fails the write instead of redirecting it.
+
 An existing path SHALL NOT be overwritten. The system SHALL pick a distinct name and SHALL report
 the path it wrote. Missing directories in the destination SHALL be created.
 
@@ -45,6 +55,10 @@ the tree changed, so every open tree shows the upload.
 #### Scenario: UploadedNameIsNotAPath
 - **WHEN** the supplied name contains a path separator, or is `.`, `..`, empty, or whitespace only
 - **THEN** it is refused as invalid, and nothing is written outside the destination directory
+
+#### Scenario: UploadedNameIsPortable
+- **WHEN** the supplied name ends in a dot or a space, contains `:`, is a reserved device name, or is longer than one path component may be
+- **THEN** it is refused as invalid and nothing is written
 
 #### Scenario: UploadDoesNotOverwrite
 - **GIVEN** a file already at the requested path

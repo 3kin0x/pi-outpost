@@ -11,6 +11,12 @@ interface ComposerProps {
   /** Extension set_editor_text() request (see extensions.md#custom-ui) — bump nonce to reapply the same text. */
   prefill: { text: string; nonce: number } | null;
   attachments: Attachment[];
+  /**
+   * Files still being copied into the workspace. Their references do not exist
+   * yet, so submission waits: a prompt sent now would silently talk about a file
+   * the agent cannot see.
+   */
+  pendingUploads?: { id: string; name: string }[];
   onAttach: (files: Iterable<File>) => void;
   /** Paths the draft names with `@`; the file tree marks them as referenced. */
   onMentionPaths: (paths: string[]) => void;
@@ -46,6 +52,7 @@ export function Composer({
   fileSearch,
   prefill,
   attachments,
+  pendingUploads = [],
   onAttach,
   onMentionPaths,
   onRemoveAttachment,
@@ -128,7 +135,22 @@ export function Composer({
       ?.scrollIntoView({ block: "nearest" });
   }, [selected]);
 
+  const uploading = pendingUploads.length > 0;
+  // Enter is the one way in that has no disabled state to explain itself. Without
+  // this the key press is simply swallowed and the composer looks broken.
+  const [heldBack, setHeldBack] = useState(false);
+  useEffect(() => {
+    if (!uploading) setHeldBack(false);
+  }, [uploading]);
+
   function submit() {
+    // Not a race to lose quietly: the attachment for an in-flight upload simply
+    // is not in `attachments` yet, so sending now would drop the reference and
+    // say nothing about it.
+    if (uploading) {
+      setHeldBack(true);
+      return;
+    }
     const full = composePrompt(text, attachments);
     const images = attachments
       .filter((a) => a.kind === "image")
@@ -217,8 +239,27 @@ export function Composer({
 
   return (
     <div className="relative">
-      {attachments.length > 0 && (
+      {(attachments.length > 0 || uploading) && (
         <div className="mb-2 flex flex-wrap gap-2">
+          {pendingUploads.map((pending) => (
+            <span
+              key={pending.id}
+              data-pending-upload={pending.name}
+              title={`${pending.name} — copying into the workspace`}
+              className="flex items-center gap-1.5 rounded-md border border-dashed border-zinc-300 bg-zinc-50 py-1 pl-1.5 pr-2 text-xs text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800/40 dark:text-zinc-400"
+            >
+              <span aria-hidden className="animate-pulse">
+                ⏳
+              </span>
+              <span className="max-w-40 truncate">{pending.name}</span>
+              <span className="sr-only">uploading</span>
+            </span>
+          ))}
+          {heldBack && (
+            <span role="status" className="flex items-center py-1 text-xs text-amber-600 dark:text-amber-400">
+              waiting for the attachment to finish uploading…
+            </span>
+          )}
           {attachments.map((attachment, i) => (
             <span
               key={`${attachment.name}:${i}`}
@@ -363,8 +404,8 @@ export function Composer({
         <button
           type="button"
           onClick={submit}
-          disabled={!connected || (!text.trim() && attachments.length === 0)}
-          title={isStreaming ? "steer" : "send"}
+          disabled={!connected || uploading || (!text.trim() && attachments.length === 0)}
+          title={uploading ? "waiting for an attachment to finish uploading" : isStreaming ? "steer" : "send"}
           aria-label={isStreaming ? "Steer the agent" : "Send message"}
           className="rounded-lg bg-zinc-900 p-2 text-zinc-100 hover:bg-zinc-800 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
         >

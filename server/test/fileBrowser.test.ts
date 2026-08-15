@@ -9,7 +9,7 @@
  * are the difference between a refused request and a corrupted file.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -22,6 +22,9 @@ import {
   readFileRaw,
   createFileFromBrowser,
   createDirectoryFromBrowser,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_BASE64_LENGTH,
+  uploadFileFromBrowser,
   copyFileFromBrowser,
   deleteFileFromBrowser,
   moveFileFromBrowser,
@@ -601,5 +604,235 @@ describe("file browser", () => {
       const rel = await resolveWritableRoot({ cwd: root, sandbox: { root, allowWrite: true, writableRoot } } as never, root);
       assert.equal(rel, "src/nested");
     });
+  });
+});
+
+/**
+ * Uploads get their own fixture root. Every other test in this file shares one
+ * tree and reads it; these write into it, and a colliding name and a
+ * created-on-demand directory are the behaviour under test rather than
+ * background noise another test should have to work around.
+ *
+ * The destination is pinned to `<writableRoot>/uploads`, so a test that needs an
+ * empty uploads directory asks for a writable zone of its own rather than a
+ * directory of its own.
+ */
+describe("file browser uploads", () => {
+  let root: string;
+  let outside: string;
+  let symlinksAvailable = false;
+
+  /** A PDF header followed by NUL and high bytes — the exact shape a text write refuses. */
+  const BINARY = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0x00, 0xff, 0xfe, 0x0a]);
+  const b64 = (content: string | Buffer) => Buffer.from(content as never).toString("base64");
+
+  /** A writable zone of its own, and the only destination uploads into it may name. */
+  function zone(name: string): { writableRel: string; destination: string } {
+    mkdirSync(path.join(root, name), { recursive: true });
+    return { writableRel: name, destination: `${name}/uploads` };
+  }
+
+  /** Upload into `name`'s zone, the way the server always calls it. */
+  function upload(z: { writableRel: string; destination: string }, fileName: string, content: string | Buffer) {
+    return uploadFileFromBrowser(root, z.writableRel, z.destination, fileName, b64(content));
+  }
+
+  before(async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "pi-upload-"));
+    mkdirSync(path.join(base, "root"), { recursive: true });
+    mkdirSync(path.join(base, "outside"), { recursive: true });
+    root = await realResolve(path.join(base, "root"));
+    outside = await realResolve(path.join(base, "outside"));
+    mkdirSync(path.join(root, "readonly"), { recursive: true });
+    try {
+      symlinkSync(outside, path.join(root, "escape-dir"), "dir");
+      symlinksAvailable = true;
+    } catch {
+      symlinksAvailable = false;
+    }
+  });
+
+  after(() => {
+    rmSync(path.dirname(root), { recursive: true, force: true });
+  });
+
+  test("stores a binary payload byte-identically and reports the written path", async () => {
+    const z = zone("binary-zone");
+
+    const written = await upload(z, "report.pdf", BINARY);
+
+    assert.equal(written, "binary-zone/uploads/report.pdf");
+    assert.deepEqual(readFileSync(path.join(root, written)), BINARY);
+  });
+
+  test("creates the uploads directory when it does not exist", async () => {
+    const z = zone("fresh-zone");
+    assert.equal(existsSync(path.join(root, "fresh-zone", "uploads")), false);
+
+    const written = await upload(z, "note.txt", "hi");
+
+    assert.equal(written, "fresh-zone/uploads/note.txt");
+    assert.equal(statSync(path.join(root, "fresh-zone", "uploads")).isDirectory(), true);
+  });
+
+  test("does not overwrite a taken name: it suffixes and reports what it wrote", async () => {
+    const z = zone("collide-zone");
+
+    const first = await upload(z, "report.pdf", "first");
+    const second = await upload(z, "report.pdf", "second");
+    const third = await upload(z, "report.pdf", "third");
+
+    assert.equal(first, "collide-zone/uploads/report.pdf");
+    assert.equal(second, "collide-zone/uploads/report-1.pdf");
+    assert.equal(third, "collide-zone/uploads/report-2.pdf");
+    // The extension survives the suffix, and the file already there is untouched
+    assert.equal(readFileSync(path.join(root, first), "utf8"), "first");
+    assert.equal(readFileSync(path.join(root, second), "utf8"), "second");
+  });
+
+  test("leaves no temporary file behind", async () => {
+    const z = zone("tidy-zone");
+
+    await upload(z, "kept.bin", BINARY);
+
+    const entries = await listDirectory(root, z.destination);
+    assert.deepEqual(
+      entries.map((entry) => entry.name),
+      ["kept.bin"],
+    );
+  });
+
+  test("refuses a read-only sandbox", async () => {
+    const z = zone("readonly-zone");
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, null, z.destination, "denied.pdf", b64(BINARY))),
+      "denied",
+    );
+    assert.equal(existsSync(path.join(root, z.destination)), false);
+  });
+
+  test("refuses a destination outside the writable zone", async () => {
+    const z = zone("scoped-zone");
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, "readonly", "denied.pdf", b64(BINARY))),
+      "denied",
+    );
+    assert.equal(existsSync(path.join(root, "readonly", "denied.pdf")), false);
+  });
+
+  test("refuses any destination but the uploads directory, even inside the writable zone", async () => {
+    const z = zone("pinned-zone");
+
+    // Every one of these is confined and writable — and still refused, because
+    // upload_file is not a general-purpose write-anywhere primitive.
+    for (const destination of ["pinned-zone", "pinned-zone/elsewhere", "pinned-zone/uploads/nested", "pinned-zone/Uploads"]) {
+      assert.equal(
+        await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, destination, "report.pdf", b64(BINARY))),
+        "denied",
+        `expected "${destination}" to be refused`,
+      );
+    }
+    assert.equal(existsSync(path.join(root, "pinned-zone", "elsewhere")), false);
+    assert.equal(existsSync(path.join(root, "pinned-zone", "report.pdf")), false);
+  });
+
+  test("refuses a destination that climbs out of the root", async () => {
+    const z = zone("escape-zone");
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, "../outside", "escaped.pdf", b64(BINARY))),
+      "outside-root",
+    );
+    assert.equal(existsSync(path.join(outside, "escaped.pdf")), false);
+  });
+
+  test("refuses a destination reached through a symlink out of the root", async (t) => {
+    if (!symlinksAvailable) return t.skip("symlinks unavailable on this platform");
+    const z = zone("symlink-zone");
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, "escape-dir", "escaped.pdf", b64(BINARY))),
+      "outside-root",
+    );
+    assert.equal(existsSync(path.join(outside, "escaped.pdf")), false);
+  });
+
+  test("refuses a name that is a route rather than a name", async () => {
+    const z = zone("name-zone");
+    const names = ["", "   ", ".", "..", "sub/report.pdf", "sub\\report.pdf", "report.pdf"];
+
+    for (const name of names) {
+      assert.equal(await reasonOf(() => upload(z, name, BINARY)), "invalid", `expected ${JSON.stringify(name)} to be refused`);
+    }
+    assert.equal(existsSync(path.join(root, "name-zone", "uploads", "sub")), false);
+  });
+
+  test("refuses names another platform would resolve to something else", async () => {
+    const z = zone("portable-zone");
+    const names = [
+      // Win32 strips these, so they would collide with "report.pdf" while the
+      // EEXIST check thought it was looking at a free name
+      "report.pdf.",
+      "report.pdf ",
+      // NTFS alternate data stream
+      "report.pdf:hidden",
+      // DOS devices, with and without an extension
+      "CON",
+      "con.txt",
+      "LPT1.pdf",
+      "nul",
+      "x".repeat(256),
+    ];
+
+    for (const name of names) {
+      assert.equal(await reasonOf(() => upload(z, name, BINARY)), "invalid", `expected ${JSON.stringify(name)} to be refused`);
+    }
+  });
+
+  test("refuses a body that is not decodable base64", async () => {
+    const z = zone("base64-zone");
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, z.destination, "bad.pdf", "not base64!!")),
+      "invalid",
+    );
+    // Right alphabet, wrong length — Buffer.from would have silently truncated this
+    assert.equal(await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, z.destination, "bad.pdf", "QUJDR")), "invalid");
+    assert.equal(existsSync(path.join(root, "base64-zone", "uploads", "bad.pdf")), false);
+  });
+
+  test("refuses a wire payload longer than the base64 cap, before decoding it", async () => {
+    const z = zone("wire-cap-zone");
+    const overLong = "A".repeat(MAX_UPLOAD_BASE64_LENGTH + 4);
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, z.destination, "huge.pdf", overLong)),
+      "too-large",
+    );
+    assert.equal(existsSync(path.join(root, "wire-cap-zone", "uploads", "huge.pdf")), false);
+  });
+
+  test("refuses a payload whose decoded size exceeds the cap", async () => {
+    const z = zone("decoded-cap-zone");
+    // Exactly the wire cap, unpadded: it decodes to two bytes past MAX_UPLOAD_BYTES,
+    // so only the post-decode check can catch it.
+    const atWireCap = "A".repeat(MAX_UPLOAD_BASE64_LENGTH);
+    assert.ok(Buffer.from(atWireCap, "base64").byteLength > MAX_UPLOAD_BYTES);
+
+    assert.equal(
+      await reasonOf(() => uploadFileFromBrowser(root, z.writableRel, z.destination, "huge.pdf", atWireCap)),
+      "too-large",
+    );
+    assert.equal(existsSync(path.join(root, "decoded-cap-zone", "uploads", "huge.pdf")), false);
+  });
+
+  test("accepts a payload at the declared maximum", async () => {
+    const z = zone("max-zone");
+
+    const written = await upload(z, "maximum.bin", Buffer.alloc(MAX_UPLOAD_BYTES, 0x00));
+
+    assert.equal(statSync(path.join(root, written)).size, MAX_UPLOAD_BYTES);
   });
 });

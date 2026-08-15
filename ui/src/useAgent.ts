@@ -23,6 +23,7 @@ import type {
   TreeNode,
   WireImage,
 } from "@pi-outpost/shared";
+import { UPLOADS_DIRECTORY, UploadError } from "./uploads";
 
 type AssistantItem = Extract<ChatItem, { kind: "assistant" }>;
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
@@ -740,6 +741,13 @@ function wsUrlFor(serverUrl: string, token: string | null): string {
   return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
+/**
+ * How long an upload may go unanswered before the composer gives up on it.
+ * Generous: a 25 MB file over a slow link is a real case, and a false timeout
+ * costs the user the attachment.
+ */
+const UPLOAD_TIMEOUT_MS = 120_000;
+
 /** WS close code the server sends for a bad/missing token (see WS_CLOSE_UNAUTHORIZED server-side). */
 const WS_CLOSE_UNAUTHORIZED = 4401;
 
@@ -776,6 +784,15 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
   useEffect(() => {
     gitDiffPathRef.current = state.gitDiff?.path ?? null;
   }, [state.gitDiff]);
+  // An upload is the one file-browser request whose caller needs an answer rather
+  // than a state update: the composer cannot attach a path it has not been told.
+  // Waiters live outside the reducer for that reason, keyed by the same requestId
+  // correlation every other file-browser request uses.
+  const uploadWaitersRef = useRef(new Map<string, { resolve: (path: string) => void; reject: (error: UploadError) => void }>());
+  const writableRootRef = useRef(state.writableRoot);
+  useEffect(() => {
+    writableRootRef.current = state.writableRoot;
+  }, [state.writableRoot]);
 
   const sendMessage = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
@@ -846,6 +863,20 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         } catch {
           return; // ignore malformed frames
         }
+        if (message.type === "file_uploaded") {
+          const waiter = uploadWaitersRef.current.get(message.requestId);
+          if (waiter) {
+            uploadWaitersRef.current.delete(message.requestId);
+            waiter.resolve(message.path);
+          }
+          return;
+        }
+        if (message.type === "file_browser_error" && uploadWaitersRef.current.has(message.requestId)) {
+          const waiter = uploadWaitersRef.current.get(message.requestId)!;
+          uploadWaitersRef.current.delete(message.requestId);
+          waiter.reject(new UploadError(message.message, message.reason));
+          return;
+        }
         if (message.type === "file_changed") {
           const lastSlash = message.path.lastIndexOf("/");
           const parentPath = lastSlash < 0 ? "" : message.path.slice(0, lastSlash);
@@ -906,6 +937,13 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         // coalescing flags or the branch chip/badges freeze until a page reload
         gitStatusInFlight.current = false;
         gitStatusQueued.current = false;
+        // Same reasoning, but a stuck upload is worse than a stale badge: the
+        // composer blocks submission while one is in flight, so an unanswered
+        // promise would wedge the whole editor rather than one indicator.
+        for (const waiter of uploadWaitersRef.current.values()) {
+          waiter.reject(new UploadError("The connection dropped before the upload finished"));
+        }
+        uploadWaitersRef.current.clear();
         if (event.code === WS_CLOSE_UNAUTHORIZED) {
           // Bad token: retrying is pointless — show the token screen instead
           dispatch({ type: "auth_required" });
@@ -994,6 +1032,41 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     createFile: (path: string) => {
       dispatch({ type: "file_create_started" });
       sendMessage({ type: "create_file", path, requestId: `create:${crypto.randomUUID()}` });
+    },
+    /**
+     * Copy a file supplied from outside the workspace into the uploads directory,
+     * resolving with the path the server wrote. A read-only sandbox is refused
+     * here rather than over the wire: the client already knows there is no
+     * writable zone, and a round trip would only delay the same answer.
+     */
+    uploadFile: (name: string, contentBase64: string): Promise<string> => {
+      const writableRoot = writableRootRef.current;
+      if (writableRoot === null) {
+        return Promise.reject(new UploadError("the workspace is read-only", "denied"));
+      }
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return Promise.reject(new UploadError("not connected to the server"));
+      }
+      const destinationDirectory = writableRoot ? `${writableRoot}/${UPLOADS_DIRECTORY}` : UPLOADS_DIRECTORY;
+      const requestId = `upload:${crypto.randomUUID()}`;
+      return new Promise<string>((resolve, reject) => {
+        // A dropped socket already rejects every waiter. This covers the other
+        // shape: the socket stays up and the answer never comes. Without it the
+        // promise never settles, the pending chip never clears, and submission
+        // stays disabled — the composer is wedged until the page is reloaded,
+        // which is a worse failure than the one the guard exists to prevent.
+        const timer = window.setTimeout(() => {
+          if (!uploadWaitersRef.current.delete(requestId)) return;
+          reject(new UploadError("the upload timed out"));
+        }, UPLOAD_TIMEOUT_MS);
+        const settle = <T,>(run: (value: T) => void) => (value: T) => {
+          clearTimeout(timer);
+          run(value);
+        };
+        uploadWaitersRef.current.set(requestId, { resolve: settle(resolve), reject: settle(reject) });
+        sendMessage({ type: "upload_file", destinationDirectory, name, contentBase64, requestId });
+      });
     },
     /** Create one directory; answered with its (empty) listing. */
     createDirectory: (path: string) => {

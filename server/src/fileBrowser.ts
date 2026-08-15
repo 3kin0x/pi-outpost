@@ -9,12 +9,42 @@ import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import type { DirEntry, FileBrowserErrorReason, FileSearchEntry } from "@pi-outpost/shared";
 import type { AppConfig } from "./config.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
 
 /** Hard cap for file previews — refused outright above this, never silently truncated. */
 export const MAX_PREVIEW_BYTES = 1_048_576; // 1 MiB
+
+/**
+ * Hard cap for an upload, in decoded bytes. Matched to the path-based extraction
+ * tools' own limits (`DEFAULT_PDF_MAX_BYTES` and its docx/xlsx/pptx siblings in
+ * config.ts): a document those tools can read must be one the upload accepts, or
+ * the feature has a hole in the middle.
+ */
+export const MAX_UPLOAD_BYTES = 26_214_400; // 25 MiB
+
+/**
+ * The same cap measured on the wire. Base64 is 4 characters per 3 bytes, rounded
+ * up to a whole quantum — checked *before* decoding so the Buffer allocation is
+ * bounded by a number we already agreed to.
+ */
+export const MAX_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_UPLOAD_BYTES / 3) * 4;
+
+/**
+ * The one directory uploads may land in, relative to the writable root. Must match
+ * `UPLOADS_DIRECTORY` in `ui/src/uploads.ts`.
+ *
+ * The client names its destination in the request, but the server does not take
+ * its word for it. Without this, `upload_file` would be the most powerful message
+ * in the protocol: arbitrary binary content, up to 25 MB, at any path in the
+ * writable zone, creating a chain of parent directories on the way — while
+ * `create_directory` right below deliberately refuses to create a chain at all,
+ * and `write_file` refuses NUL bytes and demands the file already exist. Pinning
+ * the destination keeps the new power to the one thing the feature needs.
+ */
+export const UPLOADS_DIRECTORY = "uploads";
 
 /** A PDF is never previewed as text, so the preview cap says nothing useful about it. */
 export function isPdfPath(relPath: string): boolean {
@@ -261,6 +291,193 @@ export async function createDirectoryFromBrowser(
     await fs.mkdir(resolved);
   } catch (error) {
     throw creationError(error, relPath);
+  }
+}
+
+/**
+ * An uploaded file's name is a name, not a route — and unlike a name the user
+ * typed, it comes from a `File` the browser handed over, so a separator in it is
+ * an attempt at a path rather than a typo. Refused as "invalid": the client needs
+ * to tell a malformed request apart from a permission refusal.
+ *
+ * Deliberately *not* `assertCreatableName`: that one also refuses leading and
+ * trailing spaces, which is right for a name being typed and wrong for a file
+ * already sitting on someone's desktop under that name.
+ */
+export function assertUploadName(name: string): void {
+  if (name.trim() === "") {
+    throw new FileBrowserError("invalid", "A file name is required");
+  }
+  if (name === "." || name === "..") {
+    throw new FileBrowserError("invalid", `"${name}" is not a name`);
+  }
+  if (name.includes("/") || name.includes("\\")) {
+    throw new FileBrowserError("invalid", `"${name}" is a path, not a name`);
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(name)) {
+    throw new FileBrowserError("invalid", "The file name contains control characters");
+  }
+  // ENAMETOOLONG otherwise, which surfaces as a bare "cannot create" the user
+  // cannot act on. 255 bytes is the common single-component limit.
+  if (Buffer.byteLength(name, "utf8") > MAX_UPLOAD_NAME_BYTES) {
+    throw new FileBrowserError("invalid", "The file name is too long");
+  }
+  // The rest are refused on every platform, not only Windows: a workspace is
+  // shared and synced, so a name that is fine here and unrepresentable on a
+  // colleague's machine breaks their checkout rather than ours.
+  //
+  // Trailing dots and spaces are the dangerous half — Win32 strips them, so
+  // "report.pdf." and "report.pdf" address the same file. The EEXIST collision
+  // check would be looking at one name while the filesystem resolved another, and
+  // the no-overwrite guarantee would quietly stop holding.
+  if (/[. ]$/.test(name)) {
+    throw new FileBrowserError("invalid", `"${name}" ends with a dot or a space`);
+  }
+  // ":" opens an NTFS alternate data stream — "report.pdf:hidden" writes a stream
+  // on a file that still lists as report.pdf.
+  if (name.includes(":")) {
+    throw new FileBrowserError("invalid", `"${name}" is a path, not a name`);
+  }
+  if (WINDOWS_RESERVED_NAMES.test(name)) {
+    throw new FileBrowserError("invalid", `"${name}" is a reserved device name`);
+  }
+}
+
+/** Common single-path-component limit; anything longer fails as ENAMETOOLONG. */
+const MAX_UPLOAD_NAME_BYTES = 255;
+
+/**
+ * DOS device names, which Win32 still resolves ahead of the filesystem — with or
+ * without an extension, so `CON`, `con.txt` and `LPT1.pdf` are all the device.
+ */
+const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
+/**
+ * `Buffer.from(s, "base64")` ignores anything it does not recognise, so a corrupt
+ * body would silently become a shorter file rather than an error. Check the
+ * alphabet first. Linear: the character class has no alternation, and `={0,2}` can
+ * only back up two positions.
+ */
+function assertBase64(content: string): void {
+  if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
+    throw new FileBrowserError("invalid", "The uploaded content is not valid base64");
+  }
+}
+
+/** `report.pdf` at attempt 2 → `report-2.pdf`; the extension has to survive. */
+function suffixed(name: string, attempt: number): string {
+  if (attempt === 0) return name;
+  const ext = path.extname(name);
+  return `${name.slice(0, name.length - ext.length)}-${attempt}${ext}`;
+}
+
+/** Enough room to disambiguate a name without spinning on a hostile directory. */
+const MAX_UPLOAD_NAME_ATTEMPTS = 1000;
+
+/**
+ * Store a file supplied by the browser, under exactly the permission rules that
+ * govern a write — but for content that is *meant* to be binary.
+ *
+ * Deliberately not a flag on `writeFileFromBrowser`: that one refuses NUL bytes,
+ * caps at the 1 MB preview limit, requires the file to already exist and checks an
+ * mtime. Every one of those guards is wrong here, and a boolean suspending four
+ * guards at once is not a guard.
+ *
+ * `destinationDirectory` is browser-root-relative and need not exist yet; missing
+ * directories are created inside the writable zone. The returned path is the one
+ * actually written, which is not always the one asked for — see below.
+ */
+export async function uploadFileFromBrowser(
+  root: string,
+  writableRel: string | null | undefined,
+  destinationDirectory: string,
+  name: string,
+  contentBase64: string,
+): Promise<string> {
+  if (writableRel === null) {
+    throw new FileBrowserError("denied", "The sandbox is read-only");
+  }
+  assertUploadName(name);
+  const writableRoot = writableRel === undefined ? root : path.resolve(root, writableRel);
+  const destination = await resolveConfined(root, destinationDirectory);
+  if (!isWithin(writableRoot, destination)) {
+    throw new FileBrowserError("denied", `"${destinationDirectory}" is outside the writable zone`);
+  }
+  // The destination is pinned, not merely confined: see UPLOADS_DIRECTORY. Checked
+  // after confinement so an escaping path still reports *why* it was refused —
+  // "outside the root" is the more useful answer, and the one the protocol
+  // promises. The request carries a destination at all so that a client and server
+  // that disagree say so, rather than the client writing somewhere it did not mean.
+  if (path.resolve(root, destinationDirectory) !== path.resolve(writableRoot, UPLOADS_DIRECTORY)) {
+    throw new FileBrowserError("denied", `Uploads may only be written to "${UPLOADS_DIRECTORY}"`);
+  }
+
+  // Both size checks run before anything touches the filesystem: a refused upload
+  // must not leave a directory behind that the user never asked for.
+  if (contentBase64.length > MAX_UPLOAD_BASE64_LENGTH) {
+    throw new FileBrowserError("too-large", `Uploads are limited to ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`);
+  }
+  assertBase64(contentBase64);
+  const buffer = Buffer.from(contentBase64, "base64");
+  if (buffer.byteLength > MAX_UPLOAD_BYTES) {
+    throw new FileBrowserError("too-large", `Uploads are limited to ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`);
+  }
+
+  try {
+    await fs.mkdir(destination, { recursive: true });
+  } catch (error) {
+    throw creationError(error, destinationDirectory);
+  }
+
+  // SECURITY: re-confine after creating the directory, not only before.
+  //
+  // `resolveConfined` resolves symlinks in the part of the path that exists and
+  // keeps the missing tail as written — so for a destination that does not exist
+  // yet, the tail was never checked against a real inode. The writable zone is
+  // exactly where the agent's own write tools operate, so between that check and
+  // this mkdir the tail can be replaced by a symlink pointing anywhere, and
+  // recursive mkdir accepts an existing directory (through the link) rather than
+  // failing. Resolving again closes that window, and everything below uses the
+  // path that survived the second check.
+  const confirmed = await realResolve(destination);
+  if (!isWithin(root, confirmed) || !isWithin(writableRoot, confirmed)) {
+    throw new FileBrowserError("outside-root", `"${destinationDirectory}" is outside the browser root`);
+  }
+
+  // Written whole under a temporary name, then linked into place: `link` fails
+  // with EEXIST rather than overwriting, which is both the atomicity guarantee and
+  // the collision check, without a stat/write window in between. `rename` would
+  // give us the first and silently lose the second.
+  //
+  // SECURITY: `wx` and a random name, both deliberately. Plain `writeFile` opens
+  // with O_TRUNC and *follows a symlink at the final component*, so a temporary
+  // name the agent can guess is a temporary name the agent can pre-create as a
+  // link to a file outside the sandbox — and the next upload would write 25 MB of
+  // its choosing there. O_EXCL refuses to follow a link, dangling or not, and a
+  // crypto-random suffix is not guessable in the first place.
+  const tmp = path.join(confirmed, `.pi-outpost-upload-${randomBytes(12).toString("hex")}.tmp`);
+  try {
+    try {
+      await fs.writeFile(tmp, buffer, { flag: "wx" });
+    } catch (error) {
+      throw creationError(error, name);
+    }
+    for (let attempt = 0; attempt < MAX_UPLOAD_NAME_ATTEMPTS; attempt++) {
+      const candidate = suffixed(name, attempt);
+      const target = path.join(confirmed, candidate);
+      try {
+        await fs.link(tmp, target);
+        return path.relative(root, target).split(path.sep).join("/");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw creationError(error, candidate);
+      }
+    }
+    throw new FileBrowserError("conflict", `Too many files named "${name}" already`);
+  } finally {
+    // Never let tidying up turn a completed upload into a failure: the file is
+    // already linked into place by then, and `force` only forgives ENOENT.
+    await fs.rm(tmp, { force: true }).catch(() => {});
   }
 }
 
@@ -526,13 +743,21 @@ export async function writeFileFromBrowser(
   if (!force && stat.mtimeMs !== expectedMtimeMs) {
     throw new FileBrowserError("conflict", `"${relPath}" changed on disk since it was opened`);
   }
-  // Atomic replace: a crash mid-write must never leave a truncated file behind
-  const tmp = `${resolved}.pi-outpost-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`;
+  // Atomic replace: a crash mid-write must never leave a truncated file behind.
+  //
+  // SECURITY: `wx` and a crypto-random suffix, for the same reason the upload path
+  // uses them. Plain `writeFile` opens with O_TRUNC and follows a symlink at the
+  // final component, so a predictable temporary name inside the writable zone —
+  // which is exactly where the agent's own tools operate — is a name the agent can
+  // pre-create as a link pointing out of the sandbox, and this write would land
+  // there. The `rename` below does not save us: by then the bytes are already
+  // through the link.
+  const tmp = `${resolved}.pi-outpost-${randomBytes(12).toString("hex")}.tmp`;
   try {
-    await fs.writeFile(tmp, buffer, { mode: stat.mode });
+    await fs.writeFile(tmp, buffer, { mode: stat.mode, flag: "wx" });
     await fs.rename(tmp, resolved);
   } catch (error) {
-    await fs.rm(tmp, { force: true });
+    await fs.rm(tmp, { force: true }).catch(() => {});
     throw error;
   }
   const written = await fs.stat(resolved);

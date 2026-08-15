@@ -66,6 +66,7 @@ import {
   isPdfPath,
   listDirectory,
   MAX_PREVIEW_BYTES,
+  MAX_UPLOAD_BASE64_LENGTH,
   moveFileFromBrowser,
   openFileNative,
   readFileForPreview,
@@ -74,6 +75,7 @@ import {
   resolveBrowserRoot,
   resolveWritableRoot,
   searchFiles,
+  uploadFileFromBrowser,
   writeFileFromBrowser,
 } from "./fileBrowser.ts";
 import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus, probeGit } from "./git.ts";
@@ -310,8 +312,23 @@ function applyCors(req: FastifyRequest, reply: FastifyReply): boolean {
   return true;
 }
 
+const MAX_IMAGES = 6;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // of base64 text
+
 const app = Fastify({ logger: false });
-await app.register(websocket);
+// An exceeded frame limit *closes the socket* rather than answering, and a torn-down
+// connection reports nothing the client can show the user — so the limit is stated
+// here next to every cap it has to clear, rather than inherited from ws's 100 MB
+// default and left to quietly fall under one of them.
+//
+// Two messages set the floor and they are not the same size: an upload is one
+// base64 body, while a prompt may carry MAX_IMAGES of MAX_IMAGE_BYTES each — six
+// images is the larger number by a wide margin. Taking the max of both (rather
+// than the upload alone) is what keeps a multi-image prompt the *server's own
+// validator accepts* from being dropped by the transport underneath it.
+await app.register(websocket, {
+  options: { maxPayload: Math.max(MAX_UPLOAD_BASE64_LENGTH, MAX_IMAGES * MAX_IMAGE_BYTES) + 65_536 },
+});
 
 // A hook rather than a call in each handler: a per-route list is one a future
 // route joins by being remembered, and this one cannot be half-applied.
@@ -1410,9 +1427,6 @@ async function adoptUsableModel(socket: WebSocket): Promise<void> {
   announce();
 }
 
-const MAX_IMAGES = 6;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // of base64 text
-
 /** Validate client-supplied attachments; reject anything that isn't a small image. */
 function validImages(images: unknown): WireImage[] | undefined {
   if (images === undefined) return undefined;
@@ -1920,6 +1934,28 @@ async function handleMoveFile(socket: WebSocket, filePath: string, destinationDi
   }
 }
 
+/**
+ * Store a file supplied from outside the workspace. Answered with the path the
+ * server wrote — a collision is disambiguated here, so the client cannot assume
+ * the name it asked for survived.
+ */
+async function handleUploadFile(
+  socket: WebSocket,
+  destinationDirectory: string,
+  name: string,
+  contentBase64: string,
+  requestId: string,
+): Promise<void> {
+  const requestedPath = destinationDirectory ? `${destinationDirectory}/${name}` : name;
+  try {
+    const writtenPath = await uploadFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, destinationDirectory, name, contentBase64);
+    send(socket, { type: "file_uploaded", requestId, path: writtenPath });
+    broadcast({ type: "file_changed", path: writtenPath });
+  } catch (error) {
+    sendFileBrowserError(socket, requestId, requestedPath, error);
+  }
+}
+
 async function handleCopyFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
   try {
     const copiedPath = await copyFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, destinationDirectory);
@@ -2172,6 +2208,17 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     case "create_directory":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
       handleCreateDirectory(socket, message.path, message.requestId).catch(reportError);
+      break;
+    case "upload_file":
+      if (
+        typeof message.destinationDirectory !== "string" ||
+        typeof message.name !== "string" ||
+        typeof message.contentBase64 !== "string" ||
+        typeof message.requestId !== "string"
+      ) {
+        return;
+      }
+      handleUploadFile(socket, message.destinationDirectory, message.name, message.contentBase64, message.requestId).catch(reportError);
       break;
     case "open_native":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
