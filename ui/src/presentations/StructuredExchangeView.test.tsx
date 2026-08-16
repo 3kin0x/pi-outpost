@@ -60,6 +60,26 @@ const toggleLegend = (key: string) => {
   fireEvent.click(target);
 };
 
+
+/**
+ * Drag a box, the way a pointer does and the way React can see.
+ *
+ * Raw `dispatchEvent` is not wrapped in `act`, so the state the drag sets never
+ * flushed and the rendering never changed — a drag test written that way asserts
+ * against the diagram as it was before the drag, and passes for the wrong reason.
+ * Found by checking whether "reset layout" had appeared: it had not.
+ */
+const dragBox = (index: number, by: { x: number; y: number }) => {
+  const node = [...document.querySelectorAll('[data-draggable="node"]')][index] as SVGGElement;
+  (node as unknown as { setPointerCapture: () => void }).setPointerCapture = () => {};
+  (node as unknown as { releasePointerCapture: () => void }).releasePointerCapture = () => {};
+  fireEvent.pointerDown(node, { clientX: 100, clientY: 200, button: 0, pointerId: 1 });
+  fireEvent.pointerMove(node, { clientX: 100 + by.x, clientY: 200 + by.y, button: 0, pointerId: 1 });
+  fireEvent.pointerUp(node, { clientX: 100 + by.x, clientY: 200 + by.y, button: 0, pointerId: 1 });
+  // The drag must have taken effect, or everything below is asserting the old picture
+  expect(screen.queryByText("reset layout"), "the drag did not register").not.toBeNull();
+};
+
 const renderBody = (item: ToolItem) =>
   render(<structuredExchangePresentation.Expanded item={item} dispatch={vi.fn()} />);
 
@@ -1919,14 +1939,105 @@ describe("nothing drawn falls outside the canvas it is drawn on", () => {
       }),
     );
 
-    const node = document.querySelector('[data-draggable="node"]')! as SVGGElement;
-    node.setPointerCapture = () => {};
-    node.releasePointerCapture = () => {};
-    const at = (x: number, y: number) => Object.assign(new MouseEvent("pointerdown", { bubbles: true, clientX: x, clientY: y, button: 0 }), { pointerId: 1 });
-    node.dispatchEvent(at(50, 200));
-    node.dispatchEvent(Object.assign(new MouseEvent("pointermove", { bubbles: true, clientX: 50, clientY: 40 }), { pointerId: 1 }));
-    node.dispatchEvent(Object.assign(new MouseEvent("pointerup", { bubbles: true, clientX: 50, clientY: 40 }), { pointerId: 1 }));
+    dragBox(0, { x: 0, y: -160 });
 
     assertAllInside();
+  });
+});
+
+describe("adjusting the view is not editing the document", () => {
+  const proposal = {
+    schema: S,
+    kind: "graph",
+    target: "artifact-1",
+    data: {
+      nodes: [
+        { id: "a", label: "A", kind: "service" },
+        { id: "b", label: "B", kind: "datastore" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "writes" }],
+    },
+  };
+
+  it("leaves the document untouched after a box is moved and a type is hidden", () => {
+    // Repositioning and narrowing are for reading. If either reached the document,
+    // a reader would be approving something they had themselves altered.
+    const serialized = JSON.stringify(proposal);
+    const item = tool({ structured: serialized });
+    renderBody(item);
+
+    dragBox(0, { x: 0, y: -140 });
+    toggleLegend("element:datastore");
+
+    // The view did change — this is not a test of a no-op
+    expect(screen.getByTestId("structured-filtered")).toBeTruthy();
+    expect(document.querySelectorAll("[data-element-role]")).toHaveLength(1);
+
+    // …and the document did not
+    expect(item.structured).toBe(serialized);
+  });
+});
+
+describe("a moved box takes its relationships with it", () => {
+  /**
+   * Dropping the layout route the moment a reader touched a box was the first
+   * answer and a poor one: the route is the only thing carrying the bends, so every
+   * relationship around that box snapped from a curve going somewhere to a straight
+   * line cutting across whatever it had been routed around.
+   */
+  const chain = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: ["a", "b", "c", "d"].map((id) => ({ id, label: id.toUpperCase() })),
+      edges: [
+        { from: "a", to: "b", kind: "k" },
+        { from: "b", to: "c", kind: "k" },
+        { from: "c", to: "d", kind: "k" },
+        { from: "a", to: "d", kind: "spans" },
+      ],
+    },
+  };
+
+  /** The fourth relationship: a→d, spanning three ranks, so the engine routes it. */
+  const routedPath = () =>
+    [...document.querySelectorAll('[data-relationship-role] path[data-edge="line"]')][3]?.getAttribute("d");
+
+  it("keeps the rounded route after a box is moved, rather than snapping to a straight line", () => {
+    renderBody(withStructured(chain));
+    const before = routedPath();
+    expect(before, "the spanning relationship should be routed to begin with").toBeDefined();
+    expect(before).toContain("Q");
+
+    dragBox(0, { x: 0, y: -90 });
+
+    const after = routedPath();
+    expect(after, "the route should survive the drag").toBeDefined();
+    expect(after, "and keep its rounded corners").toContain("Q");
+    expect(after).not.toBe(before);
+  });
+
+  it("moves the route with the end that moved", () => {
+    renderBody(withStructured(chain));
+    const before = routedPath()!;
+    dragBox(0, { x: 0, y: -90 });
+    const after = routedPath()!;
+
+    const firstY = (d: string) => Number(d.match(/^M [\d.-]+ ([\d.-]+)/)![1]);
+    // The relationship starts at the box that moved, so its start follows it up
+    expect(firstY(after)).toBeLessThan(firstY(before));
+  });
+
+  it("leaves relationships whose ends did not move exactly where they were", () => {
+    renderBody(withStructured(chain));
+    const all = () =>
+      [...document.querySelectorAll('[data-relationship-role] path[data-edge="line"]')].map((p) => p.getAttribute("d")!);
+    const before = all();
+
+    dragBox(0, { x: 0, y: -90 });
+    const after = all();
+
+    // c→d touches neither end of the drag
+    expect(after[2]).toBe(before[2]);
   });
 });

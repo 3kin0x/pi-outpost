@@ -646,6 +646,21 @@ function edgePath(
   route: { x: number; y: number }[] | undefined,
   /** Which of the relationships between this same pair, in declaration order. */
   rank: number,
+  /**
+   * How far each end has been moved from where the layout put it.
+   *
+   * The route was computed for the original positions, so a moved end leaves it
+   * connecting nothing. Dropping it was the first answer and a poor one: the route
+   * is the only thing that carries the bends, so the moment a reader touched a box
+   * every relationship around it snapped from a curve going somewhere to a straight
+   * line cutting across whatever it had been avoiding.
+   *
+   * Instead the route is carried along with its ends. Each waypoint takes a blend of
+   * the two nudges by how far along it sits, so the near end follows the box that
+   * moved, the far end stays where it was, and the shape in between deforms smoothly
+   * rather than disappearing.
+   */
+  warp?: { from: Nudge; to: Nudge },
 ): { d: string; labelAt: { x: number; y: number }; span: number } {
   if (from === to) {
     // A loop, drawn by hand: out of the top, around, and back into the right side.
@@ -667,7 +682,17 @@ function edgePath(
 
   // Middle points from the layout engine, if it routed this one. The ends are
   // recomputed against the boxes so the arrow still lands on a border.
-  const waypoints = (route ?? []).slice(1, -1);
+  const routed = (route ?? []).slice(1, -1);
+  const waypoints =
+    warp === undefined
+      ? routed
+      : routed.map((point, index) => {
+          const along = routed.length === 1 ? 0.5 : index / (routed.length - 1);
+          return {
+            x: point.x + warp.from.dx * (1 - along) + warp.to.dx * along,
+            y: point.y + warp.from.dy * (1 - along) + warp.to.dy * along,
+          };
+        });
   if (waypoints.length > 0 && rank === 0) {
     const middle = waypoints[Math.floor((waypoints.length - 1) / 2)];
     return { d: roundedPath([start, ...waypoints, finish], 12), labelAt: middle, span };
@@ -923,12 +948,19 @@ function GraphView({
    * carry it above the topmost box, and a loop is drawn deliberately above the box it
    * belongs to. Both fell outside the viewBox and were simply cut off at the top edge.
    */
+  const still: Nudge = { dx: 0, dy: 0 };
   const shapes = shown.edges.map((edge) => {
     const from = boxFor(edge.from);
     const to = boxFor(edge.to);
     if (from === undefined || to === undefined) return undefined;
     const moved = nudges.has(edge.from) || nudges.has(edge.to);
-    return edgePath(from, edge.from === edge.to ? from : to, moved ? undefined : routeOf.get(edge), rankOf.get(edge) ?? 0);
+    return edgePath(
+      from,
+      edge.from === edge.to ? from : to,
+      routeOf.get(edge),
+      rankOf.get(edge) ?? 0,
+      moved ? { from: nudges.get(edge.from) ?? still, to: nudges.get(edge.to) ?? still } : undefined,
+    );
   });
 
   // A nudged box can leave the computed extent in any direction, so the canvas

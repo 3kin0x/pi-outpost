@@ -274,3 +274,51 @@ describe("the channel a document arrives on", () => {
     assert.equal(typeof structured, "string");
   });
 });
+
+/**
+ * The contract carries meaning and never appearance.
+ *
+ * A colour or a position means nothing to the authority that applies a proposal —
+ * it has its own styling — and it would compete with the one signal the approval
+ * rendering exists to carry. So a producer states what a thing *is*, with `kind`,
+ * and the reader's rendering decides how that looks.
+ */
+describe("presentation is not part of the exchange", () => {
+  const attempted = [
+    { colour: "#ff0000" },
+    { color: "#ff0000" },
+    { fill: "red" },
+    { style: { fill: "red" } },
+    { x: 10, y: 20 },
+    { position: { x: 10, y: 20 } },
+    { width: 200 },
+    { icon: "battery" },
+  ];
+
+  for (const appearance of attempted) {
+    const named = Object.keys(appearance)[0];
+    test(`refuses an element declaring "${named}"`, () => {
+      assert.equal(
+        Check(schema, graph({ data: { nodes: [{ id: "a", label: "A", ...appearance }], edges: [] } })),
+        false,
+        `"${named}" was accepted on an element`,
+      );
+    });
+
+    test(`refuses a relationship declaring "${named}"`, () => {
+      const nodes = [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+      ];
+      assert.equal(
+        Check(schema, graph({ data: { nodes, edges: [{ from: "a", to: "b", kind: "k", ...appearance }] } })),
+        false,
+        `"${named}" was accepted on a relationship`,
+      );
+    });
+  }
+
+  test("accepts the type in its place, which is what a consumer can map", () => {
+    assert.equal(Check(schema, graph({ data: { nodes: [{ id: "a", label: "A", kind: "battery" }], edges: [] } })), true);
+  });
+});

@@ -67,10 +67,15 @@ Test files, abbreviated below:
 | AChangeIsShownAsATransition | covered | UX "reports a change as a before and after when the current value was described"; UV "shows a change as a before and after, not merely as changed" |
 | AReferenceAloneIsContextNotAChange | covered | UX "treats a bare reference as existing context, not a change"; UV "distinguishes additions, changes, context, and removals" |
 | AdditionOnlyProposalRemainsAPatch | covered | SP "an addition-only proposal is still a patch, though it carries no reference" |
+| ChangeWithoutTargetIsRefused | covered *(test)* | SC `change-without-target` and `relationship-change-without-target`; CLI "exits 1 for a document that was read and does not conform" asserts the rule by name through the shipped validator. The hole this closed: a `set` rode into a document claiming to describe a new artifact, asking an authority to mutate something the rendering drew as an unremarkable box |
+| EmptyProposalFieldsAreStillRefusedOnAProjection | covered *(test)* | SC `table-with-empty-removals` — presence is the assertion, not length |
 | RemovalWithoutATargetIsRejected | covered | SP "a removal without a target is refused" |
 | TableCarryingATargetIsRejected | covered | SP "a table carries neither a target nor a removal" |
 | TableIsStillRenderedAndReadable | covered | UV "renders table columns and rows in their declared order" |
 | RelationshipKindIsPreservedAndUninterpreted | covered | UV "accepts a relationship kind it has never seen and does not interpret it" |
+| ElementKindIsOptionalAndUninterpreted | covered *(test)* | SE "an element may declare its type, and a patch may retype it" — an unfamiliar vocabulary and a guillemet-wrapped stereotype both pass, an empty one does not; SE "an element and a relationship share one definition of a type" pins the two to one `$defs` so they cannot drift |
+| ElementKindMayBeChangedByAPatch | covered *(test)* | SE "an element may declare its type, and a patch may retype it" (the `set: { kind }` half); UX "reads a relationship's declared fields as description too" covers the same rule on the other side |
+| PresentationIsNeverCarriedByTheDocument | covered *(test)* | SE "presentation is not part of the exchange" — eight appearance-shaped properties (`colour`, `color`, `fill`, `style`, `x`/`y`, `position`, `width`, `icon`) refused on both an element and a relationship, and `kind` accepted in their place |
 | ParallelRelationshipsAreDistinct | covered | UV "keeps two relationships between the same pair distinct when their kinds differ" |
 | SchemaValidButSemanticallyInvalidIsRejected | covered | SP "refuses a kind that disagrees with the data it carries"; SC `duplicate-identifier`, `unresolved-endpoint`, `row-column-mismatch` |
 | ContradictoryProposalIsRefused | covered | SP "changing and removing the same thing is refused, not resolved by precedence" |
@@ -82,6 +87,8 @@ Test files, abbreviated below:
 | AcceptedSizesAreObservable | covered | SB "acceptance reports what the document weighed" |
 | ApprovedProposalIsExactlyWhatWasValidated | covered *(test)* | UV "hands on exactly the value that was validated" — identity asserted from the real validation boundary, declaration order included, which a normalising step would not preserve. Renamed from *ByteForByte*: the SDK hands the server a parsed object, so the producer's bytes do not exist on this side and promising identity with them would be a promise nothing keeps. What is guaranteed, and tested, is that nothing between validation and handover normalises, reorders or re-encodes. |
 | ProducerValidatesBeforeEmitting | covered | SC "the command-line interface agrees with the parser" — every valid case, exit zero |
+| TheValidatorRunsWhereTheProducerIs | covered *(out-of-repo)* | CLI "runs at all, outside the repository, with nothing installed" and "agrees with the application on every conformance case" — the bundle copied to a temporary directory with no `node_modules`, no `package.json` and no path back here. It earned itself immediately: the first bundle carried two shebangs and was a syntax error, while every in-repo test stayed green |
+| RefusalIsDistinguishedFromUnreadableInput | covered *(test)* | CLI "exits 1 for a document that was read and does not conform", "exits 2 when the input cannot be read, rather than blaming the schema", "exits 3 when the input is not JSON", and "says how to use it, and documents its exit codes where a caller will look" |
 | ProducerReceivesActionableDiagnostics | covered | SC every invalid case exits 1 with the expected rule; SC "an unreadable input is distinguished from an invalid one" |
 | ApplicationValidatesOnReceipt | covered | UV "selects the structured presentation for a validated envelope" / "ignores an envelope that does not validate" — the client validates independently of anything the producer claims |
 | ProposalRendersAsItsChanges | covered | UV "distinguishes additions, changes, context, and removals" |
@@ -90,6 +97,18 @@ Test files, abbreviated below:
 | GraphPreservesDeclaredRelationships | covered | UX layout tests; UV "shows every element it carries" |
 | SequencePreservesDeclaredOrder | covered | UV "renders sequence messages in their declared order and direction" |
 | TablePreservesDeclaredOrder | covered | UV "renders table columns and rows in their declared order" |
+| ACyclicGraphIsStillLegible | covered *(test)* | UX "keeps a cyclic architecture to a readable extent" (extent bounded against the element count, and real height rather than one row) and "never overlaps two boxes"; UV "draws every element and every relationship, none overlapping" on a thirty-three element architecture. The failure behind it: a hand-rolled ranking reached depth 104 on seventeen elements, drew twenty thousand pixels wide and arrived as an empty line |
+| TwoTypesNeverLookAlike | covered *(test)* | UV "gives fourteen element types fourteen distinct colours" and "gives the same type the same colour, and different types different ones". Found twice on real data — five types in four colours, then fourteen element types sharing a table with thirty-four relationship types and four pairs coming out alike |
+| TypeDoesNotObscureChange | covered *(test)* | UV "keeps the approval signal when a proposal is also typed" — same fill for the same type, and the role still telling them apart by outline colour and weight |
+| TheKeyTravelsWithTheFigure | covered *(test)* | UV "names every type present in a key inside the SVG, so an exported figure explains itself" (asserts the key is inside the `svg`, not beside it on the page), "keeps the key inside the canvas it is drawn on", and "keeps the key a block, however wide the drawing gets" |
+| ASelfRelationshipIsVisible | covered *(test)* | UV "draws a relationship from something to itself as a shape with real extent" — measured as span, not as presence in the DOM. It was a line of zero length: declared in the document, invisible in the picture |
+| ParallelRelationshipsAreDrawnApart | covered *(test)* | UV "draws two relationships between the same pair as two distinct shapes" (distinct, and genuinely apart by more than eight units), "fans three relationships between one pair to either side of the straight run", "gives opposite directions between the same pair their own straight run each", and "keeps several loops on one element apart from each other" |
+| TheTextualEquivalentOmitsNothingVisual | covered *(test)* | UV "the text equivalent says everything the picture says" — ten assertions over a graph and a sequence carrying kinds, changes, removals, a self-relationship and a participant no message reaches. Both renderings now derive from one presentation model (`describeStructure`), which is what stops them drifting again |
+| EverythingIsShownUntilTheReaderNarrowsIt | covered *(test)* | UV "shows everything until the reader hides something" |
+| NarrowingIsReversibleAndDeclared | covered *(test)* | UV "says on screen that the picture is no longer the whole document", "restores everything from the banner", "tells assistive technology that what it is describing is a subset", and "hides a type when its key entry is clicked, and brings it back on a second click" — driven through a real `pointerdown → pointerup → click`, after a synthetic click hid a total break for a session |
+| ANarrowedProposalStillSaysWhatItProposes | covered *(test)* | UV "draws only what is shown, and says so inside the figure", "says on a proposal that a hidden type is still part of it", "carries that note into the serialized markup, not only onto the screen", and "never marks a hidden type the way it marks a removed one" — struck-through already means removed a few pixels away in the same view |
+| ElementAndRelationshipVocabulariesAreIndependent | covered *(test)* | UV "hides a relationship type without hiding an element type of the same name" and its converse, plus "lists the shared name once per vocabulary" |
+| AdjustmentDoesNotAlterTheDocument | covered *(test)* | UV "leaves the document untouched after a box is moved and a type is hidden" — asserts the view did change first, so it is not a test of a no-op |
 | ProducerTextRemainsInert | covered | UV "renders markup-like labels as text"; UX "keeps producer text from becoming diagram syntax" |
 | ExportCarriesTheSameStructure | covered | UX "carries exactly the elements and relationships of the data it came from" |
 | ExportIsDeterministic | covered | UX "is deterministic" |
@@ -102,80 +121,26 @@ Test files, abbreviated below:
 
 ## Summary
 
-74 covered, 0 partial, 0 uncovered.
+74 covered, 0 partial, 0 uncovered — 59 by test, 2 by architectural invariant, 2 by
+running the shipped artifact outside this repository, and the rest by the tests named
+against each row.
 
-<!-- retired note -->
-Each partial is a scenario whose subject has no code path to exercise, not a
-behaviour left untested:
+## What the three former partials turned out to be
 
-- **OmissionDoesNotRemove** — nothing converts an omission into a removal, so the
-  scenario describes the absence of a feature.
-- **DiagramSyntaxIsNeverAnInput** — same shape: no diagram parser exists.
-- **ApprovedProposalIsByteForByteWhatWasValidated** — provable from the server onward,
-  and not before it. The SDK delivers `details` as a parsed object, so the serialized
-  form is created at the server. The guarantee the implementation actually makes is
-  "identical to what was validated and displayed", which is what the requirement asks
-  for; "identical to what the producer typed" is not reachable through this transport
-  and no test should imply it is.
+None of them was an untested behaviour, and none was three missing end-to-end tests.
 
-## Confirmed in the running app
+**OmissionDoesNotRemove** and **DiagramSyntaxIsNeverAnInput** are invariants. Testing
+that absent code stays absent proves nothing, so what is asserted is the construction:
+that this application never holds the authority's model and so has nothing from which
+to infer a removal, and that the module exposes an export and deliberately no
+counterpart import. Each also has a behavioural test beside it — a proposal that
+mentions almost nothing produces no removals, and a result whose own output is hostile
+diagram syntax changes the rendering not at all.
 
-Driven through Playwright against a real server with the skill loaded, reading the DOM:
-
-- Asked for a graph of three services. The agent's **first** call put `nodes`/`edges` at the
-  top level instead of inside `data` and was refused; it read the diagnostic, corrected the
-  document, and presented it on the second call — unprompted, and not a staged failure. The
-  view then drew Gateway → Billing → Ledger with both `calls` relationships.
-- Asked for a proposal against `architecture-v4`. The approval view distinguished all four
-  states — `context` (a bare reference), `changed` (a reference with a label), `added` (no
-  reference) — listed the declared removal `relationship: REL-88`, and named the target.
-- Asked for a document with an unsupported schema version, verbatim. It was refused, no
-  structured view appeared, and the result stayed readable.
-
-One half of `UnsupportedVersionFallsBack` is not reachable from the running app and is worth
-naming: an invalid envelope cannot arrive at the client through this tool, because the tool
-validates first. The client's own fallback on a malformed envelope is covered by UV
-"ignores an envelope that does not validate, falling back as usual" — which is a component
-test, not an end-to-end one, and the honest statement is that no path in the running system
-currently produces the input it guards against.
-
-## Added after the semantics inverted
-
-The scenarios below arrived with `set`, and the rows above cover them. Two things
-worth stating separately, because they were found by looking rather than by testing:
-
-- **Relationship roles were invisible.** Elements carried a role and relationships did
-  not, so an added or retyped relationship looked exactly like one included for
-  context — on an architecture proposal, where relationships are most of what changes.
-  Covered by UV "distinguishes an added, a changed, and a context relationship" and
-  "shows what a changed relationship changes, as a before and after".
-- **The diagrams could not leave the application.** Boxes were HTML in a
-  `foreignObject`, which serializes without its styling. They are native `rect` and
-  `text` now, and UV "hands over markup that stands on its own" asserts the absence of
-  `foreignObject`, of class attributes, and the presence of an explicit ground.
-
-## What the shipped package does, and what is still unproven
-
-The schema is imported rather than read from disk. That was not a tidy-up: a path
-relative to the module resolves inside this repository and nowhere else, so the
-filesystem read passed every test here and would have failed on the first `npx`
-install. Verified by building the package, running it from an unrelated directory,
-and presenting a document through it.
-
-Still unproven, and not to be read as covered:
-
-- **The bundled skill is not demonstrably loaded.** It is copied into the package and
-  the server enumerates skill directories, but it does not appear among the commands
-  the session announces — not even when `skillPaths` points directly at it. Either
-  `additionalSkillPaths` does not behave as assumed in this SDK version, or skills
-  supplied that way do not surface as commands. The packaging is right; the loading is
-  not shown.
-- **The standalone executable gets no skill.** `build-sea` produces a single file and
-  does not embed the skills directory, so the filesystem lookup finds nothing there.
-  It degrades rather than breaking — the tool works, its instructions are absent.
-- **No MCP producer has been exercised.** The transport reads `result.details`; that a
-  real MCP server's `structuredContent` arrives in that field is assumed, not tested,
-  and cannot be tested from here.
-- **The reference validator is not portable yet.** It needs `tsx` and this repository's
-  TypeScript sources. The schema and the conformance suite do cross that boundary; the
-  interface itself does not, which is half of what the requirement asks for.
+**ApprovedProposalIsByteForByteWhatWasValidated** was the interesting one: the
+wording promised something the transport cannot deliver. The SDK hands the server a
+parsed object, so the producer's bytes do not exist on this side and no test could
+honestly assert identity with them. Renamed to **ApprovedProposalIsExactlyWhatWasValidated**,
+which is both what the implementation guarantees and what the requirement was for:
+nothing between validation and handover normalises, reorders or re-encodes. Asserted
+from the real validation boundary, declaration order included.
