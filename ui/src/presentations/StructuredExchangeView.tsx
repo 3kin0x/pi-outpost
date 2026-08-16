@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createPortal } from "react-dom";
 import type {
   StructuredElement,
+  StructuredMessage,
+  StructuredRemoval,
   StructuredGraphData,
   StructuredSequenceData,
   StructuredTableData,
@@ -497,6 +499,7 @@ function Box({
   changes,
   title,
   anchor = "start",
+  hover,
 }: {
   x: number;
   y: number;
@@ -508,6 +511,7 @@ function Box({
   changes: ReturnType<typeof fieldChanges>;
   title: string;
   anchor?: "start" | "middle";
+  hover?: ReturnType<ReturnType<typeof useDiagramTooltip>["hover"]>;
 }) {
   const role_paint = ROLE_PAINT[role];
   // Type picks the fill; role keeps the outline, and thickens it when something is
@@ -525,7 +529,7 @@ function Box({
   const textX = anchor === "middle" ? x + width / 2 : x + 8;
 
   return (
-    <g data-element-role={role}>
+    <g data-element-role={role} {...hover}>
       <title>{title}</title>
       <rect
         x={x}
@@ -620,6 +624,42 @@ function anchorPoint(
 }
 
 type Box = { x: number; y: number; cx: number; cy: number; w: number; h: number };
+
+/**
+ * One hover tooltip, for everything a diagram draws.
+ *
+ * It started on graph relationships only, because that was where a label had to be
+ * dropped for want of room. But a box's name is truncated for the same reason, a
+ * sequence has both, and a reader should not have to learn which parts of which
+ * diagram answer to a pointer. The native `<title>` stays underneath for anything
+ * driven by the keyboard or a screen reader; this is the one that appears where the
+ * pointer is and is never clipped by the box the diagram scrolls in.
+ */
+function useDiagramTooltip() {
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | undefined>(undefined);
+
+  const hover = (text: string) => ({
+    onPointerEnter: (event: React.PointerEvent) => setTip({ text, x: event.clientX, y: event.clientY }),
+    onPointerMove: (event: React.PointerEvent) => setTip({ text, x: event.clientX, y: event.clientY }),
+    onPointerLeave: () => setTip(undefined),
+  });
+
+  const Tooltip = () =>
+    tip === undefined ? null : (
+      <div
+        data-testid="diagram-tooltip"
+        role="tooltip"
+        // Fixed to the viewport: a diagram scrolling inside a narrow column must not
+        // clip the one thing explaining what is off its edge.
+        style={{ position: "fixed", left: tip.x + 14, top: tip.y + 14, zIndex: 120 }}
+        className="pointer-events-none max-w-sm rounded bg-zinc-900 px-2 py-1 text-xs text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900"
+      >
+        {tip.text}
+      </div>
+    );
+
+  return { hover, Tooltip };
+}
 
 /**
  * A polyline with its corners cut.
@@ -775,6 +815,28 @@ export function pathExtent(d: string): { minX: number; minY: number; maxX: numbe
   return { minX, minY, maxX, maxY };
 }
 
+function messageSummary(
+  data: StructuredSequenceData,
+  message: StructuredMessage,
+  index: number,
+  role: ChangeRole,
+): string {
+  const name = (id: string) => {
+    const participant = data.participants.find((candidate) => candidate.id === id);
+    return participant === undefined ? id : displayLabel(participant);
+  };
+  const said = message.label === undefined || message.label === "" ? "" : `: ${message.label}`;
+  return [
+    `${index + 1}.`,
+    `${name(message.from)} → ${name(message.to)}${said}`,
+    message.from === message.to ? "(to itself)" : "",
+    role === "unchanged" ? "" : `[${ROLE_LABEL[role]}]`,
+    fieldChanges(message).map(changeText).join(", "),
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
 function edgeSummary(data: StructuredGraphData, edge: StructuredGraphData["edges"][number], role: ChangeRole): string {
   const name = (id: string) => {
     const node = data.nodes.find((candidate) => candidate.id === id);
@@ -824,17 +886,7 @@ function GraphView({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragging, setDragging] = useState<string | undefined>(undefined);
   const [panning, setPanning] = useState(false);
-  /**
-   * What the pointer is over, and where to say so.
-   *
-   * A relationship's own label is drawn on it only when there is room, and a long
-   * diagram scrolls — so the two relationships hardest to identify are exactly the
-   * ones whose label was dropped and the ones that run off the edge. The native
-   * `<title>` needs a hit on a one-pixel line and appears wherever the browser likes;
-   * this follows the pointer and is positioned in the viewport, so it is never
-   * clipped by the box the diagram scrolls in.
-   */
-  const [hovered, setHovered] = useState<{ text: string; x: number; y: number } | undefined>(undefined);
+  const { hover, Tooltip } = useDiagramTooltip();
   /**
    * Teardown for a gesture still in flight.
    *
@@ -1151,18 +1203,7 @@ function GraphView({
           reset layout
         </button>
       )}
-      {hovered !== undefined && (
-        <div
-          data-testid="relationship-tooltip"
-          role="tooltip"
-          // Fixed to the viewport, so a diagram scrolling inside a narrow column
-          // cannot clip the one thing explaining what is off its edge.
-          style={{ position: "fixed", left: hovered.x + 14, top: hovered.y + 14, zIndex: 120 }}
-          className="pointer-events-none max-w-sm rounded bg-zinc-900 px-2 py-1 text-xs text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900"
-        >
-          {hovered.text}
-        </div>
-      )}
+      <Tooltip />
       <svg
         ref={svgRef}
         role="img"
@@ -1202,13 +1243,7 @@ function GraphView({
               key={`edge-${index}`}
               data-relationship-role={role}
               data-relationship-shape={edge.from === edge.to ? "loop" : "open"}
-              onPointerEnter={(event) =>
-                setHovered({ text: edgeSummary(data, edge, role), x: event.clientX, y: event.clientY })
-              }
-              onPointerMove={(event) =>
-                setHovered({ text: edgeSummary(data, edge, role), x: event.clientX, y: event.clientY })
-              }
-              onPointerLeave={() => setHovered(undefined)}
+              {...hover(edgeSummary(data, edge, role))}
             >
               <title>{edgeSummary(data, edge, role)}</title>
               {/* A line is one or two pixels wide and nobody can reliably hover one */}
@@ -1287,6 +1322,7 @@ function GraphView({
                 tint={node.kind === undefined ? undefined : elementTints.get(node.kind)}
                 changes={fieldChanges(node)}
                 title={elementSummary(node, role)}
+                hover={hover(elementSummary(node, role))}
               />
             </g>
           );
@@ -1407,11 +1443,14 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
     return groups;
   }, [data, isProposal, tints]);
 
+  const { hover, Tooltip } = useDiagramTooltip();
+
   const legendTop = diagramHeight + 4;
   const width = Math.max(diagramWidth, legendMinimumWidth(legend));
   const height = diagramHeight + legendHeight(legend, width);
 
   return (
+    <>
     <svg
       role="img"
       aria-label={`Sequence of ${data.participants.length} participants and ${data.messages.length} messages`}
@@ -1450,6 +1489,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
             tint={participant.kind === undefined ? undefined : tints.get(participant.kind)}
             changes={fieldChanges(participant)}
             title={elementSummary(participant, role)}
+            hover={hover(elementSummary(participant, role))}
             anchor="middle"
           />
         );
@@ -1457,6 +1497,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
 
       {data.messages.map((message, index) => {
         const role = relationshipRole(message, isProposal);
+        const summary = messageSummary(data, message, index, role);
         const paint = RELATIONSHIP_PAINT[role];
         const y = headerHeight + (index + 1) * MESSAGE_GAP;
         const fromX = x(message.from);
@@ -1472,17 +1513,9 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
             data-message-index={index}
             data-message-from={message.from}
             data-message-to={message.to}
+            {...hover(summary)}
           >
-            <title>
-              {[
-                `${index + 1}.`,
-                message.label ?? "",
-                role === "unchanged" ? "" : `[${ROLE_LABEL[role]}]`,
-                ...changes.map(changeText),
-              ]
-                .filter((part) => part !== "")
-                .join(" ")}
-            </title>
+            <title>{summary}</title>
             {isSelf ? (
               <path
                 d={`M ${fromX} ${y} h ${SELF_LOOP} v ${MESSAGE_GAP / 2} h -${SELF_LOOP}`}
@@ -1533,6 +1566,8 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
 
       <Legend groups={legend} x={12} y={legendTop} width={width} />
     </svg>
+    <Tooltip />
+    </>
   );
 }
 
@@ -1709,6 +1744,56 @@ function textualEquivalent(envelope: ValidatedStructuredExchange, isProposal: bo
   return lines.join("\n");
 }
 
+/**
+ * What a removal is, in words a reader can check.
+ *
+ * A removal names a reference the authority knows and this application does not: it
+ * holds one document, not the authority's model, so it cannot look the reference up.
+ * Two things can rescue it. The producer may describe what is going — that is what
+ * the optional fields on a removal are for. Failing that, the same reference may
+ * appear on something included in the document for context, in which case the
+ * document describes it after all.
+ *
+ * When neither applies, this returns the bare reference, and the caller says so
+ * rather than presenting an opaque identifier as though it meant something.
+ */
+export function describeRemoval(
+  removal: StructuredRemoval,
+  envelope: ValidatedStructuredExchange,
+): string {
+  const named = (id: string | undefined): string | undefined => {
+    if (id === undefined) return undefined;
+    const data = envelope.data as Partial<StructuredGraphData & StructuredSequenceData>;
+    const among = [...(data.nodes ?? []), ...(data.participants ?? [])];
+    const found = among.find((thing) => thing.id === id || thing.ref === id);
+    return found === undefined ? id : displayLabel(found);
+  };
+
+  // The document may already carry the thing being removed, included for context
+  const data = envelope.data as Partial<StructuredGraphData & StructuredSequenceData>;
+  const alsoHere = [...(data.nodes ?? []), ...(data.participants ?? []), ...(data.edges ?? []), ...(data.messages ?? [])].find(
+    (thing) => "ref" in thing && thing.ref === removal.ref,
+  );
+
+  const endpoints =
+    removal.from !== undefined || removal.to !== undefined
+      ? `${named(removal.from) ?? "?"} → ${named(removal.to) ?? "?"}`
+      : alsoHere !== undefined && "from" in alsoHere
+        ? `${named(alsoHere.from)} → ${named(alsoHere.to)}`
+        : undefined;
+
+  const label =
+    removal.label ??
+    (alsoHere === undefined ? undefined : (alsoHere as { label?: string }).label);
+  const kind =
+    removal.kind ?? (alsoHere === undefined ? undefined : (alsoHere as { kind?: string }).kind);
+
+  const described = [label, kind === undefined ? undefined : `[${kind}]`, endpoints].filter(
+    (part) => part !== undefined && part !== "",
+  );
+  return described.length === 0 ? removal.ref : `${described.join(" ")} (${removal.ref})`;
+}
+
 /* ── The presentation ───────────────────────────────────────────────────────── */
 
 /** The control row's link styling, shared with the same controls inside the modal. */
@@ -1883,9 +1968,18 @@ function StructuredExchangeBody({ item }: PresentationProps) {
             <li
               key={index}
               data-relationship-role="removed"
-              className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800 line-through dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+              className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
             >
-              {removal.type}: {removal.ref}
+              <span className="line-through">{describeRemoval(removal, envelope)}</span>
+              {describeRemoval(removal, envelope) === removal.ref && (
+                // Said plainly rather than left to be noticed: approving the deletion
+                // of a bare identifier is approving something you cannot see, and the
+                // reader should know that is what they are being asked to do.
+                <span className="ml-2 not-italic opacity-70" data-testid="removal-undescribed">
+                  — the proposal does not say what this is
+                </span>
+              )}
+              <span className="ml-2 font-mono opacity-60">{removal.type}</span>
             </li>
           ))}
         </ul>

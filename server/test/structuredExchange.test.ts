@@ -322,3 +322,38 @@ describe("presentation is not part of the exchange", () => {
     assert.equal(Check(schema, graph({ data: { nodes: [{ id: "a", label: "A", kind: "battery" }], edges: [] } })), true);
   });
 });
+
+/**
+ * A removal a reader can actually check.
+ *
+ * `ref` names something the authority knows and this application does not — it holds
+ * one document, not the model — so a bare reference asks a reader to approve deleting
+ * something they cannot see. The other fields describe it, exactly as declared fields
+ * describe elsewhere in the contract, and identify nothing.
+ */
+describe("removals describe what goes", () => {
+  const removal = (over: Record<string, unknown>) =>
+    graph({ target: "T", removals: [{ type: "relationship", ref: "REL-88", ...over }] });
+
+  test("a reference and a type are still all that is required", () => {
+    assert.equal(Check(schema, graph({ target: "T", removals: [{ type: "element", ref: "EL-1" }] })), true);
+  });
+
+  test("accepts a description of what is being removed", () => {
+    assert.equal(Check(schema, removal({ label: "Billing calls Ledger", kind: "calls", from: "a", to: "b" })), true);
+  });
+
+  test("takes those fields from the same definitions the rest of the contract uses", () => {
+    // Two definitions of one idea drift; a removal's label is a label.
+    const properties = schema.$defs.removal.properties;
+    assert.deepEqual(properties.label, { $ref: "#/$defs/label" });
+    assert.deepEqual(properties.kind, { $ref: "#/$defs/kind" });
+    assert.deepEqual(properties.from, { $ref: "#/$defs/localId" });
+    assert.deepEqual(properties.to, { $ref: "#/$defs/localId" });
+  });
+
+  test("still refuses anything it did not declare", () => {
+    assert.equal(Check(schema, removal({ colour: "#ff0000" })), false);
+    assert.equal(Check(schema, removal({ set: { label: "x" } })), false, "a removal is not a patch");
+  });
+});

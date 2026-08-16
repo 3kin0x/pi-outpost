@@ -159,8 +159,21 @@
         },
         "ref": {
           "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "from": {
+          "$ref": "#/$defs/localId"
+        },
+        "to": {
+          "$ref": "#/$defs/localId"
         }
-      }
+      },
+      "description": "Something to take out of the target, named by the reference the authority knows it by. The other fields describe it and never identify it: they exist so a reader can see what they are approving the removal of. This application holds one document, not the authority's model, so without them a removal is an opaque identifier and the reader is asked to approve the deletion of something they cannot see."
     },
     "elementChange": {
       "type": "object",

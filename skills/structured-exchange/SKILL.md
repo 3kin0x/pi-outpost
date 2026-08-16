@@ -140,12 +140,22 @@ Name the artifact in `target`. Then:
 - To remove something, say so in `removals`, giving both the `ref` and whether it is
   an `"element"` or a `"relationship"` — a reference alone does not say which.
 
+> **Say what you are removing.** A removal may also carry `label`, `kind`, and for a
+> relationship `from` and `to`. Add them. The reader's application holds your document
+> and nothing else — it cannot look up what `REL-88` stood for, so without them the
+> approval gate reads "relationship: REL-88" and asks someone to approve deleting
+> something they cannot see. These fields describe and never identify: `ref` is still
+> what names the thing.
+
 ```json
 {
   "schema": "urn:structured-exchange:1",
   "kind": "graph",
   "target": "architecture-v4",
-  "removals": [{ "type": "relationship", "ref": "REL-88" }],
+  "removals": [
+    { "type": "relationship", "ref": "REL-88",
+      "kind": "calls", "from": "ledger", "to": "billing" }
+  ],
   "data": {
     "nodes": [
       { "id": "billing", "ref": "EL-12", "label": "Billing" },
@@ -159,6 +169,9 @@ Name the artifact in `target`. Then:
 ```
 
 Read that proposal:
+
+- **The removal** names `REL-88` and says what it is: the `calls` from Ledger to
+  Billing. The reader sees what goes, rather than an identifier.
 
 - **`billing`** has a `ref` and a name, no `set` → **context**. It exists, it is shown
   so you can see where the new thing attaches, and nothing happens to it.

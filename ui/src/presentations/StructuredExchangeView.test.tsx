@@ -209,10 +209,12 @@ describe("declared order and declared kinds survive", () => {
 
     const drawn = [...container.querySelectorAll("[data-message-index]")];
     expect(drawn).toHaveLength(3);
+    // The hover text names the ends, not only what was said: on a lifeline diagram
+    // the arrow gives the direction and nothing gives the who, once it has scrolled.
     expect(drawn.map((message) => message.querySelector("title")?.textContent)).toEqual([
-      "1. first",
-      "2. second",
-      "3. third",
+      "1. Alpha → Beta: first",
+      "2. Beta → Alpha: second",
+      "3. Alpha → Beta: third",
     ]);
 
     // Direction, not just order: the second message runs back the other way, which
@@ -1666,7 +1668,7 @@ describe("saying what a relationship is when the picture cannot", () => {
     renderBody(withStructured(graph));
     hover(document.querySelector("[data-relationship-role]")!);
 
-    const tip = screen.getByTestId("relationship-tooltip");
+    const tip = screen.getByTestId("diagram-tooltip");
     expect(tip.textContent).toContain("Battery");
     expect(tip.textContent).toContain("Inverter");
     expect(tip.textContent).toContain("supplies_high_voltage_direct_current");
@@ -1679,14 +1681,14 @@ describe("saying what a relationship is when the picture cannot", () => {
     renderBody(withStructured(graph));
     hover(document.querySelector("[data-relationship-role]")!);
 
-    expect(screen.getByTestId("relationship-tooltip").style.position).toBe("fixed");
+    expect(screen.getByTestId("diagram-tooltip").style.position).toBe("fixed");
   });
 
   it("does not let the tooltip catch the pointer it follows", () => {
     renderBody(withStructured(graph));
     hover(document.querySelector("[data-relationship-role]")!);
 
-    expect(screen.getByTestId("relationship-tooltip").className).toContain("pointer-events-none");
+    expect(screen.getByTestId("diagram-tooltip").className).toContain("pointer-events-none");
   });
 
   it("puts it away when the pointer leaves", () => {
@@ -1695,7 +1697,7 @@ describe("saying what a relationship is when the picture cannot", () => {
     hover(group);
     fireEvent.pointerOut(group, { relatedTarget: document.body });
 
-    expect(screen.queryByTestId("relationship-tooltip")).toBeNull();
+    expect(screen.queryByTestId("diagram-tooltip")).toBeNull();
   });
 
   it("still carries the native title, for anything driven by the keyboard or a reader", () => {
@@ -2178,5 +2180,87 @@ describe("what the proposal note claims", () => {
   it("says nothing of the sort for a new artifact", () => {
     renderBody(withStructured(newArtifact));
     expect(screen.queryByTestId("structured-proposal-note")).toBeNull();
+  });
+});
+
+describe("the same pointer answer, whatever the diagram", () => {
+  /**
+   * The tooltip began on graph relationships, because that was where a label had to
+   * be dropped for want of room. A box's name is truncated for the same reason, a
+   * sequence has both, and a reader should not have to learn which parts of which
+   * diagram answer to a pointer.
+   */
+  const graph = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "Battery", kind: "storage" },
+        { id: "b", label: "Inverter", kind: "converter" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "supplies" }],
+    },
+  };
+  const sequence = {
+    schema: S,
+    kind: "sequence",
+    data: {
+      participants: [
+        { id: "a", label: "Driver", kind: "actor" },
+        { id: "b", label: "Charge Port", kind: "interface" },
+      ],
+      messages: [{ from: "a", to: "b", label: "plug in" }],
+    },
+  };
+
+  const hover = (selector: string) => {
+    fireEvent.pointerMove(document.querySelector(selector)!, { clientX: 120, clientY: 90 });
+    return screen.getByTestId("diagram-tooltip").textContent!;
+  };
+
+  it("answers on a graph element", () => {
+    renderBody(withStructured(graph));
+    expect(hover("[data-element-role]")).toContain("Battery");
+  });
+
+  it("answers on a graph relationship", () => {
+    renderBody(withStructured(graph));
+    const text = hover("[data-relationship-role]");
+    expect(text).toContain("Battery");
+    expect(text).toContain("Inverter");
+    expect(text).toContain("supplies");
+  });
+
+  it("answers on a sequence participant", () => {
+    renderBody(withStructured(sequence));
+    expect(hover("[data-element-role]")).toContain("Driver");
+  });
+
+  it("answers on a sequence message, naming both ends", () => {
+    // On a lifeline diagram the arrow gives the direction and nothing gives the who,
+    // once the diagram has scrolled away from the headers.
+    renderBody(withStructured(sequence));
+    const text = hover("[data-message-index]");
+    expect(text).toContain("Driver");
+    expect(text).toContain("Charge Port");
+    expect(text).toContain("plug in");
+  });
+
+  it("uses one testid, so the two diagrams cannot drift apart again", () => {
+    for (const document_ of [graph, sequence]) {
+      const view = renderBody(withStructured(document_));
+      fireEvent.pointerMove(document.querySelector("[data-element-role]")!, { clientX: 1, clientY: 1 });
+      expect(screen.getAllByTestId("diagram-tooltip")).toHaveLength(1);
+      view.unmount();
+    }
+  });
+
+  it("says the same thing to a pointer and to a screen reader", () => {
+    // Two summaries of one thing drift; the title and the tooltip are one string.
+    renderBody(withStructured(sequence));
+    const message = document.querySelector("[data-message-index]")!;
+    const title = message.querySelector("title")!.textContent;
+    fireEvent.pointerMove(message, { clientX: 5, clientY: 5 });
+    expect(screen.getByTestId("diagram-tooltip").textContent).toBe(title);
   });
 });

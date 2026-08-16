@@ -107,6 +107,19 @@ export type StructuredExchangeData = StructuredGraphData | StructuredSequenceDat
 export interface StructuredRemoval {
   type: "element" | "relationship";
   ref: string;
+  /**
+   * What is being removed, described so a reader can recognise it.
+   *
+   * `ref` identifies; these describe, and nothing here is interpreted — the same
+   * split the rest of the contract uses. They matter because this application holds
+   * one document and not the authority's model, so it cannot look up what a
+   * reference stood for. Without them the approval gate shows "relationship: MSG-9"
+   * and asks a reader to approve deleting something they cannot see.
+   */
+  label?: string;
+  kind?: string;
+  from?: string;
+  to?: string;
 }
 
 /**
