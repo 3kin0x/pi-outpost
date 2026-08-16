@@ -151,6 +151,29 @@ node_modules/pi-outpost/dist/contract/
 
 In this repository the same two live at `shared/schemas/` and `shared/conformance/`.
 
+## Where the document has to be put
+
+On `details` of a tool result. That is the whole channel, and it is deliberate:
+`details` is filled by a tool's implementation and never by the model, so a proposal
+shown as an approval gate was produced by code rather than written by the thing whose
+work is being reviewed.
+
+```js
+return {
+  content: [{ type: "text", text: "Billing now calls Ledger. 12 elements, 1 added." }],
+  details: envelope,
+};
+```
+
+**There is no MCP path.** The agent SDK underneath has no MCP client — it says so
+outright and points anyone who wants one at writing an extension. So if you are
+bridging a model-context server into this, the bridge is yours to write, and it meets
+this contract by returning the envelope in `details` of its own tool result. Nothing
+here reads MCP's `structuredContent`, because nothing in this process produces it.
+
+Relay it unchanged. A bridge that reshapes what it passes through is a second
+producer, and the reader would be approving its work rather than the original.
+
 ## What is deliberately not here
 
 **Delivery.** How an approved proposal reaches the authority that applies it, and what

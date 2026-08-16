@@ -285,8 +285,19 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
  * are not envelopes, so the wire does not carry every extension's private metadata.
  *
  * Serialized rather than passed through as an object: an approved proposal is handed
- * on byte for byte from here, and a value that has been parsed and re-serialised
- * again is no longer the document that was validated.
+ * on from here exactly as validated, and a value parsed and re-serialised again is no
+ * longer the value the reader approved.
+ *
+ * **The supported channel is `details` on a tool result, and only that.** It is
+ * filled by a tool's implementation rather than by the model, so a document arriving
+ * here was produced by code and never written by the thing being reviewed.
+ *
+ * This agent SDK has no MCP client — its README says so outright and recommends an
+ * extension for anyone who wants one. So there is no MCP transport here to align a
+ * second channel with, and accepting MCP's `structuredContent` today would be
+ * guessing at a shape nothing in this process produces. A bridge, if someone writes
+ * one as an extension, meets this contract by putting the envelope in `details`;
+ * that is a requirement on the bridge, not a second path through here.
  */
 export function structuredExchangeField(details: unknown): { structured?: string } {
   if (details === null || typeof details !== "object") return {};

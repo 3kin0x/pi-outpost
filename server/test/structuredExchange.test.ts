@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { Check } from "typebox/value";
 import { STRUCTURED_EXCHANGE_CEILINGS, STRUCTURED_EXCHANGE_SCHEMA_V1, PROPOSABLE_KINDS } from "@pi-outpost/shared/structured-exchange";
+import { structuredExchangeField } from "../src/convert.ts";
 
 const SCHEMA_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -219,5 +220,57 @@ describe("the skill's copy of the schema", () => {
     );
 
     assert.equal(beside, contract, "the skill's schema copy has drifted from the contract");
+  });
+});
+
+/**
+ * How a document gets from a producer into the reader's hands.
+ *
+ * The channel is `details` on a tool result. It matters that this is the only one:
+ * `details` is filled by a tool's implementation and never by the model, so a
+ * proposal shown as an approval gate was produced by code rather than written by the
+ * thing whose work is being reviewed.
+ *
+ * This SDK has no MCP client at all — its README recommends writing an extension for
+ * anyone who wants one — so an external producer reaches this the same way anything
+ * else does: through a tool, in-process, putting the envelope in `details`. That is
+ * the contract a bridge would have to meet, and it is exercised here as a bridge
+ * would exercise it.
+ */
+describe("the channel a document arrives on", () => {
+  const envelope = {
+    schema: STRUCTURED_EXCHANGE_SCHEMA_V1,
+    kind: "graph",
+    data: { nodes: [{ id: "a", label: "A", kind: "block" }], edges: [] },
+  };
+
+  test("carries a document a tool put in details", () => {
+    const { structured } = structuredExchangeField(envelope);
+    assert.equal(typeof structured, "string");
+    assert.deepEqual(JSON.parse(structured!), envelope);
+  });
+
+  test("carries one an external producer handed to a bridging tool unchanged", () => {
+    // What a bridge does: receives an envelope from elsewhere and returns it as its
+    // own tool result's details, without reshaping it.
+    const fromOutside = JSON.parse(JSON.stringify({ ...envelope, target: "artifact-1" }));
+    const { structured } = structuredExchangeField(fromOutside);
+
+    assert.deepEqual(JSON.parse(structured!), fromOutside, "a bridge must not be able to alter what it relays");
+  });
+
+  test("ignores details that are not a structured-exchange document", () => {
+    // Every tool in the process fills details with something; this must claim only
+    // what declares itself.
+    for (const other of [undefined, null, "text", 42, {}, { schema: "urn:something-else:1" }, { schema: 7 }]) {
+      assert.deepEqual(structuredExchangeField(other), {}, `should ignore ${JSON.stringify(other)}`);
+    }
+  });
+
+  test("claims a future version of the contract too, rather than going silent on it", () => {
+    // A version this build does not understand must still reach the reader as a
+    // refusal with a reason, not vanish into the raw output.
+    const { structured } = structuredExchangeField({ ...envelope, schema: "urn:structured-exchange:99" });
+    assert.equal(typeof structured, "string");
   });
 });

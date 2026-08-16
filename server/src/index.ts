@@ -510,9 +510,18 @@ const hasIndexHtml = (candidate: string) =>
  */
 const skillRoots = [path.resolve(import.meta.dirname, "./skills"), path.resolve(import.meta.dirname, "../../skills")];
 /**
- * One entry per skill, not the directory holding them: the SDK takes a path to a
- * skill — a directory with a SKILL.md in it — and silently finds nothing when
- * handed their parent.
+ * One entry per skill rather than the directory holding them.
+ *
+ * The loader accepts either — it recurses into a directory that has no SKILL.md of
+ * its own — so this is a preference, not a requirement, and an earlier comment here
+ * claiming the parent "silently finds nothing" was simply wrong. Naming each skill
+ * keeps the non-skill files that live beside them (a README) from being read as
+ * candidates and reported as skills missing a description.
+ *
+ * Proven to load, and to stay off under noSkills, by server/test/bundledSkill.test.ts.
+ * Note that skills do not surface as slash commands in this SDK: they are offered to
+ * the model, so "absent from the command list" is not evidence that one failed to
+ * load.
  */
 const BUNDLED_SKILLS: string[] = [];
 for (const root of skillRoots) {

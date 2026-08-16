@@ -92,6 +92,31 @@ signtool sign /fd SHA256 pi-outpost.exe   # re-sign after injection
 
 > This is the legacy workflow. Prefer `--build-sea` (above) — no external tools needed.
 
+## Skills are not inside the executable
+
+The npm package ships the bundled skills under `dist/skills/`, and the server finds
+them on the filesystem beside itself. The SEA build inlines the server and the web UI
+into one file and **does not embed that directory**, so the standalone executable
+starts with no bundled skills.
+
+This degrades rather than breaks. `present_structure` and the rest of the tools work
+exactly as they do elsewhere; what is missing is the instructions that tell the agent
+what a valid structured-exchange document looks like, so it is more likely to send
+one that gets refused and to need a second attempt.
+
+To give the executable its skills, put them somewhere on disk and name that directory
+in the config:
+
+```json
+{
+  "skillPaths": ["./skills"]
+}
+```
+
+Copy `node_modules/pi-outpost/dist/skills/` next to the executable to get the ones the
+package would have provided. A path given this way is loaded even under `noSkills`,
+which is deliberate on the SDK's part but worth knowing.
+
 ## Extension loading with the SEA build
 
 Config.`extensionPaths` loads `.ts`/`.mjs` files via the pi SDK's jiti
