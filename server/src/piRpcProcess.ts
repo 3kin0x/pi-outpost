@@ -75,7 +75,8 @@ export async function probeAgentLabel(executable: string, cwd: string, timeoutMs
   const version = await new Promise<string | undefined>((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(executable, ["--version"], { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+      // Killed on the timeout path, so it needs the same coverage exclusion.
+      child = spawn(executable, ["--version"], { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
     } catch {
       return resolve(undefined);
     }
@@ -119,6 +120,29 @@ let nextCommandId = 0;
  * So both are set: the canonical one, and one derived from the executable's name.
  * A variable the child does not read costs nothing; the setting being ignored does.
  */
+/**
+ * The child's environment: ours, minus the things that are ours alone.
+ *
+ * `NODE_V8_COVERAGE` is the one that bites. Node sets it for the whole process
+ * tree when a test run asks for coverage, so an inherited value makes the agent
+ * child write its own coverage JSON into the parent's collection directory — and
+ * this class kills children, by design, on every failure and on shutdown. A child
+ * killed mid-write leaves a truncated file, and the parent's reporter then dies
+ * parsing it: a green test run reported as a failed one, with the real failure
+ * ("Could not report code coverage", a JSON syntax error at a buffer boundary)
+ * naming nothing that would lead you here.
+ *
+ * It is set to the empty string rather than deleted, which looks wrong and is not:
+ * Node re-injects the variable into a child from its own coverage state, so a
+ * `delete` on the env object is silently undone and the child writes anyway. An
+ * explicit empty value survives, and collects nothing.
+ *
+ * The agent is a separate program besides; its coverage was never ours to collect.
+ */
+function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return { ...process.env, NODE_V8_COVERAGE: "", ...extra };
+}
+
 export function agentDirEnv(executable: string, agentDir: string): Record<string, string> {
   const env: Record<string, string> = { PI_CODING_AGENT_DIR: agentDir };
   const base = (executable.split(/[\\/]/).pop() ?? "").replace(/\.(exe|cmd|bat|js|mjs)$/i, "");
@@ -166,13 +190,12 @@ export class PiRpcProcess {
       cwd: options.cwd,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
+      env: childEnv({
         // A deliberate environment, not an inherited surprise: this is the one way
         // to point the child at pi-outpost's own agent directory.
         ...(options.agentDir ? agentDirEnv(options.executable, options.agentDir) : {}),
         ...options.env,
-      },
+      }),
     });
 
     this.child.on("error", (error) => this.fail(`could not start "${options.executable}": ${error.message}`));

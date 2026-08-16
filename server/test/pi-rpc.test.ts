@@ -198,6 +198,19 @@ describe("RpcRuntimeStarts", () => {
     );
   });
 
+  /**
+   * The child is killed on every failure and on shutdown, so it must not be
+   * collecting coverage into the parent's directory: a truncated file there makes
+   * the reporter fail a run whose tests all passed, blaming a JSON syntax error at
+   * a buffer boundary — which names nothing that leads back to here. It cost a CI
+   * run to find once.
+   */
+  test("keeps the child out of the parent's coverage collection", async () => {
+    const { launchLog } = await startFake({});
+    const launch = JSON.parse(await readFile(launchLog, "utf8"));
+    assert.equal(launch.coverageDir, null, "NODE_V8_COVERAGE must not reach the agent child");
+  });
+
   test("reports an actionable startup failure instead of falling back", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-outpost-rpc-startup-"));
     roots.add(root);
@@ -474,7 +487,11 @@ describe("RpcProcessFailureIsContained", () => {
   });
 
   test("force-terminates only its child when SIGTERM is ignored", async () => {
-    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    // Same reason as childEnv in piRpcProcess.ts, and the same "" rather than a
+    // delete: this node process is killed at the end, and an inherited
+    // NODE_V8_COVERAGE would leave a half-written coverage file behind.
+    const bystanderEnv = { ...process.env, NODE_V8_COVERAGE: "" };
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", env: bystanderEnv });
     const { runtime } = await startFake({ ignoreSigterm: true }, { shutdownGraceMs: 40 });
     try {
       const started = Date.now();

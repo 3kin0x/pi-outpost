@@ -26,6 +26,10 @@ const launch = {
   // The settings pi-outpost's own tools extension reads. Logged so a test can
   // prove the child was told where the workspace is, not merely handed the file.
   toolsEnv: process.env.PI_OUTPOST_TOOLS,
+  // Must be empty or absent: a child that inherits a real path writes into the
+  // parent's coverage directory, and this child gets killed. Node re-injects the
+  // variable, so "" is the disabled state, not the missing one.
+  coverageDir: process.env.NODE_V8_COVERAGE || null,
   pid: process.pid,
 };
 if (config.launchLog) fs.writeFileSync(config.launchLog, JSON.stringify(launch, null, 2));
