@@ -23,6 +23,13 @@ import { type CliOptions, userConfigDir } from "./config.ts";
  */
 const starterConfig = (global: boolean) => ({
   ...(global ? {} : { cwd: "." }),
+  // Written out rather than left implicit: the runtime decides what actually
+  // executes on this host, and a setting nobody knows exists is a setting nobody
+  // audits. "embedded" is both the default and the safe end — switching to "rpc"
+  // means naming an executable, which `--help` explains.
+  agentRuntime: {
+    mode: "embedded",
+  },
   sandbox: {
     ...(global ? {} : { root: "." }),
     allowWrite: false,
@@ -86,6 +93,45 @@ The auth token has no flag on purpose (argv is world-readable): use
 $PI_OUTPOST_TOKEN or the file's server.token.
 
 <user config dir> is $XDG_CONFIG_HOME/pi-outpost, or ~/.config/pi-outpost.
+
+Agent runtime
+  By default pi-outpost runs the pi agent in its own process (the embedded SDK).
+  Set "agentRuntime" in the config file to run a supervised "pi --mode rpc" child
+  process instead — to match an existing pi installation, or to isolate a crash:
+
+    "agentRuntime": { "mode": "rpc", "executable": "pi", "args": [] }
+
+  pi-outpost always appends "--mode rpc" itself and derives "--session-dir" from
+  "agentDir", so "args" may not contain either, nor any flag that would make the
+  child print something and exit (--print, --export, --list-models, --version).
+  "--tools" and "--system-prompt" are refused too: those come from "tools" and
+  "systemPrompt", and a second one on the line would decide the answer instead.
+  There is no shell: "args" is an argument vector, so nothing is re-parsed.
+
+  The rest of the configuration is passed to the child as flags, so the same file
+  describes the same agent on either runtime: skillPaths, extensionPaths,
+  extensionScripts, promptPaths, their noSkills/noExtensions/noPromptTemplates
+  switches, tools, systemPrompt and appendSystemPrompt. pi-outpost's own tools
+  (present_structure and the pdf/docx/xlsx/pptx extractors) travel as an
+  extension it loads into the child, so they work in both modes.
+
+  Pi forks do not all accept the same flags. "pi" and "little-coder" take all of
+  the above; "omp" has no skill-path or prompt-template flag, so it refuses to
+  start when skillPaths or promptPaths are set — the startup error names the
+  setting responsible rather than leaving the resource quietly missing.
+
+  A sandbox cannot: it is a replacement toolset this server builds for its own
+  in-process agent, and nothing on pi's command line confines a child's built-in
+  read/write/bash to a directory. Configuring "sandbox" with "rpc" is refused at
+  startup rather than silently unenforced — isolate the child with a container or
+  a dedicated user instead.
+
+  A failed or absent executable stops startup — pi-outpost never falls back to
+  the embedded runtime, which would silently run something you did not configure.
+  Some features have no RPC equivalent and are refused with a message rather than
+  ignored: storing credentials, declaring a provider, changing the sandbox from
+  the settings menu, tree navigation and editing a past message. Sessions are not
+  auto-titled (rename them by hand), and tool cards use the built-in rendering.
 `;
 
 export class CliError extends Error {}

@@ -14,7 +14,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { parseSerializedStructuredExchange } from "@pi-outpost/shared/structured-exchange/parse";
-import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
+import {
+  checkStructuredExchangeSchema,
+  STRUCTURED_EXCHANGE_SCHEMA,
+  unwrapSchemaModule,
+} from "@pi-outpost/shared/structured-exchange/schema-node";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SUITE = path.resolve(HERE, "../../shared/conformance");
@@ -109,5 +113,49 @@ describe("structured-exchange conformance suite", () => {
       assert.equal(failure.status, 2);
       assert.equal(JSON.parse(failure.stdout).issues[0].rule, "unreadable-input");
     }
+  });
+});
+
+/**
+ * How the schema JSON arrives depends on who loaded this module, and one loader
+ * that matters is not Node's.
+ *
+ * pi loads an extension through jiti, which is how `present_structure` reaches an
+ * RPC child. jiti's interop adds a `default` property pointing back at the object
+ * it decorates. `default` is a JSON Schema keyword, so the compiler descends into
+ * it, meets the whole schema again, and dies of stack exhaustion — every document
+ * refused with "Maximum call stack size exceeded" and nothing wrong with any of
+ * them. Found by driving a real `pi --mode rpc` child, not by any unit test.
+ */
+describe("schema module interop", () => {
+  test("drops a self-referential default the loader added", () => {
+    const decorated: Record<string, unknown> = { $id: "urn:test", type: "object" };
+    decorated.default = decorated;
+    const unwrapped = unwrapSchemaModule(decorated);
+    assert.equal("default" in unwrapped, false);
+    assert.equal(unwrapped.$id, "urn:test");
+  });
+
+  test("unwraps a namespace whose default holds the document", () => {
+    const document = { $id: "urn:test" };
+    assert.deepEqual(unwrapSchemaModule({ default: document }), document);
+  });
+
+  test("keeps a genuine default keyword, which is part of the schema", () => {
+    assert.deepEqual(unwrapSchemaModule({ type: "string", default: "hello" }), { type: "string", default: "hello" });
+  });
+
+  test("the schema actually compiled against carries no self-reference", () => {
+    const schema = STRUCTURED_EXCHANGE_SCHEMA as Record<string, unknown>;
+    assert.notEqual(schema.default, schema);
+    // And it still validates, which is what the recursion took away.
+    assert.deepEqual(
+      checkStructuredExchangeSchema({
+        schema: "urn:structured-exchange:1",
+        kind: "graph",
+        data: { nodes: [{ id: "a", label: "A" }], edges: [] },
+      }),
+      [],
+    );
   });
 });

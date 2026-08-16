@@ -122,6 +122,109 @@ export interface PdfConfig {
 /** Default PDF ceiling — 25 MiB, well above the 1 MiB that governs other files. */
 export const DEFAULT_PDF_MAX_BYTES = 26_214_400;
 
+export const AGENT_RUNTIME_MODES = ["embedded", "rpc"] as const;
+export type AgentRuntimeMode = (typeof AGENT_RUNTIME_MODES)[number];
+
+/**
+ * Which agent runtime serves the browser. `embedded` (the default) keeps a Pi SDK
+ * session in this process; `rpc` supervises a `pi --mode rpc` child.
+ *
+ * The mode flag is pi-outpost's to pass, never the operator's: a configuration
+ * that could put the child in a different mode would be a server that silently
+ * stops serving. `args` is an argument *vector*, not a command line — no shell
+ * parses it, so a value with spaces is one argument and nothing interpolates.
+ */
+export interface AgentRuntimeConfig {
+  mode: AgentRuntimeMode;
+  /** Pi executable to spawn. Required when mode is "rpc". */
+  executable?: string;
+  /** Extra fixed arguments, passed before pi-outpost's own `--mode rpc`. */
+  args: string[];
+  /** How long the child has to answer its first RPC command before startup fails. */
+  startupTimeoutMs: number;
+  /** How long one correlated RPC command may stay pending. */
+  commandTimeoutMs: number;
+  /** Grace period between asking the child to stop and killing it. */
+  shutdownGraceMs: number;
+}
+
+/**
+ * Arguments pi-outpost owns and an operator may not set.
+ *
+ * Two kinds, and both would break the contract rather than merely surprise:
+ * anything that moves the child off RPC mode (it would stop answering the
+ * protocol this server speaks), and the session directory (pi-outpost resolves it
+ * from `agentDir`, and two answers would put the browser's session list and the
+ * agent's own store in different places).
+ */
+const RESERVED_RPC_ARGS = new Map<string, string>([
+  ["--mode", "pi-outpost always runs the child in RPC mode"],
+  ["--print", "it would make the child process one prompt and exit instead of serving RPC"],
+  ["-p", "it would make the child process one prompt and exit instead of serving RPC"],
+  ["--export", "it would make the child export a session and exit instead of serving RPC"],
+  ["--list-models", "it would make the child print models and exit instead of serving RPC"],
+  ["--help", "it would make the child print help and exit instead of serving RPC"],
+  ["-h", "it would make the child print help and exit instead of serving RPC"],
+  ["--version", "it would make the child print its version and exit instead of serving RPC"],
+  ["-v", "it would make the child print its version and exit instead of serving RPC"],
+  ["--session-dir", 'pi-outpost derives the session directory from "agentDir"'],
+  // These carry a *replacement* value rather than adding to a list, so a second one
+  // on the line silently decides the toolset or the system prompt — and the config
+  // key that appears to set them would be the one being ignored. Additive flags
+  // (--skill, --extension, --prompt-template, --append-system-prompt) stay allowed:
+  // one more of those is one more resource, not a different answer.
+  ["--tools", 'pi-outpost derives the tool allowlist from "tools"'],
+  ["-t", 'pi-outpost derives the tool allowlist from "tools"'],
+  ["--system-prompt", 'pi-outpost derives the system prompt from "systemPrompt"'],
+]);
+
+/**
+ * Flags whose value must never reach a log line.
+ *
+ * `--api-key` is pi's own. The rest are the names other agents and gateways use for
+ * the same thing: the argument vector is the operator's, a fork is free to invent a
+ * spelling, and a secret printed once at startup is a secret in the scrollback and
+ * in whatever collects it. Matching by name is a guess, so it errs toward hiding.
+ */
+const SECRET_RPC_ARGS = new Set([
+  "--api-key",
+  "--apikey",
+  "--token",
+  "--auth",
+  "--auth-token",
+  "--access-token",
+  "--secret",
+  "--password",
+]);
+
+/** Loading models, extensions and skills takes seconds on a cold start; a minute is generous. */
+export const DEFAULT_RPC_STARTUP_TIMEOUT_MS = 60_000;
+/** A compaction is the slowest correlated command; anything past this is a hung child. */
+export const DEFAULT_RPC_COMMAND_TIMEOUT_MS = 300_000;
+/** How long the child gets to exit on its own before it is killed. */
+export const DEFAULT_RPC_SHUTDOWN_GRACE_MS = 5_000;
+
+/** The executable and its arguments, with any credential replaced by a placeholder. */
+export function redactRpcCommand(runtime: AgentRuntimeConfig): string {
+  const parts: string[] = [runtime.executable ?? ""];
+  let redactNext = false;
+  for (const arg of runtime.args) {
+    if (redactNext) {
+      parts.push("<redacted>");
+      redactNext = false;
+      continue;
+    }
+    const [name] = arg.split("=", 1);
+    if (SECRET_RPC_ARGS.has(name)) {
+      parts.push(arg.includes("=") ? `${name}=<redacted>` : arg);
+      redactNext = !arg.includes("=");
+      continue;
+    }
+    parts.push(arg);
+  }
+  return [...parts, "--mode", "rpc"].join(" ");
+}
+
 export interface AppConfig {
   /** The file this configuration was read from — the one of four locations that won. */
   configFile: string;
@@ -129,6 +232,8 @@ export interface AppConfig {
   cwd: string;
   /** Own config dir (models/auth/settings/sessions). Default: ~/.pi/agent. */
   agentDir?: string;
+  /** Which agent runtime serves the browser. Defaults to the embedded SDK session. */
+  agentRuntime: AgentRuntimeConfig;
   /** File-scoped sandbox. When set, built-in tools are replaced by scoped ones. */
   sandbox?: SandboxConfig;
   /** Which sandbox fields the user's settings menu may not change. */
@@ -296,10 +401,11 @@ export function findConfigFile(
   return found;
 }
 
-export function optionalString(raw: Record<string, unknown>, key: string): string | undefined {
+/** `label` names the setting the way the user wrote it, for keys nested under a block. */
+export function optionalString(raw: Record<string, unknown>, key: string, label = key): string | undefined {
   const value = raw[key];
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || value === "") fail(`"${key}" must be a non-empty string`);
+  if (typeof value !== "string" || value === "") fail(`"${label}" must be a non-empty string`);
   return value;
 }
 
@@ -335,6 +441,16 @@ export function optionalModelList(
   });
 }
 
+/** `label` names the setting the way the user wrote it (`"agentRuntime.commandTimeoutMs"`). */
+export function positiveInteger(raw: Record<string, unknown>, key: string, fallback: number, label = key): number {
+  const value = raw[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    fail(`"${label}" must be a positive integer`);
+  }
+  return value;
+}
+
 export function asObject(value: unknown, key: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     fail(`"${key}" must be an object`);
@@ -356,6 +472,13 @@ export function loadConfig(
   const config: AppConfig = {
     configFile: filePath,
     cwd: launchDir,
+    agentRuntime: {
+      mode: "embedded",
+      args: [],
+      startupTimeoutMs: DEFAULT_RPC_STARTUP_TIMEOUT_MS,
+      commandTimeoutMs: DEFAULT_RPC_COMMAND_TIMEOUT_MS,
+      shutdownGraceMs: DEFAULT_RPC_SHUTDOWN_GRACE_MS,
+    },
     noExtensions: false,
     extensionPaths: [],
     extensionScripts: [],
@@ -453,6 +576,56 @@ export function loadConfig(
       allowBash: optionalBoolean(locks, "allowBash", false),
       writableRoot: optionalBoolean(locks, "writableRoot", false),
     };
+  }
+
+  if (raw.agentRuntime !== undefined) {
+    const runtime = asObject(raw.agentRuntime, "agentRuntime");
+    const mode = optionalString(runtime, "mode", "agentRuntime.mode") ?? "embedded";
+    if (!AGENT_RUNTIME_MODES.includes(mode as AgentRuntimeMode)) {
+      fail(`"agentRuntime.mode" must be one of ${AGENT_RUNTIME_MODES.join(", ")} (got "${mode}")`);
+    }
+    config.agentRuntime.mode = mode as AgentRuntimeMode;
+
+    // A relative executable is a path the operator typed, so it resolves against
+    // their config file like every other path in it. A bare name (no separator)
+    // is a PATH lookup and must stay one.
+    const executable = optionalString(runtime, "executable", "agentRuntime.executable");
+    if (executable !== undefined) {
+      config.agentRuntime.executable = executable.includes("/") || executable.includes("\\") ? resolve(executable) : executable;
+    }
+    config.agentRuntime.args = optionalStringArray(runtime, "args") ?? [];
+    for (const arg of config.agentRuntime.args) {
+      const name = arg.split("=", 1)[0];
+      const reason = RESERVED_RPC_ARGS.get(name);
+      if (reason !== undefined) {
+        fail(`"agentRuntime.args" must not contain "${name}": ${reason}`);
+      }
+    }
+    const timeout = (key: "startupTimeoutMs" | "commandTimeoutMs" | "shutdownGraceMs") =>
+      positiveInteger(runtime, key, config.agentRuntime[key], `agentRuntime.${key}`);
+    config.agentRuntime.startupTimeoutMs = timeout("startupTimeoutMs");
+    config.agentRuntime.commandTimeoutMs = timeout("commandTimeoutMs");
+    config.agentRuntime.shutdownGraceMs = timeout("shutdownGraceMs");
+  }
+  // Checked after the block so an `executable` set with no `mode` (or the reverse)
+  // is caught whether or not the operator wrote both keys.
+  if (config.agentRuntime.mode === "rpc" && config.agentRuntime.executable === undefined) {
+    fail(`"agentRuntime.executable" is required when "agentRuntime.mode" is "rpc"`);
+  }
+  /**
+   * The sandbox is not a setting the agent obeys — it is a *replacement toolset*
+   * this server builds and hands to the session (see the `sandboxedTools` branch
+   * in index.ts). An RPC child builds its own tools from its own flags, and pi has
+   * no path-confinement flag to forward, so the same config that confines the
+   * embedded agent to one directory would leave the child with unrestricted read,
+   * write and bash. Refusing the pair is the only honest answer: a sandbox that
+   * silently does not apply is worse than no sandbox, because it is trusted.
+   */
+  if (config.agentRuntime.mode === "rpc" && config.sandbox !== undefined) {
+    fail(
+      `"sandbox" cannot be enforced when "agentRuntime.mode" is "rpc": the sandbox replaces this server's own file tools, ` +
+        `and the RPC child builds its own. Use the embedded runtime, or confine the child by other means (a container, a dedicated user).`,
+    );
   }
 
   config.tools = optionalStringArray(raw, "tools");
@@ -560,6 +733,13 @@ export function loadConfig(
   requireTokenOffLoopback(config);
 
   console.log(`[config] loaded ${filePath}`);
+  // The runtime decides what actually executes on this host, so say it every start —
+  // with the command redacted, since an argument vector can carry an API key.
+  console.log(
+    config.agentRuntime.mode === "rpc"
+      ? `[config] agent runtime rpc: ${redactRpcCommand(config.agentRuntime)}`
+      : `[config] agent runtime embedded`,
+  );
   // The sandbox is the security boundary, and it is now reachable from a flag and a
   // variable as well as the file — so state what is actually enforced, every start.
   if (config.sandbox) {

@@ -24,3 +24,24 @@ session/agent directory setting SHALL make startup fail with an error naming the
 #### Scenario: InvalidRpcConfiguration
 - **WHEN** RPC runtime configuration has an unknown mode, empty executable, or prohibited override argument
 - **THEN** startup fails before the server accepts clients and names the configuration error
+
+### Requirement: RpcRuntimeServesTheConfiguredResources
+
+The RPC runtime SHALL give the child process the same resource configuration the embedded runtime
+gives its session: skill, extension and prompt-template paths, their discovery switches, the tool
+allowlist, and the system prompt. pi-outpost's own tools SHALL be available to the child, so an
+agent does not lose them by changing runtime.
+
+A configured sandbox SHALL NOT be silently unenforced. Because the sandbox is a replacement toolset
+built in this process rather than a setting the agent obeys, selecting it together with the RPC
+runtime SHALL fail at configuration load with an error naming both settings.
+
+#### Scenario: RpcChildReceivesConfiguredResources
+- **GIVEN** a configuration selecting `rpc` that also names skills, extensions, prompt templates and a tool allowlist
+- **WHEN** pi-outpost starts the child
+- **THEN** the child is launched with those resources, and with pi-outpost's own tools available to the agent
+
+#### Scenario: SandboxWithRpcIsRefused
+- **GIVEN** a configuration selecting `rpc` together with a sandbox
+- **WHEN** the configuration is loaded
+- **THEN** startup fails naming both settings rather than running the child with unconfined tools

@@ -171,7 +171,7 @@ export interface AgentState {
   fileOperation: FileOperationState | null;
   extensionPaths: string[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
-  versions: { piOutpost: string; piSdk: string } | null;
+  versions: { piOutpost: string; piSdk?: string; agent?: string } | null;
   gitAvailable: boolean;
   gitStatus: GitStatusState | null;
   /** Worktree-vs-HEAD contents for the viewer's diff toggle. */

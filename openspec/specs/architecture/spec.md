@@ -9,10 +9,12 @@ This document describes the architectural patterns and structure of the system.
 
 ## Architecture Style
 
-Client/server over a typed WebSocket protocol. A Fastify server (`server/`) embeds a single
-pi AgentSession and broadcasts its events to every connected client; the React frontend
-(`web/`) is a pure view over that protocol. The shared package (`shared/`) defines the wire
-protocol both sides compile against. An embed package (`embed/`) wraps the frontend in a
+Client/server over a typed WebSocket protocol. A Fastify server (`server/`) owns a single agent
+runtime and broadcasts its events to every connected client; the React frontend (`web/`) is a pure
+view over that protocol. The runtime is either an embedded pi AgentSession in the server's own
+process or a supervised `pi --mode rpc` child — one boundary (`server/src/agentRuntime.ts`) serves
+both, and which one is running is invisible to the frontend. The shared package (`shared/`) defines
+the wire protocol both sides compile against. An embed package (`embed/`) wraps the frontend in a
 Shadow-DOM widget for host applications.
 
 ## Requirements
@@ -54,6 +56,26 @@ The system SHALL implement security via network scoping, an optional shared toke
 - **WHEN** an agent tool tries to read or write outside that root (including via symlinks)
 - **THEN** the tool call fails with an error
 
+### Requirement: AgentRuntimeBoundary
+
+The server SHALL own a single agent-runtime boundary that translates between the typed web protocol
+and either an embedded Pi SDK session or a configured Pi RPC subprocess. The frontend SHALL remain
+unaware of the selected runtime and SHALL not gain direct process or Pi protocol access.
+
+The runtime boundary SHALL preserve the server's ownership of browser authentication, origin checks,
+file-browser operations, and client broadcasting. Selecting RPC SHALL not expose the RPC standard
+streams on the network.
+
+#### Scenario: BrowserProtocolIsRuntimeIndependent
+- **GIVEN** the server starts with either supported runtime
+- **WHEN** the frontend sends a supported agent message
+- **THEN** it uses the same typed WebSocket contract and receives the same category of observable state
+
+#### Scenario: RpcStdioIsNotNetworkAccessible
+- **GIVEN** the server runs a Pi RPC subprocess
+- **WHEN** a remote network client connects to pi-outpost
+- **THEN** it cannot connect directly to Pi's standard input or output
+
 ## System Diagram
 
 ```mermaid
@@ -61,7 +83,9 @@ graph TB
     Web[React frontend web/] -->|ClientMessage / WS| Server[Fastify server server/]
     Embed[Shadow-DOM widget embed/] --> Web
     Server -->|ServerMessage / WS| Web
-    Server --> SDK[pi AgentSession SDK]
+    Server --> Runtime[Agent runtime boundary]
+    Runtime --> SDK[Embedded pi AgentSession SDK]
+    Runtime --> RPC[Supervised pi --mode rpc child / JSONL over stdio]
     Server --> Sandbox[Sandboxed tools + file browser]
     Shared[shared/ wire protocol] -.types.- Web
     Shared -.types.- Server
@@ -76,8 +100,8 @@ graph TB
 
 ### Server
 
-**Purpose**: Owns the AgentSession, enforces config/sandbox, serves the WebSocket and HTTP endpoints
-**Location**: `server/src/index.ts`, `server/src/convert.ts`, `server/src/config.ts`, `server/src/sandbox.ts`, `server/src/fileBrowser.ts`
+**Purpose**: Owns the agent runtime, enforces config/sandbox, serves the WebSocket and HTTP endpoints
+**Location**: `server/src/index.ts`, `server/src/agentRuntime.ts`, `server/src/embeddedRuntime.ts`, `server/src/rpcRuntime.ts`, `server/src/piRpcProcess.ts`, `server/src/convert.ts`, `server/src/config.ts`, `server/src/sandbox.ts`, `server/src/fileBrowser.ts`
 
 ### Wire Protocol
 
@@ -86,14 +110,16 @@ graph TB
 
 ## Data Flow
 
-Client ClientMessage → WebSocket handler (`server/src/index.ts`) → AgentSession runtime →
-agent events converted to ChatItems (`server/src/convert.ts`) → ServerMessage broadcast to
+Client ClientMessage → WebSocket handler (`server/src/index.ts`) → agent-runtime boundary
+(`server/src/agentRuntime.ts`), served by the embedded SDK session or the RPC child →
+runtime events converted to ChatItems (`server/src/convert.ts`) → ServerMessage broadcast to
 all connected clients → `useAgent` reducer updates React state.
 
 ## External Integrations
 
 | System | Purpose |
 |--------|---------|
-| pi coding agent SDK | Embedded AgentSession (models, tools, extensions, sessions) |
-| Model provider APIs | LLM calls, made through the SDK |
+| pi coding agent SDK | Embedded AgentSession (models, tools, extensions, sessions); also the session store and credential status under the RPC runtime |
+| pi executable | Optional supervised `pi --mode rpc` child, spoken to as LF-delimited JSONL over stdio |
+| Model provider APIs | LLM calls, made by whichever runtime is active |
 | File System | Sandboxed agent tools, file browser, session storage |
