@@ -2041,3 +2041,142 @@ describe("a moved box takes its relationships with it", () => {
     expect(after[2]).toBe(before[2]);
   });
 });
+
+describe("what leaves the application is a figure, not a control", () => {
+  const graph = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "A", kind: "block" },
+        { id: "b", label: "B", kind: "store" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "calls" }],
+    },
+  };
+
+  it("offers the diagram as a file, because a document will not take it pasted", () => {
+    renderBody(withStructured(graph));
+    const button = screen.getByText("⤓ download SVG");
+    expect(button.getAttribute("title")).toMatch(/insert it as a picture/i);
+  });
+
+  it("leaves no cursor or touch-action in the markup it hands over", () => {
+    // Both exist so the gestures work, and neither means anything in a file: there is
+    // no pointer in a document and nothing there to drag.
+    renderBody(withStructured(graph));
+    const onScreen = document.querySelector('svg[role="img"]')! as SVGElement;
+    expect(onScreen.getAttribute("style")).toContain("cursor");
+
+    // The same element, prepared for export
+    const clean = onScreen.cloneNode(true) as SVGElement;
+    for (const element of [clean, ...clean.querySelectorAll<SVGElement>("[style]")]) {
+      element.style.removeProperty("cursor");
+      element.style.removeProperty("touch-action");
+      if (element.getAttribute("style") === "") element.removeAttribute("style");
+    }
+    const markup = new XMLSerializer().serializeToString(clean);
+    expect(markup).not.toContain("cursor");
+    expect(markup).not.toContain("touch-action");
+    // …and nothing else was lost with them
+    expect(markup).toContain('xmlns="http://www.w3.org/2000/svg"');
+    expect(markup).toContain("diagram-legend");
+  });
+
+  it("does not disturb the diagram on screen when exporting it", () => {
+    renderBody(withStructured(graph));
+    const before = document.querySelector('svg[role="img"]')!.outerHTML;
+    fireEvent.click(screen.getByText("copy markup"));
+    expect(document.querySelector('svg[role="img"]')!.outerHTML).toBe(before);
+  });
+});
+
+describe("a box holds everything printed in it", () => {
+  /**
+   * A change is printed inside the box and reads "label: before → after", routinely
+   * longer than the name above it. Sized on the name alone, a renamed participant
+   * showed "label: Onboard Charger → OBC (11" and stopped at the border — which reads
+   * as a truncated value, not as a box that is too small.
+   */
+  const renamed = (kind: "graph" | "sequence") => {
+    const thing = {
+      id: "obc",
+      ref: "EL-2",
+      label: "OBC",
+      set: { label: "Onboard Charger, eleven kilowatts, three phase" },
+    };
+    return kind === "graph"
+      ? { schema: S, kind, target: "t", data: { nodes: [thing], edges: [] } }
+      : { schema: S, kind, target: "t", data: { participants: [thing], messages: [] } };
+  };
+
+  /** Roughly how wide the printed change is, at the size it is printed. */
+  const printedWidth = (text: string) => text.length * 5.4;
+
+  for (const kind of ["graph", "sequence"] as const) {
+    it(`sizes a ${kind} box to its change, not only to its name`, () => {
+      renderBody(withStructured(renamed(kind)));
+
+      const written = [...document.querySelectorAll('[data-testid="field-changes"]')].map((t) => t.textContent!);
+      const rect = document.querySelector("[data-element-role] rect")!;
+      const boxWidth = Number(rect.getAttribute("width"));
+
+      // Nothing lost: the whole change is still readable, across however many lines
+      expect(written.join(" ")).toContain("Onboard Charger, eleven kilowatts, three phase");
+
+      for (const line of written) {
+        expect(
+          printedWidth(line),
+          `"${line}" needs ~${Math.round(printedWidth(line))}px and the box is ${boxWidth}px`,
+        ).toBeLessThanOrEqual(boxWidth);
+      }
+    });
+  }
+
+  it("does not widen a box that has no change to show", () => {
+    // The change only pays for itself when there is one.
+    renderBody(
+      withStructured({ schema: S, kind: "graph", data: { nodes: [{ id: "a", label: "OBC" }], edges: [] } }),
+    );
+    const width = Number(document.querySelector("[data-element-role] rect")!.getAttribute("width"));
+    expect(width).toBeLessThanOrEqual(140);
+  });
+});
+
+describe("what the proposal note claims", () => {
+  it("does not claim that only what changes is shown, because that is not true", () => {
+    /**
+     * It was true before a producer could include an element for context, and the
+     * sentence outlived the semantics. A reader told "only what changes is shown",
+     * looking at a participant drawn plainly beside two that are marked, has been
+     * told the wrong thing about it.
+     */
+    const withContext = {
+      schema: S,
+      kind: "graph",
+      target: "artifact-1",
+      data: {
+        nodes: [
+          { id: "keep", ref: "EL-1", label: "Existing, unchanged, shown so you can place the rest" },
+          { id: "fresh", label: "Brand new" },
+        ],
+        edges: [],
+      },
+    };
+    renderBody(withStructured(withContext));
+
+    const note = screen.getByTestId("structured-proposal-note").textContent!;
+    expect(note).not.toContain("Only what changes is shown");
+    expect(note).toContain("not mentioned is left as it is");
+    expect(note).toContain("context");
+
+    // And the note is describing something actually on screen
+    expect(document.querySelectorAll('[data-element-role="context"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-element-role="added"]')).toHaveLength(1);
+  });
+
+  it("says nothing of the sort for a new artifact", () => {
+    renderBody(withStructured(newArtifact));
+    expect(screen.queryByTestId("structured-proposal-note")).toBeNull();
+  });
+});

@@ -370,6 +370,8 @@ function Legend({
 /* ── Text measurement and wrapping ──────────────────────────────────────────── */
 
 const CHAR_WIDTH = 6.6;
+/** Changes are printed two points smaller than the label above them. */
+const CHANGE_CHAR_WIDTH = 5.4;
 const BOX_PADDING = 22;
 const LINE_HEIGHT = 15;
 const BOX_VERTICAL_PADDING = 14;
@@ -383,6 +385,29 @@ function boxWidth(labels: string[], min: number, max: number): number {
 }
 
 /**
+ * A box wide enough for everything printed in it, not only its name.
+ *
+ * A change is printed inside the box, in smaller type, and reads "label: before →
+ * after" — routinely longer than the name above it. Sized on the name alone, a
+ * renamed participant showed "label: Onboard Charger → OBC (11" and stopped at the
+ * border, which reads as a truncated value rather than a missing box.
+ */
+function boxWidthWithChanges(
+  labels: string[],
+  changes: ReturnType<typeof fieldChanges>,
+  min: number,
+  max: number,
+): number {
+  const longestChange = changes
+    .map((change) => changeText(change).length)
+    .reduce((widest, length) => Math.max(widest, length), 0);
+  return Math.max(
+    boxWidth(labels, min, max),
+    Math.min(longestChange * CHANGE_CHAR_WIDTH + BOX_PADDING, max),
+  );
+}
+
+/**
  * Break a label into lines that fit, by hand.
  *
  * HTML wrapped text for free; native SVG does not, and this is what a portable
@@ -391,15 +416,17 @@ function boxWidth(labels: string[], min: number, max: number): number {
  * in an ellipsis — the full text is on the element's `title`, so nothing is lost,
  * only deferred to a hover.
  */
-export function wrapLabel(label: string, width: number): string[] {
-  const perLine = Math.max(Math.floor((width - BOX_PADDING) / CHAR_WIDTH), 4);
+export function wrapLabel(label: string, width: number, charWidth: number = CHAR_WIDTH): string[] {
+  // The epsilon is not decoration: a box sized for exactly n characters computes
+  // n - 1e-15 here, and floor then wraps a line that fits, one character short.
+  const perLine = Math.max(Math.floor((width - BOX_PADDING) / charWidth + 1e-6), 4);
   const lines: string[] = [];
   // An explicit newline is a break the producer asked for — a name and the thing
   // that qualifies it. Reflowing the two into one paragraph loses what they meant.
   const paragraphs = label.split(/\r?\n/);
   if (paragraphs.length > 1) {
     return paragraphs
-      .flatMap((paragraph) => wrapLabel(paragraph, width))
+      .flatMap((paragraph) => wrapLabel(paragraph, width, charWidth))
       .slice(0, MAX_LINES);
   }
   let current = "";
@@ -424,8 +451,20 @@ export function wrapLabel(label: string, width: number): string[] {
   return kept;
 }
 
-function boxHeight(lines: number, changeLines: number): number {
-  return lines * LINE_HEIGHT + changeLines * LINE_HEIGHT + BOX_VERTICAL_PADDING;
+function boxHeight(lines: number, changes: number): number {
+  return lines * LINE_HEIGHT + changes * LINE_HEIGHT + BOX_VERTICAL_PADDING;
+}
+
+/**
+ * The lines a set of changes takes inside a box of this width.
+ *
+ * A change reads "label: before → after" and is routinely longer than the name above
+ * it. Left on one line it stopped at the border, showing "… → OBC (11" — which reads
+ * as a truncated value rather than as a box too small for it. Widening the box
+ * without bound is the other wrong answer, so it wraps, as the label already does.
+ */
+function changeLines(changes: ReturnType<typeof fieldChanges>, width: number): string[] {
+  return changes.flatMap((change) => wrapLabel(changeText(change), width, CHANGE_CHAR_WIDTH));
 }
 
 /** One change, written the way a reader needs to see it. */
@@ -480,7 +519,8 @@ function Box({
   };
   const outline = role === "added" || role === "changed" ? 2 : 1.2;
   const lines = wrapLabel(label, width);
-  const totalLines = lines.length + changes.length;
+  const written = changeLines(changes, width);
+  const totalLines = lines.length + written.length;
   const firstBaseline = y + height / 2 - ((totalLines - 1) * LINE_HEIGHT) / 2 + 4;
   const textX = anchor === "middle" ? x + width / 2 : x + 8;
 
@@ -504,7 +544,7 @@ function Box({
             {line}
           </tspan>
         ))}
-        {changes.map((change, index) => (
+        {written.map((line, index) => (
           <tspan
             key={`change-${index}`}
             data-testid="field-changes"
@@ -513,7 +553,7 @@ function Box({
             fontSize={9}
             fontWeight={600}
           >
-            {changeText(change)}
+            {line}
           </tspan>
         ))}
       </text>
@@ -810,8 +850,11 @@ function GraphView({
   // what stops one long label from widening every box in the diagram.
   const sizeOf = useCallback(
     (node: StructuredElement) => {
-      const width = boxWidth([displayLabel(node)], 120, 260);
-      return { width, height: boxHeight(wrapLabel(displayLabel(node), width).length, fieldChanges(node).length) };
+      const width = boxWidthWithChanges([displayLabel(node)], fieldChanges(node), 120, 260);
+      return {
+        width,
+        height: boxHeight(wrapLabel(displayLabel(node), width).length, changeLines(fieldChanges(node), width).length),
+      };
     },
     [],
   );
@@ -1300,7 +1343,9 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
   const lifelineX = useMemo(
     () =>
       Math.max(
-        boxWidth(data.participants.map(displayLabel), 110, 220),
+        ...data.participants.map((participant) =>
+          boxWidthWithChanges([displayLabel(participant)], fieldChanges(participant), 110, 240),
+        ),
         boxWidth(
           data.messages.map((message) => message.label ?? ""),
           110,
@@ -1314,7 +1359,13 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
     () =>
       data.participants.reduce(
         (tallest, participant) =>
-          Math.max(tallest, boxHeight(wrapLabel(displayLabel(participant), boxW).length, fieldChanges(participant).length)),
+          Math.max(
+            tallest,
+            boxHeight(
+              wrapLabel(displayLabel(participant), boxW).length,
+              changeLines(fieldChanges(participant), boxW).length,
+            ),
+          ),
         boxHeight(1, 0),
       ) + 8,
     [data.participants, boxW],
@@ -1710,10 +1761,27 @@ function StructuredExchangeBody({ item }: PresentationProps) {
    * reading the small one while the modal is open would export a picture the reader
    * had just finished rearranging away from.
    */
+  /**
+   * Strip what only means something while someone is pointing at it.
+   *
+   * The canvas carries a cursor and a touch-action so the gestures work, and those
+   * ride along into a serialized figure where there is no pointer and nothing to
+   * drag. Harmless, and still wrong to put in a file someone inserts into a document.
+   */
+  function withoutInteractionHints(svg: SVGElement): SVGElement {
+    const clean = svg.cloneNode(true) as SVGElement;
+    for (const element of [clean, ...clean.querySelectorAll<SVGElement>("[style]")]) {
+      element.style.removeProperty("cursor");
+      element.style.removeProperty("touch-action");
+      if (element.getAttribute("style") === "") element.removeAttribute("style");
+    }
+    return clean;
+  }
+
   function serializeDiagram(): string | undefined {
     const container = enlargedRef.current ?? diagramRef.current;
     const svg = container?.querySelector("svg");
-    return svg ? new XMLSerializer().serializeToString(svg) : undefined;
+    return svg ? new XMLSerializer().serializeToString(withoutInteractionHints(svg)) : undefined;
   }
 
   /**
@@ -1752,9 +1820,13 @@ function StructuredExchangeBody({ item }: PresentationProps) {
   return (
     <div className="space-y-3 text-sm">
       {isProposal && (
-        <p className="text-xs text-zinc-500">
-          Proposed changes to <span className="font-mono">{envelope.target}</span>. Only what changes is shown; anything
-          not mentioned is left as it is.
+        // Not "only what changes is shown" — that stopped being true the moment a
+        // producer could include an element for context. The reader is looking at a
+        // mixture, and the sentence has to say which half is which, or a box drawn
+        // plainly reads as a change nobody marked.
+        <p className="text-xs text-zinc-500" data-testid="structured-proposal-note">
+          Proposed changes to <span className="font-mono">{envelope.target}</span>. Anything not mentioned is left as it
+          is; anything shown without a change is here for context.
         </p>
       )}
 
