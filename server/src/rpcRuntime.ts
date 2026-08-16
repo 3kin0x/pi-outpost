@@ -134,7 +134,12 @@ class RpcRuntime implements AgentRuntime {
       // Never leave a half-started child behind: the operator gets an actionable
       // startup error and no orphaned process holding their session file open.
       await this.process.stop().catch(() => {});
-      const detail = this.failed ?? (error instanceof Error ? error.message : String(error));
+      // The child's own output, not just the cause: this error goes to the console
+      // and stops startup, so nothing is leaked to a browser by including it — and
+      // the flag a fork rejected is only ever named in there. Reading `this.failed`
+      // instead meant scanning a string that cannot contain a flag name, so the hint
+      // below could never fire.
+      const detail = this.process.failureWithOutput ?? this.failed ?? (error instanceof Error ? error.message : String(error));
       // A child that rejects a flag names the flag; the operator wrote a setting.
       const hint = explainRejectedFlags(detail);
       throw new Error(`[pi] the Pi RPC runtime failed to start: ${detail}${hint ? ` ${hint}` : ""}`);
