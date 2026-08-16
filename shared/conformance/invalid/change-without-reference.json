@@ -1,0 +1,17 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "T",
+  "data": {
+    "nodes": [
+      {
+        "id": "a",
+        "label": "A",
+        "set": {
+          "label": "B"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

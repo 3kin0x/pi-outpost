@@ -1,0 +1,19 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "removals": [
+    {
+      "type": "element",
+      "ref": "EL-1"
+    }
+  ],
+  "data": {
+    "nodes": [
+      {
+        "id": "a",
+        "label": "A"
+      }
+    ],
+    "edges": []
+  }
+}

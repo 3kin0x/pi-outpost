@@ -1,0 +1,25 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "data": {
+    "nodes": [
+      {
+        "id": "billing",
+        "ref": "EL-12",
+        "label": "Billing"
+      },
+      {
+        "id": "ledger",
+        "label": "Ledger"
+      }
+    ],
+    "edges": [
+      {
+        "from": "ledger",
+        "to": "billing",
+        "kind": "calls"
+      }
+    ]
+  }
+}

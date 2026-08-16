@@ -3,6 +3,13 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/protocol.ts"
+    ".": "./src/protocol.ts",
+    "./structured-exchange": "./src/structuredExchange.ts",
+    "./structured-exchange/validation": "./src/structuredExchangeValidation.ts",
+    "./structured-exchange/parse": "./src/structuredExchangeParse.ts",
+    "./structured-exchange/schema-node": "./src/structuredExchangeSchemaNode.ts",
+    "./schemas/*": "./schemas/*",
+    "./structured-exchange/bounds": "./src/structuredExchangeBounds.ts",
+    "./structured-exchange/schema-browser": "./src/structuredExchangeSchemaBrowser.ts"
   }
 }

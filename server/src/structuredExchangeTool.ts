@@ -1,0 +1,135 @@
+/**
+ * The tool that lets the agent be a producer.
+ *
+ * `details` is filled by a tool's implementation, not by the model — so without
+ * this, an agent guided by the structured-exchange skill can author a document and
+ * has no way to present one. This closes that gap: the agent hands over the
+ * document, and the tool puts it on the channel the interface reads.
+ *
+ * It also puts validation *inside the loop the agent is already in*. A refused
+ * document comes back as this tool's own output, naming the rule and pointing at
+ * the value, so the agent corrects and calls again without leaving the turn. That
+ * is what makes a strict contract usable by a producer that writes plausible-but-
+ * wrong JSON, which is what a language model is.
+ */
+import { Type } from "typebox";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { parseSerializedStructuredExchange } from "@pi-outpost/shared/structured-exchange/parse";
+import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
+import type { StructuredExchangeLimits } from "@pi-outpost/shared/structured-exchange/bounds";
+import type {
+  StructuredGraphData,
+  StructuredSequenceData,
+  StructuredTableData,
+  ValidatedStructuredExchange,
+} from "@pi-outpost/shared/structured-exchange";
+
+const DESCRIPTION = [
+  "Present a structured-exchange document — a graph, sequence, or table — so the interface renders it natively.",
+  "Emit data, never hand-drawn diagram syntax: what you pass here is validated, shown to the user for approval when it proposes a change, and can be handed on to whatever applies it.",
+  "The document is checked against the published schema. If it is refused you get the rule and a pointer to the offending value back; fix it and call again.",
+  "The structured document does NOT reach you on a later turn — only `summary` does. Write a summary that stands on its own.",
+].join(" ");
+
+const parameters = Type.Object({
+  document: Type.String({
+    description:
+      'The structured-exchange document as JSON: {"schema":"urn:structured-exchange:1","kind":"graph"|"sequence"|"table",...}. Include "target" only when proposing a change to something that already exists.',
+  }),
+  summary: Type.String({
+    description:
+      "What the document says, in prose, for your own later reference. Required because the structured payload is not sent back to you on subsequent turns.",
+  }),
+});
+
+export interface StructuredExchangeToolOptions {
+  /** Deployment limits, at or below the schema's ceilings. */
+  limits?: StructuredExchangeLimits;
+}
+
+/** A factual digest of the document, so the summary is never the only account of it. */
+function digest(envelope: ValidatedStructuredExchange): string {
+  const parts: string[] = [];
+  if (envelope.kind === "graph") {
+    const data = envelope.data as StructuredGraphData;
+    parts.push(`graph: ${data.nodes.length} elements, ${data.edges.length} relationships`);
+  } else if (envelope.kind === "sequence") {
+    const data = envelope.data as StructuredSequenceData;
+    parts.push(`sequence: ${data.participants.length} participants, ${data.messages.length} messages`);
+  } else {
+    const data = envelope.data as StructuredTableData;
+    parts.push(`table: ${data.columns.length} columns, ${data.rows.length} rows`);
+  }
+  if (envelope.target !== undefined) {
+    parts.push(`proposing changes to "${envelope.target}"`);
+    parts.push(roleTally(envelope));
+  }
+  return parts.join("; ");
+}
+
+/**
+ * What the reader will actually see, counted by role — and reported back to the
+ * agent, which will not see the rendering.
+ *
+ * `0 changed` is the number that earns its place here. The reflex when proposing a
+ * rename is to write the new name where the old one goes; under this contract that
+ * declares the current value instead, and the proposal quietly does nothing.
+ * Failing inert is the right behaviour, but silence about it is not, and the agent
+ * has no other way to notice.
+ */
+function roleTally(envelope: ValidatedStructuredExchange): string {
+  const subjects: { ref?: string; set?: object }[] = [];
+  if (envelope.kind === "graph") {
+    const data = envelope.data as StructuredGraphData;
+    subjects.push(...data.nodes, ...data.edges);
+  } else if (envelope.kind === "sequence") {
+    const data = envelope.data as StructuredSequenceData;
+    subjects.push(...data.participants, ...data.messages);
+  }
+  const added = subjects.filter((subject) => subject.ref === undefined).length;
+  const changed = subjects.filter((subject) => subject.set !== undefined).length;
+  const context = subjects.length - added - changed;
+  const removed = envelope.removals?.length ?? 0;
+  const tally = `${added} added, ${changed} changed, ${context} shown as unchanged context, ${removed} removed`;
+  if (changed > 0 || removed > 0 || added > 0) return tally;
+  return `${tally} — this proposal changes nothing; a value to change goes in "set", not beside the reference`;
+}
+
+/** Diagnostics the agent can act on, in the order it should read them. */
+function explain(issues: { rule: string; path: string; message: string }[]): string {
+  const lines = ["The document was refused. Nothing was presented. Fix these and call again:"];
+  for (const issue of issues) lines.push(`- ${issue.rule} at ${issue.path === "" ? "(document)" : issue.path}: ${issue.message}`);
+  lines.push("Nothing is corrected for you: a near-miss identifier is refused, not guessed at.");
+  return lines.join("\n");
+}
+
+export function createStructuredExchangeToolDefinition(options: StructuredExchangeToolOptions = {}): ToolDefinition {
+  return {
+    name: "present_structure",
+    label: "Structure",
+    description: DESCRIPTION,
+    promptSnippet: "Present a graph, sequence, or table as structured data",
+    promptGuidelines: [
+      "When asked to draw, diagram, or model a structure, use present_structure with data rather than writing diagram syntax by hand.",
+      "To propose a change to something that already exists, set `target` and describe only what changes — omitting an element never removes it.",
+    ],
+    parameters,
+    async execute(_toolCallId, params) {
+      const { document, summary } = params as { document: string; summary: string };
+
+      const verdict = parseSerializedStructuredExchange(document, checkStructuredExchangeSchema, options.limits);
+      if (!verdict.valid) {
+        // An error result, so the agent sees this as something to act on rather
+        // than as a presentation that happened to be empty.
+        return { content: [{ type: "text", text: explain(verdict.issues) }], details: undefined, isError: true };
+      }
+
+      return {
+        content: [{ type: "text", text: `${summary}\n\n(${digest(verdict.envelope)})` }],
+        // The channel the interface reads. Not sent to the model, which is why the
+        // summary above has to carry the meaning forward on its own.
+        details: verdict.envelope,
+      };
+    },
+  } as ToolDefinition;
+}

@@ -1,0 +1,17 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "data": {
+    "nodes": [
+      {
+        "id": "a",
+        "ref": "EL-1",
+        "set": {
+          "label": "renamed"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

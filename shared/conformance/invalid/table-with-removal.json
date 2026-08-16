@@ -1,0 +1,20 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "removals": [
+    {
+      "type": "element",
+      "ref": "EL-1"
+    }
+  ],
+  "data": {
+    "columns": [
+      "c"
+    ],
+    "rows": [
+      [
+        "v"
+      ]
+    ]
+  }
+}

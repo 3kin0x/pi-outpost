@@ -536,6 +536,7 @@ function reduce(state: AgentState, action: Action): AgentState {
           running: false,
           outputHtml: message.outputHtml,
           outputHtmlCollapsed: message.outputHtmlCollapsed,
+          structured: message.structured,
         }),
       };
     case "queue":

@@ -1,0 +1,24 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "T",
+  "data": {
+    "nodes": [
+      {
+        "id": "a",
+        "ref": "EL-1",
+        "set": {
+          "label": "one"
+        }
+      },
+      {
+        "id": "b",
+        "ref": "EL-1",
+        "set": {
+          "label": "two"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

@@ -54,7 +54,7 @@ import {
   validBaseUrl,
   validProviderId,
 } from "./credentials.ts";
-import { assistantToItem, contentText, customMessageToItem, historyToItems, truncate } from "./convert.ts";
+import { assistantToItem, contentText, customMessageToItem, historyToItems, structuredExchangeField, truncate } from "./convert.ts";
 import { configureExtensionRender, renderToolCallHtml, renderToolResultHtml } from "./extensionRender.ts";
 import {
   assertWithinRoot,
@@ -82,6 +82,7 @@ import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitSh
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
+import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
 import {
@@ -207,7 +208,19 @@ if (cli.command === "login") {
   }
 }
 
-let sandboxedTools = config.sandbox ? await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes) : undefined;
+/**
+ * Reads nothing and writes nothing: it validates a document the agent composed and
+ * hands it to the interface. There is no path argument to confine, so unlike every
+ * other custom tool it is the same tool on both sides of the sandbox.
+ */
+const structuredExchangeTool = createStructuredExchangeToolDefinition();
+
+let sandboxedTools = config.sandbox
+  ? [
+      ...(await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes)),
+      structuredExchangeTool,
+    ]
+  : undefined;
 let BROWSER_ROOT = await resolveBrowserRoot(config);
 let WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
 let GIT = await probeGit(BROWSER_ROOT);
@@ -504,6 +517,45 @@ const hasIndexHtml = (candidate: string) =>
     .stat(path.join(candidate, "index.html"))
     .then((s) => s.isFile())
     .catch(() => false);
+/**
+ * Skills that ship with the product, found the same way the web UI is.
+ *
+ * A tool without the skill that explains it is a mechanism with no instructions:
+ * the agent can call `present_structure` and has nothing telling it what a valid
+ * document looks like. The user's own skill paths come after, so anything they
+ * configure can still override what we bundle.
+ */
+const skillRoots = [path.resolve(import.meta.dirname, "./skills"), path.resolve(import.meta.dirname, "../../skills")];
+/**
+ * One entry per skill rather than the directory holding them.
+ *
+ * The loader accepts either — it recurses into a directory that has no SKILL.md of
+ * its own — so this is a preference, not a requirement, and an earlier comment here
+ * claiming the parent "silently finds nothing" was simply wrong. Naming each skill
+ * keeps the non-skill files that live beside them (a README) from being read as
+ * candidates and reported as skills missing a description.
+ *
+ * Proven to load, and to stay off under noSkills, by server/test/bundledSkill.test.ts.
+ *
+ * A skill does surface as a slash command — `skill:<name>`. An earlier note here said
+ * the opposite, and was wrong: the skill was absent from the palette because the
+ * palette showed only the first dozen matches alphabetically, not because it had
+ * failed to load. Two wrong conclusions from one symptom, and the second one nearly
+ * became a documented limitation.
+ */
+const BUNDLED_SKILLS: string[] = [];
+for (const root of skillRoots) {
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skill = path.join(root, entry.name);
+    if (await fs.stat(path.join(skill, "SKILL.md")).then((file) => file.isFile()).catch(() => false)) {
+      BUNDLED_SKILLS.push(skill);
+    }
+  }
+  if (BUNDLED_SKILLS.length > 0) break;
+}
+
 const webDistCandidates = process.env.PI_OUTPOST_WEB_DIST
   ? [path.resolve(process.env.PI_OUTPOST_WEB_DIST)]
   : [
@@ -596,9 +648,23 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         ? { additionalExtensionPaths: allExtPaths }
         : {}),
       ...(config.noSkills ? { noSkills: true } : {}),
-      ...(config.skillPaths.length > 0
-        ? { additionalSkillPaths: config.skillPaths }
-        : {}),
+      /**
+       * The user's paths first: the loader keeps the first skill it meets under a
+       * given name, so anything they configure has to come before what we bundle for
+       * "override" to mean anything.
+       *
+       * Under noSkills, theirs still go and ours do not. The SDK merges
+       * additionalSkillPaths even in that mode — see server/test/bundledSkill.test.ts
+       * — so passing the bundled ones regardless would quietly defeat a switch that
+       * exists to get real isolation. But dropping *everything* was the opposite
+       * mistake, made while fixing the first: noSkills turns off discovery of what we
+       * supply, and a path the user named explicitly is not discovery. Naming a skill
+       * and being given nothing is a worse surprise than either.
+       */
+      ...(() => {
+        const paths = [...config.skillPaths, ...(config.noSkills ? [] : BUNDLED_SKILLS)];
+        return paths.length > 0 ? { additionalSkillPaths: paths } : {};
+      })(),
       ...(config.noPromptTemplates ? { noPromptTemplates: true } : {}),
       ...(config.promptPaths.length > 0
         ? { additionalPromptTemplatePaths: config.promptPaths }
@@ -657,6 +723,7 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
                 maxBytes: config.pptx.maxBytes,
                 writableRoot: await fs.realpath(cwd),
               }),
+              structuredExchangeTool,
             ],
           }),
     })),
@@ -1188,6 +1255,7 @@ function bindSession(): () => void {
           ...(rendered
             ? { outputHtml: rendered.expanded, outputHtmlCollapsed: rendered.collapsed }
             : {}),
+          ...structuredExchangeField(event.result?.details),
         });
         {
           const args = pendingFileMutations.get(event.toolCallId);

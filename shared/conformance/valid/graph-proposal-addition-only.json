@@ -1,0 +1,14 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "data": {
+    "nodes": [
+      {
+        "id": "n",
+        "label": "New"
+      }
+    ],
+    "edges": []
+  }
+}

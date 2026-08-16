@@ -1,0 +1,28 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "sequence",
+  "data": {
+    "participants": [
+      {
+        "id": "a",
+        "label": "A"
+      },
+      {
+        "id": "b",
+        "label": "B"
+      }
+    ],
+    "messages": [
+      {
+        "from": "a",
+        "to": "b",
+        "label": "first"
+      },
+      {
+        "from": "b",
+        "to": "a",
+        "label": "second"
+      }
+    ]
+  }
+}

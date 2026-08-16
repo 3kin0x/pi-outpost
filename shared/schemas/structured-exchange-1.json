@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:structured-exchange:1",
+  "title": "Structured exchange envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "data"
+  ],
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "localId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "kind": {
+      "description": "The producing tool's type or stereotype for this thing \u2014 'block', 'sensor', 'power', 'thermal'. Free text, because the vocabulary belongs to the domain and not to this contract. Carries meaning, not presentation: a reader may colour by it, and a consumer may map it back to its own type system.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "element": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/localId"
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "set": {
+          "$ref": "#/$defs/elementChange"
+        }
+      },
+      "if": {
+        "not": {
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "label"
+        ]
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/localId"
+        },
+        "to": {
+          "$ref": "#/$defs/localId"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "set": {
+          "$ref": "#/$defs/edgeChange"
+        }
+      },
+      "if": {
+        "not": {
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "kind"
+        ]
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/localId"
+        },
+        "to": {
+          "$ref": "#/$defs/localId"
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "set": {
+          "$ref": "#/$defs/messageChange"
+        }
+      },
+      "if": {
+        "not": {
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "label"
+        ]
+      }
+    },
+    "removal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "ref"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "element",
+            "relationship"
+          ]
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "from": {
+          "$ref": "#/$defs/localId"
+        },
+        "to": {
+          "$ref": "#/$defs/localId"
+        }
+      },
+      "description": "Something to take out of the target, named by the reference the authority knows it by. The other fields describe it and never identify it: they exist so a reader can see what they are approving the removal of. This application holds one document, not the authority's model, so without them a removal is an opaque identifier and the reader is asked to approve the deletion of something they cannot see."
+    },
+    "elementChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        }
+      }
+    },
+    "edgeChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        }
+      }
+    },
+    "messageChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema": {
+      "const": "urn:structured-exchange:1"
+    },
+    "kind": {
+      "enum": [
+        "graph",
+        "sequence",
+        "table"
+      ]
+    },
+    "target": {
+      "$ref": "#/$defs/ref"
+    },
+    "removals": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/removal"
+      }
+    },
+    "data": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 500,
+              "items": {
+                "$ref": "#/$defs/element"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "maxItems": 2000,
+              "items": {
+                "$ref": "#/$defs/edge"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "participants",
+            "messages"
+          ],
+          "properties": {
+            "participants": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/element"
+              }
+            },
+            "messages": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": {
+                "$ref": "#/$defs/message"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "columns",
+            "rows"
+          ],
+          "properties": {
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "rows": {
+              "type": "array",
+              "maxItems": 5000,
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ],
+                  "maxLength": 1000
+                },
+                "maxItems": 50
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

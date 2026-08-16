@@ -14,6 +14,7 @@
     "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.thresholds.lines=91 --coverage.thresholds.branches=85 --coverage.thresholds.functions=93"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
     "@pi-outpost/shared": "*",
     "highlight.js": "^11.11.1",
     "mermaid": "^11.16.0",
@@ -21,7 +22,8 @@
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "typebox": "1.3.7"
   },
   "peerDependencies": {
     "react": "^19.2.7"

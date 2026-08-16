@@ -1,0 +1,10 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "nodes": [
+      { "id": "a", "ref": "EL-1", "label": "Old name", "set": { "label": "New name" } }
+    ],
+    "edges": []
+  }
+}

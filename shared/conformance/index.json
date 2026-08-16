@@ -1,0 +1,134 @@
+{
+  "valid": [
+    {
+      "file": "valid/graph-minimal.json"
+    },
+    {
+      "file": "valid/graph-with-typed-relationship.json"
+    },
+    {
+      "file": "valid/graph-proposal-addition-only.json"
+    },
+    {
+      "file": "valid/graph-proposal-field-patch.json"
+    },
+    {
+      "file": "valid/graph-proposal-context-element.json"
+    },
+    {
+      "file": "valid/graph-proposal-reattachment.json"
+    },
+    {
+      "file": "valid/sequence-minimal.json"
+    },
+    {
+      "file": "valid/sequence-ordered.json"
+    },
+    {
+      "file": "valid/table-minimal.json"
+    },
+    {
+      "file": "valid/graph-proposal-named-context.json"
+    },
+    {
+      "file": "valid/graph-proposal-declared-change.json"
+    },
+    {
+      "file": "valid/graph-at-the-kind-ceiling.json"
+    }
+  ],
+  "invalid": [
+    {
+      "file": "invalid/unknown-version.json",
+      "expectedRule": "schema/const"
+    },
+    {
+      "file": "invalid/undeclared-property.json",
+      "expectedRule": "schema/additionalProperties"
+    },
+    {
+      "file": "invalid/new-element-without-label.json",
+      "expectedRule": "schema/required"
+    },
+    {
+      "file": "invalid/new-relationship-without-kind.json",
+      "expectedRule": "schema/required"
+    },
+    {
+      "file": "invalid/relationship-without-endpoints.json",
+      "expectedRule": "schema/required"
+    },
+    {
+      "file": "invalid/removal-without-type.json",
+      "expectedRule": "schema/required"
+    },
+    {
+      "file": "invalid/duplicate-identifier.json",
+      "expectedRule": "duplicate-identifier"
+    },
+    {
+      "file": "invalid/unresolved-endpoint.json",
+      "expectedRule": "unresolved-endpoint"
+    },
+    {
+      "file": "invalid/kind-data-mismatch.json",
+      "expectedRule": "kind-data-mismatch"
+    },
+    {
+      "file": "invalid/table-with-target.json",
+      "expectedRule": "kind-not-proposable"
+    },
+    {
+      "file": "invalid/table-with-removal.json",
+      "expectedRule": "kind-not-proposable"
+    },
+    {
+      "file": "invalid/removal-without-target.json",
+      "expectedRule": "removal-without-target"
+    },
+    {
+      "file": "invalid/duplicate-reference.json",
+      "expectedRule": "duplicate-reference"
+    },
+    {
+      "file": "invalid/row-column-mismatch.json",
+      "expectedRule": "row-column-mismatch"
+    },
+    {
+      "file": "invalid/label-past-ceiling.json",
+      "expectedRule": "schema/maxLength"
+    },
+    {
+      "file": "invalid/change-without-reference.json",
+      "expectedRule": "change-without-reference"
+    },
+    {
+      "file": "invalid/empty-change.json",
+      "expectedRule": "schema/minProperties"
+    },
+    {
+      "file": "invalid/duplicate-reference-twice.json",
+      "expectedRule": "duplicate-reference"
+    },
+    {
+      "file": "invalid/change-without-target.json",
+      "expectedRule": "change-without-target"
+    },
+    {
+      "file": "invalid/relationship-change-without-target.json",
+      "expectedRule": "change-without-target"
+    },
+    {
+      "file": "invalid/table-with-empty-removals.json",
+      "expectedRule": "kind-not-proposable"
+    },
+    {
+      "file": "invalid/too-many-element-kinds.json",
+      "expectedRule": "too-many-kinds"
+    },
+    {
+      "file": "invalid/too-many-relationship-kinds.json",
+      "expectedRule": "too-many-kinds"
+    }
+  ]
+}

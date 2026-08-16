@@ -1,0 +1,6 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "removals": [],
+  "data": { "columns": ["name"], "rows": [["a"]] }
+}
