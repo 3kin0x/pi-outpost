@@ -9,7 +9,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { createStructuredExchangeToolDefinition } from "../src/structuredExchangeTool.ts";
-import { STRUCTURED_EXCHANGE_SCHEMA_V1 as S } from "@pi-outpost/shared/structured-exchange";
+import { STRUCTURED_EXCHANGE_SCHEMA_V1 as S, STRUCTURED_EXCHANGE_SCHEMA_V1 } from "@pi-outpost/shared/structured-exchange";
+import { structuredExchangeField } from "../src/convert.ts";
 
 const tool = createStructuredExchangeToolDefinition();
 
@@ -143,5 +144,79 @@ describe("present_structure", () => {
     const accepted = await call(graph());
     assert.equal(accepted.isError, undefined);
     assert.ok(accepted.details !== undefined);
+  });
+});
+
+/**
+ * The document, along the path it actually travels.
+ *
+ * Every other test here validates a string or inspects a rendered component. This
+ * one goes tool → result → conversion, which is where the claim about preservation
+ * has to hold, and where it was previously overstated: the tool keeps the parsed
+ * envelope and the conversion serialises it again, so the producer's bytes do not
+ * survive and never could. What must survive is every field, every order and every
+ * value.
+ */
+describe("what survives from the tool to the interface", () => {
+
+  /** Deliberately awkward: declaration order that a normalising step would tidy. */
+  const document = JSON.stringify({
+    schema: STRUCTURED_EXCHANGE_SCHEMA_V1,
+    kind: "graph",
+    target: "artifact-1",
+    removals: [
+      { type: "relationship", ref: "REL-9", kind: "calls", from: "zeta", to: "alpha" },
+      { type: "element", ref: "EL-9" },
+    ],
+    data: {
+      nodes: [
+        { id: "zeta", label: "Zeta", kind: "service" },
+        { id: "alpha", ref: "EL-1", label: "Alpha", set: { label: "Alpha Prime", kind: "datastore" } },
+        { id: "mid", label: "Mid" },
+      ],
+      edges: [
+        { from: "zeta", to: "mid", kind: "writes" },
+        { from: "zeta", to: "mid", kind: "reads", label: "second between the same pair" },
+        { from: "mid", to: "mid", kind: "loops" },
+      ],
+    },
+  });
+
+  const recovered = async () => {
+    const result = await tool.execute("call-1", { document, summary: "a summary" });
+    const { structured } = structuredExchangeField((result as { details?: unknown }).details);
+    assert.equal(typeof structured, "string", "the tool's document must reach the interface");
+    return JSON.parse(structured!);
+  };
+
+  test("carries every field, every value and every order", async () => {
+    assert.deepEqual(await recovered(), JSON.parse(document));
+  });
+
+  test("keeps declared order, which is the part a tidy-up would take", async () => {
+    const back = await recovered();
+    assert.deepEqual(back.data.nodes.map((n: { id: string }) => n.id), ["zeta", "alpha", "mid"]);
+    assert.deepEqual(back.data.edges.map((e: { kind: string }) => e.kind), ["writes", "reads", "loops"]);
+    assert.deepEqual(back.removals.map((r: { ref: string }) => r.ref), ["REL-9", "EL-9"]);
+    // Key order too: a reader comparing two renderings should see the same shape
+    assert.deepEqual(Object.keys(back), ["schema", "kind", "target", "removals", "data"]);
+  });
+
+  test("adds nothing that was not written", async () => {
+    // A default filled in here is a value the producer never sent and the authority
+    // would be asked to apply.
+    const back = await recovered();
+    assert.deepEqual(Object.keys(back.data.nodes[2]), ["id", "label"]);
+    assert.deepEqual(Object.keys(back.removals[1]), ["type", "ref"]);
+  });
+
+  test("does not promise the producer's bytes, and says so where it counts", async () => {
+    // The honest boundary: the document arrives parsed, so what comes back out is a
+    // re-serialisation. It is the same document; it is not the same string, and no
+    // test here should imply otherwise.
+    const result = await tool.execute("call-1", { document, summary: "a summary" });
+    const details = (result as { details?: unknown }).details;
+    assert.equal(typeof details, "object", "the tool hands on a parsed value, not the text it was given");
+    assert.deepEqual(details, JSON.parse(document));
   });
 });

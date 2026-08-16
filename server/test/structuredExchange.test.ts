@@ -18,6 +18,7 @@ import { describe, test } from "node:test";
 import { Check } from "typebox/value";
 import { STRUCTURED_EXCHANGE_CEILINGS, STRUCTURED_EXCHANGE_SCHEMA_V1, PROPOSABLE_KINDS } from "@pi-outpost/shared/structured-exchange";
 import { structuredExchangeField } from "../src/convert.ts";
+import { validateStructuredExchangeSemantics } from "@pi-outpost/shared/structured-exchange/validation";
 
 const SCHEMA_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -355,5 +356,94 @@ describe("removals describe what goes", () => {
   test("still refuses anything it did not declare", () => {
     assert.equal(Check(schema, removal({ colour: "#ff0000" })), false);
     assert.equal(Check(schema, removal({ set: { label: "x" } })), false, "a removal is not a patch");
+  });
+});
+
+/**
+ * How many types a reader can be shown apart.
+ *
+ * This ceiling is unlike the others: it bounds not what fits in memory but what a
+ * rendering can distinguish. Types are told apart by a colour and a pattern — sixty
+ * four combinations — and past that two of them are drawn alike. A document a reader
+ * cannot check is not one to accept quietly, so the contract refuses it and says why.
+ *
+ * The two vocabularies are counted independently, because they are independent: a
+ * document may use every type available to elements and every type available to
+ * relationships at once.
+ */
+describe("distinct types per vocabulary", () => {
+  const CEILING = STRUCTURED_EXCHANGE_CEILINGS.kindsPerVocabulary;
+
+  const withKinds = (elementKinds: number, relationshipKinds: number) => {
+    const nodes = Array.from({ length: Math.max(elementKinds, relationshipKinds + 1, 1) }, (_, index) => ({
+      id: `n${index}`,
+      label: `N${index}`,
+      kind: `ek${index % Math.max(elementKinds, 1)}`,
+    }));
+    const edges = Array.from({ length: relationshipKinds }, (_, index) => ({
+      from: `n${index}`,
+      to: `n${index + 1}`,
+      kind: `rk${index}`,
+    }));
+    return {
+      schema: STRUCTURED_EXCHANGE_SCHEMA_V1,
+      kind: "graph" as const,
+      data: { nodes, edges },
+    };
+  };
+
+  const refusals = (document: ReturnType<typeof withKinds>) =>
+    validateStructuredExchangeSemantics(document).filter((issue) => issue.rule === "too-many-kinds");
+
+  test(`accepts ${CEILING} of each, which is the ceiling exactly`, () => {
+    assert.deepEqual(refusals(withKinds(CEILING, CEILING)), []);
+  });
+
+  test(`refuses ${CEILING + 1} element types`, () => {
+    const [issue] = refusals(withKinds(CEILING + 1, 1));
+    assert.ok(issue, "one over the ceiling must be refused");
+    assert.equal(issue.observed, CEILING + 1);
+    assert.equal(issue.limit, CEILING);
+    assert.match(issue.message, /told apart/);
+  });
+
+  test(`refuses ${CEILING + 1} relationship types`, () => {
+    const [issue] = refusals(withKinds(1, CEILING + 1));
+    assert.ok(issue, "the other vocabulary is bounded too");
+    assert.equal(issue.observed, CEILING + 1);
+  });
+
+  test("counts the two vocabularies independently", () => {
+    // Sixty-four of each is not one hundred and twenty-eight of anything.
+    assert.deepEqual(refusals(withKinds(CEILING, CEILING)), []);
+    // …and one vocabulary going over does not implicate the other
+    const over = refusals(withKinds(CEILING + 1, 2));
+    assert.equal(over.length, 1);
+  });
+
+  test("says which vocabulary, so a producer knows what to cut", () => {
+    assert.match(refusals(withKinds(CEILING + 1, 1))[0].message, /element types/);
+    assert.match(refusals(withKinds(1, CEILING + 1))[0].message, /relationship types/);
+  });
+
+  test("names a sequence's vocabularies by their own nouns", () => {
+    const participants = Array.from({ length: CEILING + 1 }, (_, index) => ({
+      id: `p${index}`,
+      label: `P${index}`,
+      kind: `k${index}`,
+    }));
+    const document = {
+      schema: STRUCTURED_EXCHANGE_SCHEMA_V1,
+      kind: "sequence" as const,
+      data: { participants, messages: [] },
+    };
+    const [issue] = validateStructuredExchangeSemantics(document).filter((i) => i.rule === "too-many-kinds");
+    assert.match(issue.message, /participant types/);
+  });
+
+  test("is mirrored by what the renderer can actually distinguish", () => {
+    // If these ever disagree, the contract is admitting documents the rendering
+    // cannot show, which is the thing the ceiling exists to prevent.
+    assert.equal(CEILING, 16 * 4, "sixteen colours by four patterns");
   });
 });

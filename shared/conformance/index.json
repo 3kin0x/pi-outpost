@@ -32,6 +32,9 @@
     },
     {
       "file": "valid/graph-proposal-declared-change.json"
+    },
+    {
+      "file": "valid/graph-at-the-kind-ceiling.json"
     }
   ],
   "invalid": [
@@ -118,6 +121,14 @@
     {
       "file": "invalid/table-with-empty-removals.json",
       "expectedRule": "kind-not-proposable"
+    },
+    {
+      "file": "invalid/too-many-element-kinds.json",
+      "expectedRule": "too-many-kinds"
+    },
+    {
+      "file": "invalid/too-many-relationship-kinds.json",
+      "expectedRule": "too-many-kinds"
     }
   ]
 }

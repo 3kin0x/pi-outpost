@@ -1,9 +1,9 @@
 # Scenario-to-test matrix — add-structured-tool-results
 
-All 75 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
+All 77 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
 enumerated with `rg '^#### Scenario:' openspec/changes/add-structured-tool-results/specs/`.
 
-Twenty arrived after the first pass, describing behaviour that was built and then
+Twenty-two arrived after the first pass, describing behaviour that was built and then
 specified: element kinds, the two-channel rendering that keeps type from competing
 with change, the key, narrowing the view, relationship geometry that does not lose a
 relationship, the textual equivalent's completeness, mutation needing a target, and a
@@ -85,8 +85,8 @@ Test files, abbreviated below:
 | RefusalIdentifiesTheLimitThatBit | covered | SP "a bound refusal reports the limit, the observed value, and which level bit" |
 | OperationalLimitIsStricterThanTheCeiling | covered | SB "past the deployment's limit but within the ceiling is refused, and says so" |
 | AcceptedSizesAreObservable | covered | SB "acceptance reports what the document weighed" |
-| ValidatedProposalIsRecoverableAsValidated | covered *(test)* | UV "hands on exactly the value that was validated" — identity asserted from the real validation boundary, declaration order included, which a normalising step would not preserve. Renamed twice: from *ByteForByte*, because the SDK hands the server a parsed object and the producer's bytes do not exist on this side; then from *Approved*, because there is no approval action and no handover step in this system and the test should not invent one. What is guaranteed and tested is that the document is still the document, after validation and after rendering. |
-| RenderingAndAdjustingDoNotAlterIt | covered *(test)* | UV "leaves the document untouched after a box is moved and a type is hidden" — the view is asserted to have changed first, so it is not a test of a no-op |
+| ValidatedProposalIsRecoverableAsValidated | covered *(test)* | UV "is recoverable as validated, after being validated and rendered"; ST "carries every field, every value and every order", "keeps declared order, which is the part a tidy-up would take" and "adds nothing that was not written" — through the real path, tool to conversion — identity asserted from the real validation boundary, declaration order included, which a normalising step would not preserve. Renamed twice: from *ByteForByte*, because the SDK hands the server a parsed object and the producer's bytes do not exist on this side; then from *Approved*, because there is no approval action and no handover step in this system and the test should not invent one. And renamed once more in substance: the promise was stated in bytes, and the bytes cannot survive a value that crosses this process parsed. What is guaranteed and tested is structural identity — every field, every order, every value, nothing added or dropped — asserted through the tool and the conversion rather than only at the component. |
+| RenderingAndAdjustingDoNotAlterIt | covered *(test)* | UV "leaves the document untouched after a box is moved and a type is hidden" — drags, filters, downloads and copies, then asserts the document; the view is asserted to have changed and the export to have run first, so it is not a test of a no-op |
 | ProducerValidatesBeforeEmitting | covered | SC "the command-line interface agrees with the parser" — every valid case, exit zero |
 | TheValidatorRunsWhereTheProducerIs | covered *(out-of-repo)* | CLI "runs at all, outside the repository, with nothing installed" and "agrees with the application on every conformance case" — the bundle copied to a temporary directory with no `node_modules`, no `package.json` and no path back here. It earned itself immediately: the first bundle carried two shebangs and was a syntax error, while every in-repo test stayed green |
 | RefusalIsDistinguishedFromUnreadableInput | covered *(test)* | CLI "exits 1 for a document that was read and does not conform", "exits 2 when the input cannot be read, rather than blaming the schema", "exits 3 when the input is not JSON", and "says how to use it, and documents its exit codes where a caller will look" |
@@ -99,7 +99,9 @@ Test files, abbreviated below:
 | SequencePreservesDeclaredOrder | covered | UV "renders sequence messages in their declared order and direction" |
 | TablePreservesDeclaredOrder | covered | UV "renders table columns and rows in their declared order" |
 | ACyclicGraphIsStillLegible | covered *(test)* | UX "keeps a cyclic architecture to a readable extent" (extent bounded against the element count, and real height rather than one row) and "never overlaps two boxes"; UV "draws every element and every relationship, none overlapping" on a thirty-three element architecture. The failure behind it: a hand-rolled ranking reached depth 104 on seventeen elements, drew twenty thousand pixels wide and arrived as an empty line |
-| TwoTypesNeverLookAlike | covered *(test)* | UV "gives fourteen element types fourteen distinct colours" and "gives the same type the same colour, and different types different ones". Found twice on real data — five types in four colours, then fourteen element types sharing a table with thirty-four relationship types and four pairs coming out alike |
+| EachVocabularyIsBoundedByWhatCanBeDistinguished | covered *(test)* | SE "distinct types per vocabulary" — the ceiling accepted exactly, one over refused for each vocabulary, the message naming which; SC `too-many-element-kinds` and `too-many-relationship-kinds`; CLI agrees on both through the shipped bundle. The ceiling is not a storage bound: it is the number of colour-and-pattern combinations a reader can be shown apart, and SE "is mirrored by what the renderer can actually distinguish" pins the two together so the contract can never admit a document the rendering would draw ambiguously |
+| TheTwoVocabulariesAreCountedApart | covered *(test)* | SE "counts the two vocabularies independently" and "accepts 64 of each, which is the ceiling exactly"; SC `valid/graph-at-the-kind-ceiling.json` carries the maximum of both at once |
+| TwoTypesNeverLookAlike | covered *(test)* | UV "gives fourteen element types fourteen distinct presentations", "gives the same type the same appearance, and different types different ones", and "draws apart as many types as the contract admits". Found twice on real data — five types in four colours, then fourteen element types sharing a table with thirty-four relationship types and four pairs coming out alike. Colour alone was never going to be enough, so a pattern joins it and the contract stops at what the pair can distinguish |
 | TypeDoesNotObscureChange | covered *(test)* | UV "keeps the approval signal when a proposal is also typed" — same fill for the same type, and the role still telling them apart by outline colour and weight |
 | TheKeyTravelsWithTheFigure | covered *(test)* | UV "names every type present in a key inside the SVG, so an exported figure explains itself" (asserts the key is inside the `svg`, not beside it on the page), "keeps the key inside the canvas it is drawn on", and "keeps the key a block, however wide the drawing gets" |
 | ASelfRelationshipIsVisible | covered *(test)* | UV "draws a relationship from something to itself as a shape with real extent" — measured as span, not as presence in the DOM. It was a line of zero length: declared in the document, invisible in the picture |
@@ -122,7 +124,7 @@ Test files, abbreviated below:
 
 ## Summary
 
-75 covered, 0 partial, 0 uncovered — 60 by test, 2 by architectural invariant, 2 by
+77 covered, 0 partial, 0 uncovered — 62 by test, 2 by architectural invariant, 2 by
 running the shipped artifact outside this repository, and the rest by the tests named
 against each row.
 
@@ -150,11 +152,11 @@ from the real validation boundary, declaration order included.
 
 Every interaction below was driven in a browser against the dev server, after the
 change it exercises, and checked by reading the DOM rather than by looking at a
-screenshot. Recorded here rather than as a spec because seeding a transcript with a
-tool result — which is what an offline running-app test of this needs — requires
-forging a session entry the agent will accept, and that did not land. The session
-loads and the tool call renders; the forged result does not attach. Stated as an open
-gap rather than left as a checked box.
+screenshot. **None of it is automated.** An offline running-app test needs a transcript seeded
+with a tool result, which means forging a session entry the agent will accept; the
+session loads and the tool call renders, and the forged result does not attach. Task
+5.7 is left open for it. What follows is a record of manual runs, not a claim that a
+suite covers this.
 
 The runs, and what each one caught:
 

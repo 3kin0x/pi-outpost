@@ -80,7 +80,27 @@ describe("the skill that ships with the tool", () => {
     assert.equal(chosen.filePath, path.join(dir, "SKILL.md"), "the user's skill must be the one that wins");
   });
 
-  test("noSkills is the server's to enforce, because the loader does not", () => {
+  test("noSkills silences what we bundle and not what the user named", () => {
+    /**
+     * Both halves, because each was got wrong in turn. Passing the bundled paths
+     * regardless defeats the switch; dropping every path also drops the ones the user
+     * asked for by name, and being given nothing after naming a skill is the worse
+     * surprise of the two. noSkills turns off discovery of what we supply — a path
+     * someone wrote down is not discovery.
+     */
+    const chosen = "/somewhere/of/their/own";
+    const paths = (noSkills: boolean, configured: string[], bundled: string[]) => [
+      ...configured,
+      ...(noSkills ? [] : bundled),
+    ];
+
+    assert.deepEqual(paths(false, [chosen], bundledSkillPaths()), [chosen, ...bundledSkillPaths()]);
+    assert.deepEqual(paths(true, [chosen], bundledSkillPaths()), [chosen]);
+    assert.deepEqual(paths(true, [], bundledSkillPaths()), []);
+    assert.deepEqual(paths(false, [], bundledSkillPaths()), bundledSkillPaths());
+  });
+
+  test("the loader does not enforce noSkills for us", () => {
     /**
      * The trap this pins down: the SDK merges `additionalSkillPaths` into the skill
      * set *even when noSkills is set*, so a server that passes the bundled paths

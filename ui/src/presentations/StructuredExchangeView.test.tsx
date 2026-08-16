@@ -5,6 +5,8 @@ import { STRUCTURED_EXCHANGE_SCHEMA_V1 as S } from "@pi-outpost/shared/structure
 import { selectPresentation, PRESENTATIONS } from "./registry";
 import { structuredExchangePresentation } from "./StructuredExchangeView";
 import { validStructuredExchange } from "./structuredExchange";
+import { KIND_PRESENTATIONS } from "./StructuredExchangeView";
+import { STRUCTURED_EXCHANGE_CEILINGS } from "@pi-outpost/shared/structured-exchange";
 import * as structuredExchangeModule from "./structuredExchange";
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
@@ -1843,14 +1845,17 @@ describe("a real architecture, at the size real ones come in", () => {
     expect(new Set(presentations("relationship")).size).toBe(34);
   });
 
-  it("does not claim distinctness once the encoding is genuinely exhausted", () => {
-    // Past sixty-four the appearances repeat, and saying so is the difference between
-    // a key that is incomplete and one that is wrong.
-    const many = {
+  it("draws apart as many types as the contract admits", () => {
+    // The encoding and the ceiling are one number: a document that would exhaust the
+    // palette is refused by validation rather than rendered with two types alike, so
+    // there is no "colours repeat" case left for the key to apologise for.
+    expect(KIND_PRESENTATIONS).toBe(STRUCTURED_EXCHANGE_CEILINGS.kindsPerVocabulary);
+
+    const atTheCeiling = {
       schema: S,
       kind: "graph",
       data: {
-        nodes: Array.from({ length: 70 }, (_, index) => ({
+        nodes: Array.from({ length: KIND_PRESENTATIONS }, (_, index) => ({
           id: `n${index}`,
           label: `N${index}`,
           kind: `kind_${index}`,
@@ -1858,12 +1863,18 @@ describe("a real architecture, at the size real ones come in", () => {
         edges: [],
       },
     };
-    renderBody(withStructured(many));
-    const headings = [...document.querySelectorAll('[data-testid="legend-group"]')].map((t) => t.textContent);
+    renderBody(withStructured(atTheCeiling));
 
-    expect(headings.some((h) => /elements \(70 types, appearances repeat\)/.test(h!))).toBe(true);
-    // …and every one of them is still named, which is the guarantee that survives
-    expect(document.querySelectorAll('[data-legend-entry^="element:"]')).toHaveLength(70);
+    const looks = [...document.querySelectorAll("[data-element-role] rect")].map(
+      (box) => `${box.getAttribute("fill")}/${box.getAttribute("stroke-dasharray") ?? "solid"}`,
+    );
+    expect(looks).toHaveLength(KIND_PRESENTATIONS);
+    expect(new Set(looks).size).toBe(KIND_PRESENTATIONS);
+
+    // And the key stays a plain heading, with no caveat to make
+    const headings = [...document.querySelectorAll('[data-testid="legend-group"]')].map((t) => t.textContent);
+    expect(headings).toContain("elements");
+    expect(headings.some((h) => /repeat/.test(h!))).toBe(false);
   });
 
   it("keeps the key a block, however wide the drawing gets", () => {
@@ -2039,9 +2050,25 @@ describe("adjusting the view is not editing the document", () => {
     dragBox(0, { x: 0, y: -140 });
     toggleLegend("element:datastore");
 
-    // The view did change — this is not a test of a no-op
+    // Exporting reads the rendering and could just as easily normalise what it read
+    const created: string[] = [];
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = () => {
+      created.push("blob");
+      return "blob:x";
+    };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = () => {};
+    fireEvent.click(screen.getByText("⤓ download SVG"));
+    fireEvent.click(screen.getByText("copy markup"));
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+
+    // The view did change, and the export did run — this is not a test of a no-op
     expect(screen.getByTestId("structured-filtered")).toBeTruthy();
     expect(document.querySelectorAll("[data-element-role]")).toHaveLength(1);
+    expect(created).toHaveLength(1);
 
     // …and the document did not
     expect(item.structured).toBe(serialized);
@@ -2331,4 +2358,81 @@ describe("the same pointer answer, whatever the diagram", () => {
     fireEvent.pointerMove(message, { clientX: 5, clientY: 5 });
     expect(screen.getByTestId("diagram-tooltip").textContent).toBe(title);
   });
+});
+
+describe("the key shows what the picture shows", () => {
+  /**
+   * A key that draws a swatch the diagram never uses is worse than no key: it is a
+   * statement about the picture that is false. Both of these were.
+   */
+  it("gives a sequence participant type the pattern it is drawn with", () => {
+    // The sequence key passed the colour and dropped the dash, so it stopped matching
+    // the boxes the moment a diagram carried more types than there are colours.
+    const participants = Array.from({ length: 20 }, (_, index) => ({
+      id: `p${index}`,
+      label: `P${index}`,
+      kind: `kind_${index}`,
+    }));
+    renderBody(
+      withStructured({ schema: S, kind: "sequence", data: { participants, messages: [] } }),
+    );
+
+    const drawn = [...document.querySelectorAll("[data-element-role] rect")].map(
+      (box) => `${box.getAttribute("fill")}/${box.getAttribute("stroke-dasharray") ?? "solid"}`,
+    );
+    const key = [...document.querySelectorAll('[data-legend-entry^="element:"] rect:not([fill="transparent"])')].map(
+      (swatch) => `${swatch.getAttribute("fill")}/${swatch.getAttribute("stroke-dasharray") ?? "solid"}`,
+    );
+
+    // More types than colours, so the pattern is doing real work here
+    expect(new Set(drawn).size).toBe(20);
+    expect(new Set(key)).toEqual(new Set(drawn));
+  });
+
+  for (const [kind, document_] of [
+    [
+      "graph",
+      {
+        schema: S,
+        kind: "graph",
+        target: "t",
+        data: {
+          nodes: [
+            { id: "a", ref: "EL-1", label: "Existing" },
+            { id: "b", label: "New" },
+          ],
+          edges: [],
+        },
+      },
+    ],
+    [
+      "sequence",
+      {
+        schema: S,
+        kind: "sequence",
+        target: "t",
+        data: {
+          participants: [
+            { id: "a", ref: "EL-1", label: "Existing" },
+            { id: "b", label: "New" },
+          ],
+          messages: [],
+        },
+      },
+    ],
+  ] as const) {
+    it(`marks context in the ${kind} key the way the ${kind} marks it`, () => {
+      // Context is dimmed now, not dashed — the dash says what kind of thing it is.
+      renderBody(withStructured(document_));
+
+      const entry = document.querySelector('[data-legend-entry="existing"]')!;
+      expect(entry, "the key should explain the context role it is showing").not.toBeNull();
+      expect(entry.getAttribute("data-faded")).toBe("true");
+      expect(entry.querySelector("rect")!.getAttribute("stroke-dasharray")).toBeNull();
+
+      // …and the thing it describes is dimmed too
+      const shown = document.querySelector('[data-element-role="context"] rect')!;
+      expect(Number(shown.getAttribute("opacity"))).toBeLessThan(1);
+    });
+  }
 });

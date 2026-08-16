@@ -1,0 +1,340 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "nodes": [
+      {
+        "id": "n0",
+        "label": "N0",
+        "kind": "ek0"
+      },
+      {
+        "id": "n1",
+        "label": "N1",
+        "kind": "ek1"
+      },
+      {
+        "id": "n2",
+        "label": "N2",
+        "kind": "ek2"
+      },
+      {
+        "id": "n3",
+        "label": "N3",
+        "kind": "ek3"
+      },
+      {
+        "id": "n4",
+        "label": "N4",
+        "kind": "ek4"
+      },
+      {
+        "id": "n5",
+        "label": "N5",
+        "kind": "ek5"
+      },
+      {
+        "id": "n6",
+        "label": "N6",
+        "kind": "ek6"
+      },
+      {
+        "id": "n7",
+        "label": "N7",
+        "kind": "ek7"
+      },
+      {
+        "id": "n8",
+        "label": "N8",
+        "kind": "ek8"
+      },
+      {
+        "id": "n9",
+        "label": "N9",
+        "kind": "ek9"
+      },
+      {
+        "id": "n10",
+        "label": "N10",
+        "kind": "ek10"
+      },
+      {
+        "id": "n11",
+        "label": "N11",
+        "kind": "ek11"
+      },
+      {
+        "id": "n12",
+        "label": "N12",
+        "kind": "ek12"
+      },
+      {
+        "id": "n13",
+        "label": "N13",
+        "kind": "ek13"
+      },
+      {
+        "id": "n14",
+        "label": "N14",
+        "kind": "ek14"
+      },
+      {
+        "id": "n15",
+        "label": "N15",
+        "kind": "ek15"
+      },
+      {
+        "id": "n16",
+        "label": "N16",
+        "kind": "ek16"
+      },
+      {
+        "id": "n17",
+        "label": "N17",
+        "kind": "ek17"
+      },
+      {
+        "id": "n18",
+        "label": "N18",
+        "kind": "ek18"
+      },
+      {
+        "id": "n19",
+        "label": "N19",
+        "kind": "ek19"
+      },
+      {
+        "id": "n20",
+        "label": "N20",
+        "kind": "ek20"
+      },
+      {
+        "id": "n21",
+        "label": "N21",
+        "kind": "ek21"
+      },
+      {
+        "id": "n22",
+        "label": "N22",
+        "kind": "ek22"
+      },
+      {
+        "id": "n23",
+        "label": "N23",
+        "kind": "ek23"
+      },
+      {
+        "id": "n24",
+        "label": "N24",
+        "kind": "ek24"
+      },
+      {
+        "id": "n25",
+        "label": "N25",
+        "kind": "ek25"
+      },
+      {
+        "id": "n26",
+        "label": "N26",
+        "kind": "ek26"
+      },
+      {
+        "id": "n27",
+        "label": "N27",
+        "kind": "ek27"
+      },
+      {
+        "id": "n28",
+        "label": "N28",
+        "kind": "ek28"
+      },
+      {
+        "id": "n29",
+        "label": "N29",
+        "kind": "ek29"
+      },
+      {
+        "id": "n30",
+        "label": "N30",
+        "kind": "ek30"
+      },
+      {
+        "id": "n31",
+        "label": "N31",
+        "kind": "ek31"
+      },
+      {
+        "id": "n32",
+        "label": "N32",
+        "kind": "ek32"
+      },
+      {
+        "id": "n33",
+        "label": "N33",
+        "kind": "ek33"
+      },
+      {
+        "id": "n34",
+        "label": "N34",
+        "kind": "ek34"
+      },
+      {
+        "id": "n35",
+        "label": "N35",
+        "kind": "ek35"
+      },
+      {
+        "id": "n36",
+        "label": "N36",
+        "kind": "ek36"
+      },
+      {
+        "id": "n37",
+        "label": "N37",
+        "kind": "ek37"
+      },
+      {
+        "id": "n38",
+        "label": "N38",
+        "kind": "ek38"
+      },
+      {
+        "id": "n39",
+        "label": "N39",
+        "kind": "ek39"
+      },
+      {
+        "id": "n40",
+        "label": "N40",
+        "kind": "ek40"
+      },
+      {
+        "id": "n41",
+        "label": "N41",
+        "kind": "ek41"
+      },
+      {
+        "id": "n42",
+        "label": "N42",
+        "kind": "ek42"
+      },
+      {
+        "id": "n43",
+        "label": "N43",
+        "kind": "ek43"
+      },
+      {
+        "id": "n44",
+        "label": "N44",
+        "kind": "ek44"
+      },
+      {
+        "id": "n45",
+        "label": "N45",
+        "kind": "ek45"
+      },
+      {
+        "id": "n46",
+        "label": "N46",
+        "kind": "ek46"
+      },
+      {
+        "id": "n47",
+        "label": "N47",
+        "kind": "ek47"
+      },
+      {
+        "id": "n48",
+        "label": "N48",
+        "kind": "ek48"
+      },
+      {
+        "id": "n49",
+        "label": "N49",
+        "kind": "ek49"
+      },
+      {
+        "id": "n50",
+        "label": "N50",
+        "kind": "ek50"
+      },
+      {
+        "id": "n51",
+        "label": "N51",
+        "kind": "ek51"
+      },
+      {
+        "id": "n52",
+        "label": "N52",
+        "kind": "ek52"
+      },
+      {
+        "id": "n53",
+        "label": "N53",
+        "kind": "ek53"
+      },
+      {
+        "id": "n54",
+        "label": "N54",
+        "kind": "ek54"
+      },
+      {
+        "id": "n55",
+        "label": "N55",
+        "kind": "ek55"
+      },
+      {
+        "id": "n56",
+        "label": "N56",
+        "kind": "ek56"
+      },
+      {
+        "id": "n57",
+        "label": "N57",
+        "kind": "ek57"
+      },
+      {
+        "id": "n58",
+        "label": "N58",
+        "kind": "ek58"
+      },
+      {
+        "id": "n59",
+        "label": "N59",
+        "kind": "ek59"
+      },
+      {
+        "id": "n60",
+        "label": "N60",
+        "kind": "ek60"
+      },
+      {
+        "id": "n61",
+        "label": "N61",
+        "kind": "ek61"
+      },
+      {
+        "id": "n62",
+        "label": "N62",
+        "kind": "ek62"
+      },
+      {
+        "id": "n63",
+        "label": "N63",
+        "kind": "ek63"
+      },
+      {
+        "id": "n64",
+        "label": "N64",
+        "kind": "ek64"
+      }
+    ],
+    "edges": [
+      {
+        "from": "n0",
+        "to": "n1",
+        "kind": "only"
+      }
+    ]
+  }
+}

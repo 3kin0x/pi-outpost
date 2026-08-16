@@ -631,16 +631,23 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         ? { additionalExtensionPaths: allExtPaths }
         : {}),
       ...(config.noSkills ? { noSkills: true } : {}),
-      // The user's paths first: the loader keeps the first skill it meets under a
-      // given name, so anything they configure has to come before what we bundle
-      // for "override" to mean anything.
-      //
-      // And nothing at all under noSkills. additionalSkillPaths is loaded even in
-      // that mode, so passing the bundled ones regardless would quietly defeat the
-      // switch that exists precisely to get real isolation.
-      ...(!config.noSkills && (config.skillPaths.length > 0 || BUNDLED_SKILLS.length > 0)
-        ? { additionalSkillPaths: [...config.skillPaths, ...BUNDLED_SKILLS] }
-        : {}),
+      /**
+       * The user's paths first: the loader keeps the first skill it meets under a
+       * given name, so anything they configure has to come before what we bundle for
+       * "override" to mean anything.
+       *
+       * Under noSkills, theirs still go and ours do not. The SDK merges
+       * additionalSkillPaths even in that mode — see server/test/bundledSkill.test.ts
+       * — so passing the bundled ones regardless would quietly defeat a switch that
+       * exists to get real isolation. But dropping *everything* was the opposite
+       * mistake, made while fixing the first: noSkills turns off discovery of what we
+       * supply, and a path the user named explicitly is not discovery. Naming a skill
+       * and being given nothing is a worse surprise than either.
+       */
+      ...(() => {
+        const paths = [...config.skillPaths, ...(config.noSkills ? [] : BUNDLED_SKILLS)];
+        return paths.length > 0 ? { additionalSkillPaths: paths } : {};
+      })(),
       ...(config.noPromptTemplates ? { noPromptTemplates: true } : {}),
       ...(config.promptPaths.length > 0
         ? { additionalPromptTemplatePaths: config.promptPaths }

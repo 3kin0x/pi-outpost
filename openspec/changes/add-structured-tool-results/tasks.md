@@ -96,9 +96,13 @@ elements so the reader can situate it, and there was no way to say so.
 - [x] 5.2 Drive the round trip in the running app with the agent as producer: ask it for a proposal
   through the skill, read back the DOM to confirm the approval view shows additions, changes, and
   removals, and confirm the raw output stays reachable.
-- [x] 5.6 Re-exercise the running app after the interaction work landed — the key, filtering,
-  dragging, panning, the full-size view, loops and parallel relationships. See "What the running app
-  was actually driven through" in coverage.md for what was driven and what each run found.
+- [x] 5.6 Re-exercise the running app **by hand** after the interaction work landed — the key,
+  filtering, dragging, panning, the full-size view, loops and parallel relationships. See "What the
+  running app was actually driven through" in coverage.md for what was driven and what each run
+  found. Manual, and recorded as manual: nothing here is automated.
+- [ ] 5.7 Automate that as a Playwright spec. Blocked on seeding a transcript offline: the session
+  loads and the tool call renders, and a forged `toolResult` entry does not attach, so there is no
+  way yet to put a document in front of the browser without a model. Left open rather than claimed.
 - [x] 5.3 Exercise an invalid and an unknown-version envelope in the running app; confirm no
   specialized view appears and the result stays readable.
 - [x] 5.4 Confirm in the running app that the agent recovers from a refusal: given diagnostics from
@@ -130,4 +134,6 @@ elements so the reader can situate it, and there was no way to say so.
 - [x] 7.2 Give it exit codes that separate a non-conforming document from unreadable input and from
   input that is not JSON.
 - [x] 7.3 Prove the bundled skill loads, that a user's skill of the same name wins, and that
-  `noSkills` still turns it off.
+  `noSkills` silences what we bundle without silencing a path the user named.
+- [x] 7.4 Bound each vocabulary at the number of types a rendering can actually draw apart, refusing
+  the rest with a diagnostic rather than drawing two types alike.

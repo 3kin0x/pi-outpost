@@ -636,10 +636,15 @@ read is one it cannot answer questions about.
 
 ### Requirement: ValidatedProposalRemainsRecoverableUnchanged
 
-A validated proposal SHALL remain available in exactly the form it was validated in, for as long as
-the result carrying it is available. The system SHALL NOT re-serialise, reorder, normalise, or
-otherwise alter it — not when validating it, not when rendering it, and not when the reader adjusts,
-narrows or exports the rendering.
+A validated proposal SHALL remain available for as long as the result carrying it is available, and
+SHALL be structurally identical to what was validated: the same elements, relationships, removals and
+fields, in the same order, with the same values. Nothing SHALL be added, dropped, reordered, coerced,
+truncated, or defaulted — not when validating it, not when rendering it, and not when the reader
+adjusts, narrows or exports the rendering.
+
+Byte identity is deliberately **not** promised. The document crosses this process as a parsed value,
+so the bytes a producer wrote do not survive to the far side, and a requirement stated in bytes would
+be one nothing can keep. What is worth guaranteeing is that no field, no order and no value differs.
 
 There is deliberately no approval action and no handover step in this system. A proposal is shown so
 a person can judge it; carrying their decision anywhere is the job of whatever integrates this, and
@@ -647,11 +652,11 @@ is outside this contract. What is required here is that when that integration co
 document, it finds the document that was shown.
 
 #### Scenario: ValidatedProposalIsRecoverableAsValidated
-- **WHEN** a validated proposal has been rendered and is fetched again from the result that carried it
-- **THEN** it is byte-identical to the value that was validated, with no normalisation, reordering, or re-encoding applied
+- **WHEN** a validated document is presented through the tool and recovered from the result that carried it
+- **THEN** it is structurally identical to what was validated — same fields, same order, same values — with nothing added, dropped, reordered or coerced
 
 #### Scenario: RenderingAndAdjustingDoNotAlterIt
-- **WHEN** a reader repositions the rendering, narrows it to selected kinds, or exports it
+- **WHEN** a reader repositions the rendering, narrows it to selected kinds, or copies or downloads it
 - **THEN** the recoverable document is unchanged by any of it
 
 ### Requirement: ReferenceValidationAvailableToProducers
@@ -762,6 +767,14 @@ Where a rendering distinguishes elements or relationships by their declared kind
 through a channel that does not compete with how it shows what is changing. Two distinct kinds
 present in the same rendering SHALL be distinguishable from one another. A rendering SHALL provide a
 key naming every kind it distinguishes, and that key SHALL be part of what an export carries.
+
+#### Scenario: EachVocabularyIsBoundedByWhatCanBeDistinguished
+- **WHEN** a document declares more distinct element types, or more distinct relationship types, than a rendering can present distinguishably
+- **THEN** it is refused, naming the vocabulary, the count and the limit
+
+#### Scenario: TheTwoVocabulariesAreCountedApart
+- **WHEN** a document declares the maximum number of element types and the maximum number of relationship types at once
+- **THEN** it is accepted, because the two vocabularies are independent and are counted independently
 
 #### Scenario: TwoTypesNeverLookAlike
 - **WHEN** a document declares several distinct element or relationship kinds

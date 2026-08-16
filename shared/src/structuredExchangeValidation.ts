@@ -14,6 +14,7 @@
  */
 import {
   PROPOSABLE_KINDS,
+  STRUCTURED_EXCHANGE_CEILINGS,
   type StructuredElement,
   type StructuredExchangeEnvelope,
   type StructuredGraphData,
@@ -216,6 +217,39 @@ export function validateStructuredExchangeSemantics(envelope: StructuredExchange
         path: `${candidate.at}/set`,
         message:
           "a change needs a target: naming what is being changed is what makes this a proposal rather than a new artifact",
+      });
+    }
+  }
+
+  /**
+   * Distinct types, per vocabulary, counted independently.
+   *
+   * The ceiling is what a reader can be shown apart, not what fits in memory: types
+   * are distinguished by a colour and a pattern, sixty-four combinations, and past
+   * that two of them are drawn alike. A document a reader cannot check is not one to
+   * accept quietly.
+   */
+  const countKinds = (things: { kind?: string }[]): Set<string> => {
+    const seen = new Set<string>();
+    for (const thing of things) if (thing.kind !== undefined && thing.kind !== "") seen.add(thing.kind);
+    return seen;
+  };
+  const vocabularies: [string, string, Set<string>][] = [
+    [envelope.kind === "sequence" ? "participant" : "element", elementsAt, countKinds(elements)],
+    [
+      envelope.kind === "sequence" ? "message" : "relationship",
+      relationshipsPointer(envelope),
+      countKinds(relationshipsOf(envelope) as { kind?: string }[]),
+    ],
+  ];
+  for (const [noun, at, kinds] of vocabularies) {
+    if (kinds.size > STRUCTURED_EXCHANGE_CEILINGS.kindsPerVocabulary) {
+      issues.push({
+        rule: "too-many-kinds",
+        path: at,
+        message: `${kinds.size} distinct ${noun} types, and no more than ${STRUCTURED_EXCHANGE_CEILINGS.kindsPerVocabulary} can be told apart in a rendering`,
+        observed: kinds.size,
+        limit: STRUCTURED_EXCHANGE_CEILINGS.kindsPerVocabulary,
       });
     }
   }

@@ -171,6 +171,18 @@ export const STRUCTURED_EXCHANGE_CEILINGS = {
   localId: 200,
   label: 500,
   kind: 100,
+  /**
+   * Distinct types per vocabulary, counted independently for elements and for
+   * relationships.
+   *
+   * Not a storage bound — it is what a reader can be shown. A rendering tells types
+   * apart by a colour and a pattern, which yields sixty-four distinguishable
+   * presentations; past that two types are drawn alike, and a rendering that cannot
+   * distinguish what a document declares is not an approval gate. Bounding it in the
+   * contract is the alternative to letting documents through that no reader could
+   * check.
+   */
+  kindsPerVocabulary: 64,
   columnName: 200,
   cell: 1000,
 } as const;

@@ -116,7 +116,14 @@ const KIND_TINTS: { fill: string; stroke: string }[] = [
  */
 const KIND_DASHES: (string | undefined)[] = [undefined, "7 3", "2 3", "9 3 2 3"];
 
-/** How many types can be told apart by appearance alone. */
+/**
+ * How many types can be told apart by appearance alone.
+ *
+ * The contract bounds each vocabulary at exactly this number, so the two cannot
+ * disagree: a document the rendering could not distinguish is refused rather than
+ * drawn ambiguously. `STRUCTURED_EXCHANGE_CEILINGS.kindsPerVocabulary` is asserted
+ * against it.
+ */
 export const KIND_PRESENTATIONS = KIND_TINTS.length * KIND_DASHES.length;
 
 type Tint = { fill: string; stroke: string; dash?: string };
@@ -211,6 +218,8 @@ export type LegendEntry = {
   stroke: string;
   /** The dash the thing is actually drawn with, so the key matches the picture. */
   dashed?: string;
+  /** Dimmed the way the diagram dims it — how context is marked now. */
+  faded?: boolean;
   /** Set when this entry names a type the reader can show and hide. */
   toggles?: boolean;
   /** The qualified name this entry switches — see `filterKey`. */
@@ -318,6 +327,7 @@ function Legend({
             <g
               key={entry.label}
               data-legend-entry={entry.key ?? entry.label}
+              data-faded={entry.faded === true ? "true" : undefined}
               data-hidden={entry.hidden === true ? "true" : undefined}
               onClick={
                 entry.toggles === true && entry.key !== undefined && onToggle !== undefined
@@ -325,7 +335,7 @@ function Legend({
                   : undefined
               }
               style={entry.toggles === true ? { cursor: "pointer" } : undefined}
-              opacity={entry.hidden === true ? 0.45 : 1}
+              opacity={entry.hidden === true ? 0.45 : entry.faded === true ? 0.62 : 1}
             >
               {/* A generous hit area, since the swatch itself is ten pixels tall */}
               {entry.toggles === true && (
@@ -996,20 +1006,13 @@ function GraphView({
         hidden: hidden.has(filterKey(of, kind)),
       };
     };
-    // Past the palette, colours repeat. Saying so is the difference between a key
-    // that is incomplete and a key that is wrong: a reader who trusts colour alone
-    // would otherwise read two unrelated types as one.
-    const heading = (noun: string, count: number) =>
-      count > KIND_PRESENTATIONS ? `${noun} (${count} types, appearances repeat)` : noun;
-    const elementKinds = kindsPresent(data.nodes);
-    const relationshipKinds = kindsPresent(data.edges);
+    // No "colours repeat" caveat: the contract bounds each vocabulary at exactly the
+    // number of presentations this can draw apart, so a document that would exhaust
+    // the encoding is refused before it reaches here rather than rendered ambiguously
+    // with an apology attached.
     const groups: LegendGroup[] = [
-      { title: heading("elements", elementKinds.length), sample: "box", entries: elementKinds.map(swatch("element")) },
-      {
-        title: heading("relationships", relationshipKinds.length),
-        sample: "line",
-        entries: relationshipKinds.map(swatch("relationship")),
-      },
+      { title: "elements", sample: "box", entries: kindsPresent(data.nodes).map(swatch("element")) },
+      { title: "relationships", sample: "line", entries: kindsPresent(data.edges).map(swatch("relationship")) },
     ];
 
     if (isProposal) {
@@ -1020,11 +1023,14 @@ function GraphView({
       groups.push({
         title: "changes",
         sample: "box",
+        // Drawn the way the diagram draws it: context is dimmed now, not dashed —
+        // the dash says what kind of thing something is. A key that shows a pattern
+        // the picture never uses is a key that is wrong.
         entries: ROLES.filter((role) => role !== "unchanged" && used.has(role)).map((role) => ({
           label: ROLE_LABEL[role],
           fill: PAPER,
           stroke: ROLE_PAINT[role].stroke,
-          dashed: role === "context" ? "3 2" : undefined,
+          faded: role === "context",
         })),
       });
     }
@@ -1481,7 +1487,9 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
         sample: "box",
         entries: kindsPresent(data.participants).map((kind) => {
           const tint = tints.get(kind)!;
-          return { label: kind, fill: tint.fill, stroke: tint.stroke, key: filterKey("element", kind) };
+          // The dash is half of what distinguishes a type; a key that drops it
+          // stops matching the picture the moment a diagram has more than sixteen.
+          return { label: kind, fill: tint.fill, stroke: tint.stroke, dashed: tint.dash, key: filterKey("element", kind) };
         }),
       },
     ];
@@ -1493,11 +1501,14 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
       groups.push({
         title: "changes",
         sample: "box",
+        // Drawn the way the diagram draws it: context is dimmed now, not dashed —
+        // the dash says what kind of thing something is. A key that shows a pattern
+        // the picture never uses is a key that is wrong.
         entries: ROLES.filter((role) => role !== "unchanged" && used.has(role)).map((role) => ({
           label: ROLE_LABEL[role],
           fill: PAPER,
           stroke: ROLE_PAINT[role].stroke,
-          dashed: role === "context" ? "3 2" : undefined,
+          faded: role === "context",
         })),
       });
     }
