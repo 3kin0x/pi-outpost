@@ -87,11 +87,25 @@ without leaving the exchange.
 ## Validating before you emit
 
 ```
-node --import tsx/esm shared/bin/validate-structured-exchange.mjs document.json
+node contract/validate-structured-exchange.mjs document.json
+cat document.json | node contract/validate-structured-exchange.mjs
 ```
 
-Exit 0 accepts, 1 refuses, 2 means the input could not be read — which is not the
-same as invalid, and your build should not treat it as if it were.
+One file, no install, no checkout: the schema and the rules are inside it. In this
+repository, build it with `npm run build:validator` and find it at
+`shared/dist/validate-structured-exchange.mjs`.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | the document conforms |
+| `1` | the document was read and parsed, and does not conform |
+| `2` | the input could not be read at all |
+| `3` | the input was read and is not JSON |
+
+The last three are separated on purpose. A missing file, a truncated write and a
+document that says the wrong thing send you looking in three different places, and a
+build that collapses them into "invalid" sends you to the schema for a problem that
+is not there.
 
 Diagnostics name the rule and point at the value:
 
@@ -122,8 +136,9 @@ contract ships with the package, under `contract/`:
 
 ```
 node_modules/pi-outpost/dist/contract/
-  schemas/structured-exchange-1.json   the normative schema — any validator runs it
+  schemas/structured-exchange-1.json    the normative schema — any validator runs it
   conformance/                          documents and the verdict each should get
+  validate-structured-exchange.mjs      the reference validator, self-contained
   README.md                             this page
 ```
 
@@ -131,6 +146,8 @@ node_modules/pi-outpost/dist/contract/
   same file, copied at build time rather than restated.
 - The **conformance suite** covers the relational rules JSON Schema cannot express.
   Run your implementation against it; if it agrees on every case, it conforms.
+- The **validator** is the reference implementation of both, bundled with everything
+  it needs. Use it as a check on your own, or as the check itself.
 
 In this repository the same two live at `shared/schemas/` and `shared/conformance/`.
 

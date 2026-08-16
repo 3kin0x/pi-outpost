@@ -809,7 +809,7 @@ describe("filtering, without weakening the approval gate", () => {
     expect(banner.textContent).toMatch(/filtered/i);
   });
 
-  it("keeps a hidden type in the key, struck through, so an exported figure says what is missing", () => {
+  it("keeps a hidden type in the key, marked hidden, so an exported figure says what is missing", () => {
     // The banner is HTML and stays behind on export; the key is inside the SVG.
     renderBody(withStructured(typed));
     fireEvent.click(entry("element:converter"));
@@ -817,7 +817,16 @@ describe("filtering, without weakening the approval gate", () => {
     const stillListed = entry("element:converter");
     expect(stillListed.closest("svg")).not.toBeNull();
     expect(stillListed.getAttribute("data-hidden")).toBe("true");
-    expect(stillListed.querySelector("text")!.getAttribute("text-decoration")).toBe("line-through");
+    expect(stillListed.querySelector("text")!.textContent).toBe("converter (hidden)");
+  });
+
+  it("never marks a hidden type the way it marks a removed one", () => {
+    // A removal is struck through a few pixels away in the same view. Reusing that
+    // for "switched off" would read, on a proposal, as a type being taken out of it.
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("element:converter"));
+
+    expect(entry("element:converter").querySelector("text")!.getAttribute("text-decoration")).toBeNull();
   });
 
   it("restores everything from the banner", () => {
@@ -1159,5 +1168,200 @@ describe("every declared relationship is a relationship you can see", () => {
     );
     const spanning = paths().find((d) => (d.match(/L/g) ?? []).length > 1);
     expect(spanning, "the relationship spanning three ranks should be a routed polyline").toBeDefined();
+  });
+});
+
+describe("what an export of a filtered view claims", () => {
+  const typedProposal = {
+    schema: S,
+    kind: "graph",
+    target: "artifact-1",
+    data: {
+      nodes: [
+        { id: "keep", ref: "EL-1", label: "Existing", kind: "service" },
+        { id: "store", ref: "EL-2", label: "Ledger", kind: "datastore" },
+        { id: "fresh", label: "Brand new", kind: "service" },
+      ],
+      edges: [{ from: "fresh", to: "store", kind: "writes" }],
+    },
+  };
+  const entry = (key: string) => document.querySelector(`[data-legend-entry="${key}"]`)!;
+
+  /**
+   * The decision, stated once: an export carries the view the reader is looking at,
+   * and the figure says so on its face. Exporting the whole document instead would
+   * hand back something the reader never saw, which is the worse failure for an
+   * approval gate — but a filtered figure must never read as a smaller proposal.
+   */
+  it("draws only what is shown, and says so inside the figure", () => {
+    renderBody(withStructured(typedProposal));
+    fireEvent.click(entry("element:datastore"));
+
+    const svg = document.querySelector('svg[role="img"]')!;
+    expect(svg.querySelectorAll("[data-element-role]").length).toBe(2);
+
+    const note = screen.getByTestId("diagram-filter-note");
+    expect(note.closest("svg")).not.toBeNull();
+    expect(note.textContent).toContain("2 of 3 elements");
+  });
+
+  it("says on a proposal that a hidden type is still part of it", () => {
+    renderBody(withStructured(typedProposal));
+    fireEvent.click(entry("element:datastore"));
+
+    expect(screen.getByTestId("diagram-filter-note").textContent).toContain(
+      "Hidden types are still part of the proposal",
+    );
+  });
+
+  it("carries that note into the serialized markup, not only onto the screen", () => {
+    renderBody(withStructured(typedProposal));
+    fireEvent.click(entry("element:datastore"));
+
+    const markup = new XMLSerializer().serializeToString(document.querySelector('svg[role="img"]')!);
+    expect(markup).toContain("2 of 3 elements");
+    expect(markup).toContain("datastore (hidden)");
+  });
+
+  it("makes no such claim when nothing is filtered", () => {
+    renderBody(withStructured(typedProposal));
+    expect(screen.queryByTestId("diagram-filter-note")).toBeNull();
+  });
+});
+
+describe("a long type name is not quietly cut off", () => {
+  it("widens a narrow diagram to fit the key that explains it", () => {
+    // The schema allows a hundred-character type name and the canvas width came from
+    // the graph alone, so a two-node diagram drew a key that ran off the viewBox.
+    const long = "a-very-long-domain-specific-stereotype-name-that-keeps-going";
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        data: { nodes: [{ id: "a", label: "A", kind: long }], edges: [] },
+      }),
+    );
+
+    const svg = document.querySelector('svg[role="img"]')!;
+    const [, , width] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+    const label = [...svg.querySelectorAll("[data-legend-entry] text")].find((t) =>
+      t.textContent!.includes(long),
+    )!;
+
+    expect(Number(label.getAttribute("x")) + long.length * 5.6).toBeLessThanOrEqual(width);
+  });
+});
+
+describe("the text equivalent says everything the picture says", () => {
+  /**
+   * A reader is on the text equivalent because they cannot see the diagram. Anything
+   * only the diagram says is, for them, not said at all — so this checks the words
+   * against the document, not against the SVG.
+   */
+  const textOf = (document_: unknown) => {
+    renderBody(withStructured(document_));
+    fireEvent.click(screen.getByText("show text equivalent"));
+    return screen.getByTestId("structured-text-equivalent").textContent!;
+  };
+
+  const graph = {
+    schema: S,
+    kind: "graph",
+    target: "artifact-1",
+    removals: [{ type: "relationship", ref: "REL-9" }],
+    data: {
+      nodes: [
+        { id: "batt", ref: "EL-1", label: "Battery", kind: "storage" },
+        { id: "bms", ref: "EL-2", label: "BMS", kind: "controller", set: { label: "Battery manager" } },
+        { id: "orphan", label: "Spare", kind: "storage" },
+        { id: "mot", label: "Motor", kind: "actuator" },
+      ],
+      edges: [
+        { from: "batt", to: "mot", kind: "power", label: "traction bus" },
+        { from: "bms", to: "batt", kind: "control" },
+        { from: "bms", to: "bms", kind: "diagnostic" },
+      ],
+    },
+  };
+
+  it("names every element, including one nothing connects to", () => {
+    const text = textOf(graph);
+    for (const name of ["Battery", "BMS", "Spare", "Motor"]) expect(text).toContain(name);
+  });
+
+  it("states each element's type, which the diagram carries only as a colour", () => {
+    const text = textOf(graph);
+    for (const kind of ["storage", "controller", "actuator"]) expect(text).toContain(`[${kind}]`);
+  });
+
+  it("keeps both a relationship's type and its label when it declares both", () => {
+    // One standing in for the other lost whichever the traversal did not prefer.
+    const text = textOf(graph);
+    expect(text).toContain("power");
+    expect(text).toContain("traction bus");
+  });
+
+  it("prefers the same name the diagram draws", () => {
+    // The diagram draws `label ?? kind` and the words used to prefer `kind ?? label`,
+    // so the two disagreed about what a thing was called.
+    const text = textOf({
+      schema: S,
+      kind: "graph",
+      data: { nodes: [{ id: "a", label: "Ledger", kind: "datastore" }], edges: [] },
+    });
+    expect(text.split("\n").some((line) => line.startsWith("Ledger"))).toBe(true);
+  });
+
+  it("says a relationship goes to itself, which the diagram says with a loop", () => {
+    expect(textOf(graph)).toContain("to itself");
+  });
+
+  it("reports additions, changes and removals without the picture", () => {
+    const text = textOf(graph);
+    expect(text).toContain("added");
+    expect(text).toContain("changed");
+    expect(text).toContain("Ledger" === "" ? "" : "Battery manager");
+    expect(text).toContain("removed relationship: REL-9");
+  });
+
+  it("counts what there is, so a reader knows how much they are not seeing", () => {
+    expect(textOf(graph)).toContain("4 elements, 3 relationships");
+  });
+
+  const sequence = {
+    schema: S,
+    kind: "sequence",
+    target: "artifact-2",
+    data: {
+      participants: [
+        { id: "user", label: "User", kind: "actor" },
+        { id: "api", label: "API", kind: "service" },
+        { id: "idle", label: "Audit", kind: "service" },
+      ],
+      messages: [
+        { from: "user", to: "api", label: "submit" },
+        { from: "api", to: "user", label: "receipt" },
+      ],
+    },
+  };
+
+  it("lists sequence participants, including one no message reaches", () => {
+    // The words used to walk the messages only, so a participant drawn on screen with
+    // its own lifeline was missing from the account entirely.
+    const text = textOf(sequence);
+    for (const name of ["User", "API", "Audit"]) expect(text).toContain(name);
+    expect(text).toContain("3 participants, 2 messages");
+  });
+
+  it("states a participant's type too", () => {
+    const text = textOf(sequence);
+    expect(text).toContain("[actor]");
+    expect(text).toContain("[service]");
+  });
+
+  it("keeps the messages numbered and in their declared order", () => {
+    const text = textOf(sequence);
+    expect(text.indexOf("1. User")).toBeGreaterThan(-1);
+    expect(text.indexOf("1. User")).toBeLessThan(text.indexOf("2. API"));
   });
 });

@@ -15,6 +15,7 @@
     "dev:web": "npm run dev --workspace web",
     "start": "npm run build --workspace web && npm run start --workspace server",
     "build": "npm run build --workspaces --if-present",
+    "build:validator": "node shared/scripts/build-validator.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "check:css": "node scripts/check-web-css.mjs",

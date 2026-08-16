@@ -148,6 +148,20 @@ await cp(resolve(REPO_ROOT, "shared/schemas"), resolve(OUT_DIR, "contract/schema
 await cp(resolve(REPO_ROOT, "shared/conformance"), resolve(OUT_DIR, "contract/conformance"), { recursive: true });
 await cp(resolve(REPO_ROOT, "docs/structured-exchange.md"), resolve(OUT_DIR, "contract/README.md"));
 
+// The reference validator, as one file that runs anywhere Node does. The script it
+// is built from imports this repository's TypeScript, so shipping that would be
+// shipping a demonstration; a producer needs something they can actually execute.
+console.log("[build] building the reference validator …");
+execFileSync("node", [resolve(REPO_ROOT, "shared/scripts/build-validator.mjs")], {
+  cwd: REPO_ROOT,
+  stdio: "inherit",
+  shell: isWindows,
+});
+await cp(
+  resolve(REPO_ROOT, "shared/dist/validate-structured-exchange.mjs"),
+  resolve(OUT_DIR, "contract/validate-structured-exchange.mjs"),
+);
+
 console.log("[build] copying skills …");
 await cp(resolve(REPO_ROOT, "skills"), resolve(OUT_DIR, "skills"), { recursive: true });
 

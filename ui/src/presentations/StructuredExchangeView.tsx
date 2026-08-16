@@ -7,6 +7,7 @@ import type {
   ValidatedStructuredExchange,
 } from "@pi-outpost/shared/structured-exchange";
 import {
+  describeStructure,
   displayLabel,
   elementRole,
   fieldChanges,
@@ -180,7 +181,9 @@ export type LegendGroup = {
 };
 
 function entryWidth(label: string): number {
-  return 16 + 5 + label.length * 5.6 + LEGEND_GAP;
+  // Room for the " (hidden)" a switched-off entry grows, so the key does not reflow
+  // under the reader as they toggle things.
+  return 16 + 5 + (label.length + 9) * 5.6 + LEGEND_GAP;
 }
 
 /** Rows a group needs, so the canvas can make room before anything is drawn. */
@@ -196,6 +199,21 @@ function groupRows(group: LegendGroup, width: number): number {
     cursor += needed;
   }
   return rows;
+}
+
+/**
+ * The narrowest canvas the key can be laid out on without anything falling off it.
+ *
+ * The schema allows a type name of a hundred characters, and the canvas width came
+ * from the graph alone — so a narrow diagram with long type names drew a key that ran
+ * past the viewBox and was simply cut. Wrapping cannot rescue an entry that is wider
+ * than every line available to it, so the widest single entry sets a floor.
+ */
+function legendMinimumWidth(groups: LegendGroup[]): number {
+  const widest = groups
+    .flatMap((group) => group.entries)
+    .reduce((wide, entry) => Math.max(wide, entryWidth(entry.label)), 0);
+  return widest === 0 ? 0 : LEGEND_TITLE + widest + 32;
 }
 
 /** How tall the whole key will be. */
@@ -290,15 +308,8 @@ function Legend({
                   strokeDasharray={entry.dashed === true ? "3 2" : undefined}
                 />
               )}
-              <text
-                x={at + 21}
-                y={top + 9}
-                fontSize={9}
-                fill={MUTED}
-                fontFamily="system-ui, sans-serif"
-                textDecoration={entry.hidden === true ? "line-through" : undefined}
-              >
-                {entry.label}
+              <text x={at + 21} y={top + 9} fontSize={9} fill={MUTED} fontFamily="system-ui, sans-serif">
+                {entry.hidden === true ? `${entry.label} (hidden)` : entry.label}
               </text>
             </g>
           );
@@ -721,7 +732,7 @@ function GraphView({
   const top = Math.min(0, ...drawn.map((box) => box.y - 12));
   const right = Math.max(layout.width, ...drawn.map((box) => box.x + box.w + 12));
   const bottom = Math.max(layout.height, ...drawn.map((box) => box.y + box.h + 12));
-  const width = right - left;
+  const diagramWidth = right - left;
   const diagramHeight = bottom - top;
 
   // One colour table for the whole diagram, so an element type and a relationship
@@ -812,6 +823,7 @@ function GraphView({
   const arrowPaints = [...new Set(shown.edges.map(edgePaint))];
 
   const legendTop = bottom + 4;
+  const width = Math.max(diagramWidth, legendMinimumWidth(legend));
   const height = diagramHeight + legendHeight(legend, width);
 
   /**
@@ -1037,6 +1049,20 @@ function GraphView({
           );
         })}
 
+        {hidden.size > 0 && (
+          <text
+            data-testid="diagram-filter-note"
+            x={left + 12}
+            y={legendTop + legendHeight(legend, width) - 4}
+            fontSize={9}
+            fontWeight={600}
+            fill="#92400e"
+            fontFamily="system-ui, sans-serif"
+          >
+            {`Filtered view: ${shown.nodes.length} of ${data.nodes.length} elements and ${shown.edges.length} of ${data.edges.length} relationships shown.` +
+              (isProposal ? " Hidden types are still part of the proposal." : "")}
+          </text>
+        )}
         <Legend
           groups={legend}
           x={left + 12}
@@ -1094,7 +1120,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
     [data.participants, boxW],
   );
   const x = (id: string) => (columnOf.get(id) ?? 0) * lifelineX + lifelineX / 2;
-  const width = Math.max(data.participants.length * lifelineX, 240);
+  const diagramWidth = Math.max(data.participants.length * lifelineX, 240);
   const diagramHeight = headerHeight + (data.messages.length + 1) * MESSAGE_GAP;
 
   // Participants are elements and carry a type like any other; a message does not,
@@ -1131,6 +1157,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
   }, [data, isProposal, tints]);
 
   const legendTop = diagramHeight + 4;
+  const width = Math.max(diagramWidth, legendMinimumWidth(legend));
   const height = diagramHeight + legendHeight(legend, width);
 
   return (
@@ -1361,10 +1388,6 @@ function EnlargedView({
 
 /* ── Textual equivalent ─────────────────────────────────────────────────────── */
 
-function describeChanges(subject: Parameters<typeof fieldChanges>[0]): string {
-  const changes = fieldChanges(subject);
-  return changes.length === 0 ? "" : changes.map((change) => ` [${changeText(change)}]`).join("");
-}
 
 /**
  * What the view says, in words.
@@ -1374,38 +1397,53 @@ function describeChanges(subject: Parameters<typeof fieldChanges>[0]): string {
  * seeing it.
  */
 function textualEquivalent(envelope: ValidatedStructuredExchange, isProposal: boolean): string {
+  const described = describeStructure(envelope, isProposal);
   const lines: string[] = [];
-  if (envelope.kind === "graph") {
-    const data = envelope.data as StructuredGraphData;
-    const label = new Map(data.nodes.map((node) => [node.id, displayLabel(node)]));
-    for (const node of data.nodes) {
-      const role = elementRole(node, isProposal);
-      lines.push(`${displayLabel(node)}${role === "unchanged" ? "" : ` (${ROLE_LABEL[role]})`}${describeChanges(node)}`);
+
+  if (described.columns !== undefined && described.rows !== undefined) {
+    lines.push(described.columns.join(" | "));
+    for (const row of described.rows) {
+      lines.push(row.map((cell) => (cell === null ? "" : String(cell))).join(" | "));
     }
-    for (const edge of data.edges) {
-      const role = relationshipRole(edge, isProposal);
-      const via = edge.kind ?? edge.label ?? "relates to";
+  } else {
+    // Named and counted, so a reader who cannot see the picture knows how much of it
+    // there is — and so a thing nothing connects to is still in the account.
+    lines.push(`${described.things.length} ${described.thingNoun}s, ${described.links.length} ${described.linkNoun}s`);
+    lines.push("");
+
+    for (const thing of described.things) {
       lines.push(
-        `${label.get(edge.from) ?? edge.from} —${via}→ ${label.get(edge.to) ?? edge.to}` +
-          (role === "unchanged" ? "" : ` (${ROLE_LABEL[role]})`) +
-          describeChanges(edge),
+        [
+          thing.label,
+          thing.kind === undefined ? "" : ` [${thing.kind}]`,
+          thing.role === "unchanged" ? "" : ` (${ROLE_LABEL[thing.role]})`,
+          thing.changes.length === 0 ? "" : ` — ${thing.changes.map(changeText).join(", ")}`,
+        ].join(""),
       );
     }
-  } else if (envelope.kind === "sequence") {
-    const data = envelope.data as StructuredSequenceData;
-    const label = new Map(data.participants.map((p) => [p.id, displayLabel(p)]));
-    data.messages.forEach((message, index) => {
+
+    if (described.links.length > 0) lines.push("");
+    described.links.forEach((link, index) => {
+      // Both, when both are declared: the type says what kind of connection it is and
+      // the label says what this one is, and neither stands in for the other.
+      const said = [link.kind, link.label].filter((part) => part !== undefined && part !== "");
+      const via = said.length === 0 ? "→" : `—${said.join(": ")}→`;
       lines.push(
-        `${index + 1}. ${label.get(message.from) ?? message.from} → ${label.get(message.to) ?? message.to}: ${message.label ?? ""}` +
-          describeChanges(message),
+        [
+          described.linkNoun === "message" ? `${index + 1}. ` : "",
+          `${link.fromLabel} ${via} ${link.toLabel}`,
+          link.isLoop ? " (to itself)" : "",
+          link.role === "unchanged" ? "" : ` (${ROLE_LABEL[link.role]})`,
+          link.changes.length === 0 ? "" : ` — ${link.changes.map(changeText).join(", ")}`,
+        ].join(""),
       );
     });
-  } else {
-    const data = envelope.data as StructuredTableData;
-    lines.push(data.columns.join(" | "));
-    for (const row of data.rows) lines.push(row.map((cell) => (cell === null ? "" : String(cell))).join(" | "));
   }
-  for (const removal of envelope.removals ?? []) lines.push(`removed ${removal.type}: ${removal.ref}`);
+
+  if (described.removals.length > 0) {
+    lines.push("");
+    for (const removal of described.removals) lines.push(`removed ${removal.type}: ${removal.ref}`);
+  }
   return lines.join("\n");
 }
 

@@ -18,6 +18,7 @@ import type {
   StructuredGraphData,
   StructuredMessage,
   StructuredSequenceData,
+  StructuredTableData,
   ValidatedStructuredExchange,
 } from "@pi-outpost/shared/structured-exchange";
 
@@ -204,6 +205,108 @@ export function layoutGraph(
   );
 
   return { nodes, edges, width: extent.width + MARGIN, height: extent.height + MARGIN };
+}
+
+/**
+ * Everything the picture shows, as facts rather than geometry.
+ *
+ * One model, two renderings. The text equivalent used to walk the document on its
+ * own, and it drifted from the diagram in every way an independent traversal can:
+ * it never mentioned an element's type, it preferred `kind` where the diagram
+ * preferred `label`, it dropped one of the two when a relationship declared both,
+ * and it listed sequence messages without ever listing the participants — so a
+ * participant nobody sent a message to was in the picture and absent from the words.
+ *
+ * A reader on the text equivalent is reading it *because* they cannot see the
+ * diagram. Anything only the diagram says is, for them, not said at all.
+ */
+export type DescribedThing = {
+  id: string;
+  label: string;
+  kind?: string;
+  role: ChangeRole;
+  changes: FieldChange[];
+};
+
+export type DescribedLink = {
+  from: string;
+  to: string;
+  fromLabel: string;
+  toLabel: string;
+  /** What the relationship says of itself, if anything. */
+  label?: string;
+  kind?: string;
+  role: ChangeRole;
+  changes: FieldChange[];
+  isLoop: boolean;
+};
+
+export type StructureDescription = {
+  /** "element" for a graph, "participant" for a sequence. */
+  thingNoun: string;
+  linkNoun: string;
+  things: DescribedThing[];
+  links: DescribedLink[];
+  columns?: string[];
+  rows?: (string | number | boolean | null)[][];
+  removals: { type: string; ref: string }[];
+};
+
+export function describeStructure(
+  envelope: ValidatedStructuredExchange,
+  isProposal: boolean,
+): StructureDescription {
+  const removals = (envelope.removals ?? []).map((removal) => ({ type: removal.type, ref: removal.ref }));
+
+  if (envelope.kind === "table") {
+    const data = envelope.data as StructuredTableData;
+    return {
+      thingNoun: "column",
+      linkNoun: "row",
+      things: [],
+      links: [],
+      columns: data.columns,
+      rows: data.rows,
+      removals,
+    };
+  }
+
+  const isGraph = envelope.kind === "graph";
+  const source = isGraph
+    ? (envelope.data as StructuredGraphData).nodes
+    : (envelope.data as StructuredSequenceData).participants;
+  const connections: (StructuredEdge | StructuredMessage)[] = isGraph
+    ? (envelope.data as StructuredGraphData).edges
+    : (envelope.data as StructuredSequenceData).messages;
+
+  const named = new Map(source.map((thing) => [thing.id, displayLabel(thing)]));
+
+  return {
+    thingNoun: isGraph ? "element" : "participant",
+    linkNoun: isGraph ? "relationship" : "message",
+    // Every one of them, including any nothing connects to.
+    things: source.map((thing) => ({
+      id: thing.id,
+      label: displayLabel(thing),
+      kind: thing.kind,
+      role: elementRole(thing, isProposal),
+      changes: fieldChanges(thing),
+    })),
+    links: connections.map((link) => ({
+      from: link.from,
+      to: link.to,
+      fromLabel: named.get(link.from) ?? link.from,
+      toLabel: named.get(link.to) ?? link.to,
+      label: link.label,
+      // A message has no kind; a relationship may have both a label and a kind, and
+      // both are carried rather than one standing in for the other.
+      kind: "kind" in link ? link.kind : undefined,
+      role: relationshipRole(link, isProposal),
+      changes: fieldChanges(link),
+      isLoop: link.from === link.to,
+    })),
+    removals,
+  };
 }
 
 /** Label to show for an element: its own when declared, else its reference. */
