@@ -40,6 +40,24 @@ const newArtifact = {
   data: { nodes: [{ id: "a", label: "A" }], edges: [] },
 };
 
+
+/**
+ * Toggle a key entry the way a pointer does: press, release, then click.
+ *
+ * A synthetic `click` on its own is not how anyone reaches this control, and driving
+ * it that way hid a real break for a whole session — the pan gesture on the canvas
+ * called preventDefault on pointerdown, which suppresses the click that follows, so
+ * the key was inert in the browser while every test went on passing.
+ */
+const toggleLegend = (key: string) => {
+  const entry = document.querySelector(`[data-legend-entry="${key}"]`)!;
+  const target = entry.querySelector("text") ?? entry;
+  const at = { clientX: 5, clientY: 5, button: 0, bubbles: true, cancelable: true };
+  target.dispatchEvent(Object.assign(new MouseEvent("pointerdown", at), { pointerId: 1 }));
+  target.dispatchEvent(Object.assign(new MouseEvent("pointerup", at), { pointerId: 1 }));
+  fireEvent.click(target);
+};
+
 const renderBody = (item: ToolItem) =>
   render(<structuredExchangePresentation.Expanded item={item} dispatch={vi.fn()} />);
 
@@ -776,23 +794,23 @@ describe("filtering, without weakening the approval gate", () => {
   it("hides a type when its key entry is clicked, and brings it back on a second click", () => {
     renderBody(withStructured(typed));
 
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
     expect(document.querySelectorAll("[data-element-role]").length).toBe(2);
 
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
     expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
   });
 
   it("drops a relationship whose end has gone, rather than drawing a line to nowhere", () => {
     renderBody(withStructured(typed));
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
     // Both relationships ended at the inverter
     expect(document.querySelectorAll("[data-relationship-role]").length).toBe(0);
   });
 
   it("hides a relationship type on its own without touching the elements", () => {
     renderBody(withStructured(typed));
-    fireEvent.click(entry("relationship:power"));
+    toggleLegend("relationship:power");
 
     expect(document.querySelectorAll("[data-relationship-role]").length).toBe(0);
     expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
@@ -802,7 +820,7 @@ describe("filtering, without weakening the approval gate", () => {
     // The view is an approval gate. A reader approving a filtered picture has to
     // know they are doing it.
     renderBody(withStructured(typed));
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
 
     const banner = screen.getByTestId("structured-filtered");
     expect(banner.textContent).toContain("converter");
@@ -812,7 +830,7 @@ describe("filtering, without weakening the approval gate", () => {
   it("keeps a hidden type in the key, marked hidden, so an exported figure says what is missing", () => {
     // The banner is HTML and stays behind on export; the key is inside the SVG.
     renderBody(withStructured(typed));
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
 
     const stillListed = entry("element:converter");
     expect(stillListed.closest("svg")).not.toBeNull();
@@ -824,14 +842,14 @@ describe("filtering, without weakening the approval gate", () => {
     // A removal is struck through a few pixels away in the same view. Reusing that
     // for "switched off" would read, on a proposal, as a type being taken out of it.
     renderBody(withStructured(typed));
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
 
     expect(entry("element:converter").querySelector("text")!.getAttribute("text-decoration")).toBeNull();
   });
 
   it("restores everything from the banner", () => {
     renderBody(withStructured(typed));
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
     fireEvent.click(screen.getByText("show everything"));
 
     expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
@@ -840,7 +858,7 @@ describe("filtering, without weakening the approval gate", () => {
 
   it("tells assistive technology that what it is describing is a subset", () => {
     renderBody(withStructured(typed));
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
 
     const svg = document.querySelector('svg[role="img"]')!;
     expect(svg.getAttribute("aria-label")).toMatch(/filtered to 2 elements/);
@@ -857,7 +875,7 @@ describe("filtering, without weakening the approval gate", () => {
         ?.getAttribute("fill");
 
     const before = fillOf("Battery");
-    fireEvent.click(entry("element:converter"));
+    toggleLegend("element:converter");
     expect(fillOf("Battery")).toBe(before);
   });
 });
@@ -941,7 +959,7 @@ describe("the two type vocabularies are independent", () => {
 
   it("hides a relationship type without hiding an element type of the same name", () => {
     renderBody(withStructured(shared));
-    fireEvent.click(entry("relationship:power"));
+    toggleLegend("relationship:power");
 
     expect(document.querySelectorAll("[data-relationship-role]").length).toBe(0);
     expect(document.querySelectorAll("[data-element-role]").length).toBe(2);
@@ -949,7 +967,7 @@ describe("the two type vocabularies are independent", () => {
 
   it("hides an element type without hiding a relationship type of the same name", () => {
     renderBody(withStructured(shared));
-    fireEvent.click(entry("element:power"));
+    toggleLegend("element:power");
 
     // The element goes, and the relationship goes with it only because it lost an end
     expect(document.querySelectorAll("[data-element-role]").length).toBe(1);
@@ -965,7 +983,7 @@ describe("the two type vocabularies are independent", () => {
 
   it("names the type plainly in the banner, not by its internal key", () => {
     renderBody(withStructured(shared));
-    fireEvent.click(entry("relationship:power"));
+    toggleLegend("relationship:power");
     expect(screen.getByTestId("structured-filtered").textContent).toContain("power");
     expect(screen.getByTestId("structured-filtered").textContent).not.toContain("relationship:power");
   });
@@ -1120,8 +1138,12 @@ describe("every declared relationship is a relationship you can see", () => {
     );
     const drawn = paths();
     expect(drawn).toHaveLength(2);
-    expect(drawn.every((d) => !d.includes("Q"))).toBe(true);
     expect(drawn[0]).not.toBe(drawn[1]);
+    // Neither is a rank bow — a single quadratic from end to end with nothing in
+    // between, which is what a relationship pushed aside to make room looks like.
+    // Either may still curve, because the layout engine routes a back edge around
+    // what it passes and that is the route being followed.
+    for (const d of drawn) expect(d, `${d} should not be a rank bow`).not.toMatch(/^M [\d.-]+ [\d.-]+ Q [^LQ]+$/);
   });
 
   it("keeps direction, arrow, type and hover on every shape it draws", () => {
@@ -1169,6 +1191,38 @@ describe("every declared relationship is a relationship you can see", () => {
     const spanning = paths().find((d) => (d.match(/L/g) ?? []).length > 1);
     expect(spanning, "the relationship spanning three ranks should be a routed polyline").toBeDefined();
   });
+
+  it("turns its corners as curves rather than as kinks", () => {
+    // A route drawn as bare segments turns through hard angles, which read as a
+    // broken line rather than as a path going somewhere.
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        data: {
+          nodes: ["a", "b", "c", "d"].map((id) => ({ id, label: id.toUpperCase() })),
+          edges: [
+            { from: "a", to: "b", kind: "k" },
+            { from: "b", to: "c", kind: "k" },
+            { from: "c", to: "d", kind: "k" },
+            { from: "a", to: "d", kind: "k" },
+          ],
+        },
+      }),
+    );
+
+    const routed = paths().find((d) => (d.match(/L/g) ?? []).length > 1)!;
+    expect(routed).toContain("Q");
+    // Every corner rounded, so none is left as a bare angle
+    expect((routed.match(/Q/g) ?? []).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("leaves a two-point route alone rather than inventing a curve in it", () => {
+    renderBody(
+      withStructured(graphOf([{ from: "a", to: "b", kind: "k" }])),
+    );
+    expect(paths()[0]).not.toContain("Q");
+  });
 });
 
 describe("what an export of a filtered view claims", () => {
@@ -1195,7 +1249,7 @@ describe("what an export of a filtered view claims", () => {
    */
   it("draws only what is shown, and says so inside the figure", () => {
     renderBody(withStructured(typedProposal));
-    fireEvent.click(entry("element:datastore"));
+    toggleLegend("element:datastore");
 
     const svg = document.querySelector('svg[role="img"]')!;
     expect(svg.querySelectorAll("[data-element-role]").length).toBe(2);
@@ -1207,7 +1261,7 @@ describe("what an export of a filtered view claims", () => {
 
   it("says on a proposal that a hidden type is still part of it", () => {
     renderBody(withStructured(typedProposal));
-    fireEvent.click(entry("element:datastore"));
+    toggleLegend("element:datastore");
 
     expect(screen.getByTestId("diagram-filter-note").textContent).toContain(
       "Hidden types are still part of the proposal",
@@ -1216,7 +1270,7 @@ describe("what an export of a filtered view claims", () => {
 
   it("carries that note into the serialized markup, not only onto the screen", () => {
     renderBody(withStructured(typedProposal));
-    fireEvent.click(entry("element:datastore"));
+    toggleLegend("element:datastore");
 
     const markup = new XMLSerializer().serializeToString(document.querySelector('svg[role="img"]')!);
     expect(markup).toContain("2 of 3 elements");
@@ -1363,5 +1417,87 @@ describe("the text equivalent says everything the picture says", () => {
     const text = textOf(sequence);
     expect(text.indexOf("1. User")).toBeGreaterThan(-1);
     expect(text.indexOf("1. User")).toBeLessThan(text.indexOf("2. API"));
+  });
+});
+
+describe("the canvas gesture does not swallow the controls drawn on it", () => {
+  const typed = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "A", kind: "block" },
+        { id: "b", label: "B", kind: "store" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "calls" }],
+    },
+  };
+
+  const scrollable = (element: HTMLElement) => {
+    Object.defineProperty(element, "scrollWidth", { value: 1000, configurable: true });
+    Object.defineProperty(element, "clientWidth", { value: 600, configurable: true });
+    Object.defineProperty(element, "scrollHeight", { value: 100, configurable: true });
+    Object.defineProperty(element, "clientHeight", { value: 100, configurable: true });
+    element.scrollLeft = 200;
+    return element;
+  };
+
+  it("declines a press that landed on the key, so the key stays clickable", () => {
+    /**
+     * The regression this exists for: panning ran on any press on the canvas, called
+     * preventDefault, and captured the pointer — which suppresses the click the
+     * browser would otherwise deliver. Filtering was completely inert in the browser
+     * while the suite stayed green, because the tests dispatched a click directly at
+     * the entry and never made the press that came before it.
+     *
+     * jsdom does not model click suppression, so what is asserted here is the cause
+     * rather than the symptom: the pan gesture must not start at all.
+     */
+    renderBody(withStructured(typed));
+    const svg = document.querySelector('svg[role="img"]')! as SVGSVGElement;
+    const scroller = scrollable(svg.parentElement as HTMLElement);
+    const entry = document.querySelector('[data-legend-entry="element:block"] text')!;
+
+    entry.dispatchEvent(
+      Object.assign(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 500, clientY: 50, button: 0 }), {
+        pointerId: 1,
+      }),
+    );
+    svg.dispatchEvent(
+      Object.assign(new MouseEvent("pointermove", { bubbles: true, clientX: 400, clientY: 50, button: 0 }), { pointerId: 1 }),
+    );
+
+    expect(scroller.scrollLeft, "a press on the key must not begin a pan").toBe(200);
+  });
+
+  it("does not cancel the browser's default on a press that belongs to the key", () => {
+    renderBody(withStructured(typed));
+    const entry = document.querySelector('[data-legend-entry="element:block"] text')!;
+    const press = Object.assign(
+      new MouseEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 5, clientY: 5, button: 0 }),
+      { pointerId: 1 },
+    );
+
+    entry.dispatchEvent(press);
+
+    // preventDefault here is exactly what suppresses the click that follows
+    expect(press.defaultPrevented).toBe(false);
+  });
+
+  it("still pans from the ground beside the drawing", () => {
+    renderBody(withStructured(typed));
+    const svg = document.querySelector('svg[role="img"]')! as SVGSVGElement;
+    const scroller = scrollable(svg.parentElement as HTMLElement);
+
+    svg.dispatchEvent(
+      Object.assign(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 500, clientY: 50, button: 0 }), {
+        pointerId: 1,
+      }),
+    );
+    svg.dispatchEvent(
+      Object.assign(new MouseEvent("pointermove", { bubbles: true, clientX: 440, clientY: 50, button: 0 }), { pointerId: 1 }),
+    );
+
+    expect(scroller.scrollLeft).toBe(260);
   });
 });

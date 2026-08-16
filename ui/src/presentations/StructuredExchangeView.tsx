@@ -556,6 +556,54 @@ function anchorPoint(
 type Box = { x: number; y: number; cx: number; cy: number; w: number; h: number };
 
 /**
+ * A polyline with its corners cut.
+ *
+ * A layout route is a sequence of straight segments, and drawn as such it turns
+ * through hard angles that read as kinks rather than as a path going somewhere. Each
+ * corner is replaced by a short quadratic through it, with the radius clamped to the
+ * shorter of the two segments meeting there so a tight turn bends rather than
+ * overshoots into the segment beyond it.
+ */
+function roundedPath(points: { x: number; y: number }[], radius: number): string {
+  if (points.length < 3) {
+    return points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  }
+
+  const parts = [`M ${points[0].x} ${points[0].y}`];
+  for (let index = 1; index < points.length - 1; index++) {
+    const previous = points[index - 1];
+    const corner = points[index];
+    const next = points[index + 1];
+
+    const toPrevious = Math.hypot(corner.x - previous.x, corner.y - previous.y);
+    const toNext = Math.hypot(next.x - corner.x, next.y - corner.y);
+    if (toPrevious === 0 || toNext === 0) continue;
+
+    // A point that does not turn is not a corner. The layout engine emits collinear
+    // waypoints even on a straight run, and rounding those put curve commands into a
+    // line that was already straight.
+    const turn =
+      ((corner.x - previous.x) * (next.y - corner.y) - (corner.y - previous.y) * (next.x - corner.x)) /
+      (toPrevious * toNext);
+    if (Math.abs(turn) < 0.02) continue;
+
+    const cut = Math.min(radius, toPrevious / 2, toNext / 2);
+    const entry = {
+      x: corner.x - ((corner.x - previous.x) / toPrevious) * cut,
+      y: corner.y - ((corner.y - previous.y) / toPrevious) * cut,
+    };
+    const exit = {
+      x: corner.x + ((next.x - corner.x) / toNext) * cut,
+      y: corner.y + ((next.y - corner.y) / toNext) * cut,
+    };
+    parts.push(`L ${entry.x} ${entry.y}`, `Q ${corner.x} ${corner.y} ${exit.x} ${exit.y}`);
+  }
+  const last = points[points.length - 1];
+  parts.push(`L ${last.x} ${last.y}`);
+  return parts.join(" ");
+}
+
+/**
  * The shape a relationship is drawn as, and where its label goes.
  *
  * Every relationship gets its own `path`, for three reasons the straight `line` it
@@ -596,11 +644,7 @@ function edgePath(
   const waypoints = (route ?? []).slice(1, -1);
   if (waypoints.length > 0 && rank === 0) {
     const middle = waypoints[Math.floor((waypoints.length - 1) / 2)];
-    return {
-      d: `M ${start.x} ${start.y} ${waypoints.map((point) => `L ${point.x} ${point.y}`).join(" ")} L ${finish.x} ${finish.y}`,
-      labelAt: middle,
-      span,
-    };
+    return { d: roundedPath([start, ...waypoints, finish], 12), labelAt: middle, span };
   }
 
   // No route, or one of several between the same pair: bow the line out by a fixed
@@ -848,8 +892,14 @@ function GraphView({
    */
   const startPan = (event: React.PointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
-    // A press that landed on a box is that box's to handle
-    if ((event.target as Element).closest('[data-draggable="node"]') !== null) return;
+    // A press that landed on something interactive is that thing's to handle. Panning
+    // calls preventDefault and captures the pointer, which suppresses the `click`
+    // that would otherwise follow — so without this the key was unclickable and
+    // filtering did nothing at all in the browser, while tests that dispatched a
+    // synthetic click straight at the entry went on passing.
+    const landedOn = event.target as Element;
+    if (landedOn.closest('[data-draggable="node"]') !== null) return;
+    if (landedOn.closest("[data-legend-entry]") !== null) return;
 
     let scroller: HTMLElement | null = svgRef.current?.parentElement ?? null;
     while (
