@@ -16,6 +16,7 @@ import {
   loadConfig,
   redactRpcCommand,
 } from "../src/config.ts";
+import { RuntimeFailedError, RuntimeUnsupportedError } from "../src/agentRuntime.ts";
 
 const roots: string[] = [];
 
@@ -197,5 +198,23 @@ describe("redactRpcCommand", () => {
 
   test("a value that merely looks like a flag is still redacted", () => {
     assert.equal(redactRpcCommand({ ...base, executable: "pi", args: ["--api-key", "--offline"] }), "pi --api-key <redacted> --mode rpc");
+  });
+});
+
+describe("RuntimeUnsupportedError", () => {
+  test("names the feature and the runtime so the user knows who refused", () => {
+    const err = new RuntimeUnsupportedError("Storing credentials", "rpc");
+    assert.equal(err.message, "Storing credentials is not available with the rpc agent runtime");
+    assert.equal(err.name, "RuntimeUnsupportedError");
+    assert.ok(err instanceof Error);
+  });
+});
+
+describe("RuntimeFailedError", () => {
+  test("carries the reason the runtime stopped", () => {
+    const err = new RuntimeFailedError("the child exited with code 1");
+    assert.equal(err.message, "the child exited with code 1");
+    assert.equal(err.name, "RuntimeFailedError");
+    assert.ok(err instanceof Error);
   });
 });
