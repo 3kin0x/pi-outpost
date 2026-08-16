@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, execFileSync as run } from "node:child_process";
-import { copyFileSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,7 +113,7 @@ describe("the reference validator as it ships", () => {
   test("agrees with the application on every conformance case", () => {
     // Two implementations of one contract that disagree are two contracts.
     const suite = path.join(REPO, "shared/conformance");
-    const index = JSON.parse(run("cat", [path.join(suite, "index.json")], { encoding: "utf8" }));
+    const index = JSON.parse(readFileSync(path.join(suite, "index.json"), "utf8"));
 
     for (const entry of index.valid as { file: string }[]) {
       const { code } = validate([path.join(suite, entry.file)]);

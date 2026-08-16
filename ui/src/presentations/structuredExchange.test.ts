@@ -19,6 +19,17 @@ const graph = (over: Record<string, unknown> = {}) => ({
 });
 const serialize = (document: unknown) => JSON.stringify(document);
 
+/**
+ * Counting mermaid's relationship arrow, by substring rather than by pattern.
+ *
+ * Written as a regex this reads to a scanner — correctly — as an attempt to parse
+ * HTML comments that misses `--!>`. Nothing here sanitises anything; these count what
+ * the export declared, and a plain substring says that and nothing more.
+ */
+const ARROW = "--" + ">";
+const hasArrow = (line: string) => line.includes(ARROW);
+const countArrows = (text: string) => text.split(ARROW).length - 1;
+
 describe("readStructuredExchange", () => {
   it("returns nothing when a result carries no structured payload", () => {
     expect(readStructuredExchange(undefined)).toBeUndefined();
@@ -263,7 +274,7 @@ describe("derived diagram export", () => {
     expect(mermaid).toContain("flowchart TD");
     expect(mermaid).toContain('"A"');
     expect(mermaid).toContain('"B"');
-    expect(mermaid.match(/-->/g) ?? []).toHaveLength(1);
+    expect(countArrows(mermaid)).toBe(1);
   });
 
   it("is deterministic", () => {
@@ -351,7 +362,7 @@ describe("producer text can never become diagram structure", () => {
     for (const hostile of HOSTILE) {
       const mermaid = toMermaid(graphOf([hostile, "Plain"]))!;
       const declarations = mermaid.split("\n").filter((line) => /^\s+n[0-9a-z]+\[/.test(line));
-      const relationships = mermaid.split("\n").filter((line) => /-->/.test(line));
+      const relationships = mermaid.split("\n").filter(hasArrow);
       expect(declarations, `for label ${JSON.stringify(hostile)}`).toHaveLength(2);
       expect(relationships, `for label ${JSON.stringify(hostile)}`).toHaveLength(1);
     }
@@ -379,7 +390,7 @@ describe("producer text can never become diagram structure", () => {
     for (const id of mermaid.match(/\bn[0-9a-z]+\b(?=[\s[])/g) ?? []) {
       expect(id).toMatch(/^n[0-9a-z]+$/);
     }
-    expect(mermaid.split("\n").filter((line) => /-->/.test(line))).toHaveLength(1);
+    expect(mermaid.split("\n").filter(hasArrow)).toHaveLength(1);
   });
 
   it("stays parseable by mermaid itself", async () => {
