@@ -170,6 +170,8 @@ export class PiRpcProcess {
   /** The same failure with the child's own output appended — server logs only. */
   private failureDetail: string | undefined;
   private stopping = false;
+  /** The single in-flight shutdown, so every caller awaits the same one. */
+  private stopPromise: Promise<void> | undefined;
   /** Bound once so it can be removed again; see the `exit` registration below. */
   private readonly killOnExit = () => {
     if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
@@ -454,8 +456,16 @@ export class PiRpcProcess {
    * whole process group, which on a server started from a shell is the operator's
    * own session.
    */
-  async stop(): Promise<void> {
-    if (this.stopping) return;
+  stop(): Promise<void> {
+    // One shutdown, awaited by everyone who asks for it. `fail()` starts a stop
+    // without waiting, so a `dispose()` that arrived afterwards used to see
+    // `stopping` and return at once — promising the child was gone while it was
+    // still dying. On Windows that promise is load-bearing: a live process locks
+    // its working directory, so the caller's cleanup failed with EBUSY.
+    return (this.stopPromise ??= this.runStop());
+  }
+
+  private async runStop(): Promise<void> {
     this.stopping = true;
     process.off("exit", this.killOnExit);
     // Nothing will answer a command once the child is going away, and `stopping`

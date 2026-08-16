@@ -7,7 +7,8 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import fsNative from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +25,10 @@ const runtimes = new Set<AgentRuntime>();
 afterEach(async () => {
   await Promise.all([...runtimes].map((runtime) => runtime.dispose().catch(() => {})));
   runtimes.clear();
-  await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true })));
+  // Retries because Windows keeps a directory locked for a moment after the process
+  // that had it as its working directory exits. `dispose()` above already waits for
+  // the child to be gone; this covers the tail of the OS releasing the handle.
+  await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })));
   roots.clear();
 });
 
@@ -101,8 +105,15 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Poll a condition rather than sleeping a guessed interval. */
-async function waitFor(condition: () => boolean, what: string, timeoutMs = 2_000): Promise<void> {
+/**
+ * Poll a condition rather than sleeping a guessed interval.
+ *
+ * The window is generous because the thing usually being waited on is the OS: a
+ * killed child is briefly still a pid (unreaped) after it has stopped running, and
+ * a loaded CI runner stretches that. A tight bound here fails a correct
+ * implementation, which is the worst kind of test.
+ */
+async function waitFor(condition: () => boolean, what: string, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
@@ -188,8 +199,9 @@ describe("RpcRuntimeStarts", () => {
     assert.deepEqual(runtime.contextEntries(), [entry]);
 
     const launch = JSON.parse(await readFile(launchLog, "utf8"));
-    // macOS canonicalizes /var to /private/var when a child starts.
-    assert.equal(launch.cwd, await realpath(root));
+    // Canonicalized on both sides: macOS reaches /var through a symlink to
+    // /private/var, and Windows hands the child the 8.3 short form of a %TEMP% path.
+    assert.equal(launch.cwd, fsNative.realpathSync.native(root));
     assert.equal(launch.agentDir, path.join(root, "agent"));
     assert.deepEqual(launch.argv, ["--session-dir", path.join(root, "sessions"), "--mode", "rpc"]);
     assert.deepEqual(

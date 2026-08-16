@@ -21,7 +21,11 @@ const argv = process.argv.slice(2);
 /** Everything the harness wants to inspect about how it was launched. */
 const launch = {
   argv,
-  cwd: process.cwd(),
+  // `realpath.native` because Windows hands a child the 8.3 short form of its own
+  // working directory when the path came from %TEMP% — "C:\Users\RUNNER~1\..."
+  // against the caller's "C:\Users\runneradmin\...". Same directory, different
+  // string; canonicalize both sides rather than comparing spellings.
+  cwd: fs.realpathSync.native(process.cwd()),
   agentDir: process.env.PI_CODING_AGENT_DIR,
   // The settings pi-outpost's own tools extension reads. Logged so a test can
   // prove the child was told where the workspace is, not merely handed the file.
