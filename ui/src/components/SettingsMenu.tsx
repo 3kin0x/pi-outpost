@@ -11,7 +11,7 @@ interface SandboxConfig {
 interface SettingsMenuProps {
   extensionPaths: string[];
   sandbox: SandboxConfig | null;
-  versions?: { piOutpost: string; piSdk: string } | null;
+  versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
   onUpdateConfig: (sandbox: SandboxConfig) => void;
 }
 
@@ -186,9 +186,18 @@ export function SettingsMenu({ extensionPaths, sandbox, versions, onUpdateConfig
                   <p>
                     pi-outpost: <span className="font-mono text-zinc-800 dark:text-zinc-200">{versions.piOutpost}</span>
                   </p>
-                  <p>
-                    pi SDK: <span className="font-mono text-zinc-800 dark:text-zinc-200">{versions.piSdk}</span>
-                  </p>
+                  {/* Whichever of the two is answering prompts — never both, or the
+                      one that is not doing the work reads as the one that is. */}
+                  {versions.piSdk && (
+                    <p>
+                      pi SDK: <span className="font-mono text-zinc-800 dark:text-zinc-200">{versions.piSdk}</span>
+                    </p>
+                  )}
+                  {versions.agent && (
+                    <p>
+                      agent: <span className="font-mono text-zinc-800 dark:text-zinc-200">{versions.agent}</span>
+                    </p>
+                  )}
                 </div>
               </section>
             )}

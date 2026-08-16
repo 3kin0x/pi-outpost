@@ -15,3 +15,12 @@ The system SHALL provide the following capabilities:
 - **GIVEN** the system is operational
 - **WHEN** a user interacts with the system
 - **THEN** the system provides the documented capabilities
+
+### Requirement: DataFlow
+
+The system SHALL process data through defined paths:
+
+#### Scenario: StandardDataFlow
+- **GIVEN** an incoming request
+- **WHEN** the request is processed
+- **THEN** data flows through: client ClientMessage → WebSocket handler (`server/src/index.ts`) → the agent-runtime boundary (`server/src/agentRuntime.ts`), served by either the embedded pi SDK session or a supervised `pi --mode rpc` child → runtime events converted to ChatItems (`server/src/convert.ts`) → ServerMessage broadcast to all connected clients → `useAgent` reducer updates React state

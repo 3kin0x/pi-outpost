@@ -6,10 +6,11 @@
 
 ## Purpose
 
-pi-outpost is a web chat interface for the pi coding agent. A Fastify server embeds an
-AgentSession from `@earendil-works/pi-coding-agent` and exposes it over a WebSocket wire
-protocol (`shared/src/protocol.ts`); a React frontend renders the conversation, file
-browser, model switcher, and conversation tree. The server can run a standalone, sandboxed
+pi-outpost is a web chat interface for the pi coding agent. A Fastify server runs the agent —
+either an embedded AgentSession from `@earendil-works/pi-coding-agent` or a supervised
+`pi --mode rpc` child process — and exposes it over a WebSocket wire protocol
+(`shared/src/protocol.ts`); a React frontend renders the conversation, file browser, model
+switcher, and conversation tree. The server can run a standalone, sandboxed
 agent: file tools confined to a scoped directory, tool/extension allowlists, and branding —
 all driven by a JSON config (`pi-outpost.config.json`). An embed build
 (`@pi-outpost/embed`) mounts the UI in a Shadow DOM inside a host application.
@@ -37,7 +38,8 @@ This system is organized into the following domains:
 ### Requirement: SystemCapabilities
 
 The system SHALL provide the following capabilities:
-- Real-time chat with the embedded pi agent over a WebSocket (streaming, abort, steering)
+- Real-time chat with Pi over a WebSocket (streaming, abort, steering), using the embedded SDK by
+  default or a configured Pi RPC subprocess
 - Session management: create, switch, delete, list, compact, fork, and tree navigation
 - Optional sandbox confining file tools to a scoped directory (read-only and read-write zones)
 - Tool, extension, skill, prompt-template, and model allowlists via config
@@ -56,10 +58,10 @@ The system SHALL process data through defined paths:
 #### Scenario: StandardDataFlow
 - **GIVEN** an incoming request
 - **WHEN** the request is processed
-- **THEN** data flows through: client ClientMessage → WebSocket handler (`server/src/index.ts`) → AgentSession runtime (pi SDK) → agent events converted to ChatItems (`server/src/convert.ts`) → ServerMessage broadcast to all connected clients → `useAgent` reducer updates React state
+- **THEN** data flows through: client ClientMessage → WebSocket handler (`server/src/index.ts`) → the agent-runtime boundary (`server/src/agentRuntime.ts`), served by either the embedded pi SDK session or a supervised `pi --mode rpc` child → runtime events converted to ChatItems (`server/src/convert.ts`) → ServerMessage broadcast to all connected clients → `useAgent` reducer updates React state
 
 ## Technical Notes
 
-- **Architecture Style**: Thin client/server split. The server owns the single AgentSession (one session shared by all connected clients); the frontend is a pure view over the wire protocol. `shared/src/protocol.ts` is the single source of truth for messages.
-- **Security Model**: No authentication. Safety comes from binding to 127.0.0.1 by default, a WebSocket Origin allowlist (localhost plus `server.allowedOrigins` exact matches), and the optional file sandbox that confines agent tools to a configured root.
-- **External Integrations**: pi coding agent SDK (`@earendil-works/pi-coding-agent`), model provider APIs (via the SDK), file system
+- **Architecture Style**: Thin client/server split. The server owns the single agent runtime — an embedded AgentSession, or a supervised `pi --mode rpc` child behind the same boundary — with one session shared by all connected clients; the frontend is a pure view over the wire protocol and never learns which runtime is in use. `shared/src/protocol.ts` is the single source of truth for messages.
+- **Security Model**: Authentication is optional and off by default. Safety comes first from binding to 127.0.0.1 by default, a WebSocket Origin allowlist (localhost plus `server.allowedOrigins` exact matches), and the optional file sandbox that confines agent tools to a configured root. Configuring a shared token (`server.token`, overridden by `PI_OUTPOST_TOKEN`) additionally requires it on the WebSocket and on `/branding`, compared timing-safely; binding beyond localhost without one is the operator's explicit choice. The sandbox cannot be combined with the RPC runtime — a child builds its own tools — so that pairing is refused at config load rather than left unenforced.
+- **External Integrations**: pi coding agent SDK (`@earendil-works/pi-coding-agent`), an optional external pi executable run as an RPC child, model provider APIs (reached by whichever runtime is active), file system

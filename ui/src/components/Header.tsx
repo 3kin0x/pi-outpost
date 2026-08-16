@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode } from "@pi-outpost/shared";
 import type { GitStatusState, SessionSearch } from "../useAgent";
+import { stripAnsi } from "../util/ansi";
 import { GitMenu } from "./GitMenu";
 import { SettingsMenu } from "./SettingsMenu";
 import { TreeMenu } from "./TreeMenu";
@@ -26,7 +27,7 @@ interface HeaderProps {
   gitLog: GitLogEntry[] | null;
   extensionPaths: string[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
-  versions?: { piOutpost: string; piSdk: string } | null;
+  versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
   onUpdateConfig: (sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }) => void;
   onToggleSidebar: () => void;
   onToggleHideTools: () => void;
@@ -333,7 +334,10 @@ export function Header(props: HeaderProps) {
           key={key}
           className="rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
         >
-          {text}
+          {/* Statuses come from the same terminal-rendered source as widgets. The
+              header is a chrome strip, so the escapes are dropped rather than
+              coloured — the text is what carries the meaning here. */}
+          {stripAnsi(text)}
         </span>
       ))}
 

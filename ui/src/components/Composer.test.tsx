@@ -242,6 +242,46 @@ describe("Composer", () => {
       expect(screen.queryByText("/commit")).not.toBeInTheDocument();
     });
 
+    /**
+     * Escape used to last exactly one keystroke: the list re-opened on the next
+     * character, so the only way to write a message that begins with "/" was to
+     * delete it and start over.
+     */
+    it("keeps the list dismissed while the same name is still being typed", () => {
+      setup();
+      type("/co");
+      expect(screen.getByText("/commit")).toBeInTheDocument();
+      fireEvent.keyDown(box(), { key: "Escape" });
+      expect(screen.queryByText("/commit")).not.toBeInTheDocument();
+      type("/com");
+      expect(screen.queryByText("/commit")).not.toBeInTheDocument();
+      expect(box()).toHaveValue("/com");
+    });
+
+    it("offers the list again once the slash itself is gone", () => {
+      setup();
+      type("/co");
+      fireEvent.keyDown(box(), { key: "Escape" });
+      type("hello");
+      type("/co");
+      expect(screen.getByText("/commit")).toBeInTheDocument();
+    });
+
+    it("dismisses the list when the click lands outside the composer", () => {
+      setup();
+      type("/co");
+      expect(screen.getByText("/commit")).toBeInTheDocument();
+      fireEvent.mouseDown(document.body);
+      expect(screen.queryByText("/commit")).not.toBeInTheDocument();
+    });
+
+    it("does not dismiss on a click inside the composer, which would eat the pick", () => {
+      setup();
+      type("/co");
+      fireEvent.mouseDown(screen.getByText("/commit"));
+      expect(screen.getByText("/commit")).toBeInTheDocument();
+    });
+
     it("completes the selected command with a trailing space", () => {
       setup();
       type("/co");
@@ -423,6 +463,15 @@ describe("finding a command among many", () => {
 
   const shown = () => [...document.querySelectorAll("[data-selected]")];
 
+  /**
+   * Each row renders its name, description and source into one text node, so the
+   * order is read off the leading "/name" rather than an exact text match.
+   */
+  const startsOf = (names: string[]) => {
+    const rows = shown();
+    return rows.length === names.length && names.every((name, index) => rows[index].textContent?.startsWith(`/${name}`));
+  };
+
   it("offers every command when only the slash is typed", () => {
     setup({ commands: withSkill });
     type("/");
@@ -440,6 +489,36 @@ describe("finding a command among many", () => {
     type("/skill:str");
     expect(shown()).toHaveLength(1);
     expect(shown()[0].textContent).toContain("skill:structured-exchange");
+  });
+
+  /**
+   * Load order is the agent's business, not the reader's. Under a real RPC agent the
+   * bundled structured-exchange skill was appended last of forty-one, so someone
+   * looking for a name they already knew scrolled past forty unrelated ones and
+   * concluded it had not loaded.
+   */
+  it("orders the list alphabetically rather than by load order", () => {
+    const unsorted: CommandInfo[] = [
+      { name: "zoom-out", description: "zoom out", source: "skill" },
+      { name: "commit", description: "commit", source: "prompt" },
+      { name: "skill:structured-exchange", description: "author a structured document", source: "skill" },
+      { name: "apply", description: "apply", source: "extension" },
+    ];
+    setup({ commands: unsorted });
+    type("/");
+    expect(startsOf(["apply", "commit", "skill:structured-exchange", "zoom-out"])).toBe(true);
+  });
+
+  it("orders case- and accent-insensitively, so nothing lands after the last skill", () => {
+    // Default sort() compares UTF-16 code units: "Étape" would file after "zoom-out".
+    const mixed: CommandInfo[] = [
+      { name: "zoom-out", description: "zoom out", source: "skill" },
+      { name: "Étape", description: "step", source: "prompt" },
+      { name: "Apply", description: "apply", source: "extension" },
+    ];
+    setup({ commands: mixed });
+    type("/");
+    expect(startsOf(["Apply", "Étape", "zoom-out"])).toBe(true);
   });
 
   it("puts the list in something that scrolls, since it no longer truncates", () => {

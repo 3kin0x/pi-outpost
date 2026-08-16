@@ -6,6 +6,13 @@ import type { FileSearch } from "../useAgent";
 /** A guard on DOM size, not a limit on what a reader may find. The list scrolls. */
 const MAX_COMMAND_SUGGESTIONS = 100;
 
+/**
+ * Locale-aware ordering for the command list. `sort()`'s default compares UTF-16
+ * code units, which puts every capital before every lowercase and files accented
+ * names after "z" — an installed `/Étape` would sit below the last skill.
+ */
+const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+
 interface ComposerProps {
   isStreaming: boolean;
   connected: boolean;
@@ -68,6 +75,7 @@ export function Composer({
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -100,18 +108,25 @@ export function Composer({
   }, [text]);
 
   /**
-   * Every command that matches, not the first dozen alphabetically.
+   * Every command that matches, in alphabetical order.
    *
-   * The list scrolls and the selection scrolls into view, so a cap only ever hid
-   * things: with fifty commands installed, typing "/" showed A through C and a skill
-   * named later in the alphabet was simply absent — which reads as "that skill did
-   * not load" rather than "there are more below". The remaining bound is a guard on
-   * how much is put in the DOM at once, not an editorial choice about what is worth
+   * The list scrolls and the selection scrolls into view, so the cap only ever hid
+   * things: with fifty commands installed, typing "/" showed the first dozen and a
+   * command named later was simply absent — which reads as "that skill did not
+   * load" rather than "there are more below". The remaining bound is a guard on how
+   * much is put in the DOM at once, not an editorial choice about what is worth
    * seeing.
+   *
+   * The order used to be whatever order the agent loaded things in, which put the
+   * bundled structured-exchange skill last of forty-one and read, again, as absent.
+   * A reader looking for a name they already know needs somewhere to look for it.
    */
   const commandSuggestions = useMemo(() => {
     if (commandPrefix === null) return [];
-    return commands.filter((c) => c.name.toLowerCase().startsWith(commandPrefix)).slice(0, MAX_COMMAND_SUGGESTIONS);
+    return commands
+      .filter((c) => c.name.toLowerCase().startsWith(commandPrefix))
+      .sort((a, b) => collator.compare(a.name, b.name))
+      .slice(0, MAX_COMMAND_SUGGESTIONS);
   }, [commandPrefix, commands]);
 
   const mention = commandPrefix === null ? findMention(text, cursor) : null;
@@ -136,12 +151,42 @@ export function Composer({
 
   const open = menu !== null && !dismissed;
 
-  // Re-open (and reset the selection) whenever the trigger text changes
+  // Reset the selection whenever the trigger text changes
   const menuKey = commandPrefix !== null ? `cmd:${commandPrefix}` : mention ? `file:${mention.query}` : null;
   useEffect(() => {
     setSelected(0);
-    setDismissed(false);
   }, [menuKey]);
+
+  /**
+   * Escape holds until the trigger itself is gone, not until the next keystroke.
+   *
+   * Re-opening on every keystroke made Escape useless: dismiss the list, type one
+   * more character, and it is back — so the only way to write a message beginning
+   * with "/" was to delete everything and start over. Dismissal belongs to the run
+   * of text that opened the menu, so it survives typing and lifts when the "/" or
+   * the "@" is no longer there.
+   */
+  const menuKind = commandPrefix !== null ? "command" : mention ? "file" : null;
+  useEffect(() => {
+    setDismissed(false);
+  }, [menuKind]);
+
+  // Clicking away is the other way to mean "not now", and it must not steal the
+  // click that lands on a suggestion — which is inside this wrapper.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (target && rootRef.current?.contains(target)) return;
+      setDismissed(true);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+    };
+  }, [open]);
   useEffect(() => {
     listRef.current
       ?.querySelector('[data-selected="true"]')
@@ -251,7 +296,7 @@ export function Composer({
   }
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       {(attachments.length > 0 || uploading) && (
         <div className="mb-2 flex flex-wrap gap-2">
           {pendingUploads.map((pending) => (

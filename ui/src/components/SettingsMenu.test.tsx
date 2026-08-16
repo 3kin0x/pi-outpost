@@ -152,6 +152,26 @@ describe("SettingsMenu", () => {
       expect(screen.getByText("1.2.3")).toBeInTheDocument();
     });
 
+    /**
+     * Under the RPC runtime the SDK version pi-outpost ships is not what answers
+     * prompts — a fork at its own version is. Reading "pi SDK: 0.84.1" while
+     * little-coder 0.83.0 does the work is a wrong answer, not a missing one.
+     */
+    it("names the harness, and not the SDK, when a child answers the prompts", () => {
+      setup({ versions: { piOutpost: "0.6.7", agent: "little-coder 0.83.0" } });
+      openMenu();
+      expect(screen.getByText("little-coder 0.83.0")).toBeInTheDocument();
+      // The bundled SDK still reads the session store under RPC, but a version a
+      // reader takes for the agent's — and that is not — is worse than no line.
+      expect(screen.queryByText(/pi SDK/)).not.toBeInTheDocument();
+    });
+
+    it("says nothing about a harness on the embedded runtime", () => {
+      setup({ versions: { piOutpost: "0.6.7", piSdk: "1.2.3" } });
+      openMenu();
+      expect(screen.queryByText(/agent:/)).not.toBeInTheDocument();
+    });
+
     it("omits the section when it has nothing to report", () => {
       setup({ versions: null });
       openMenu();

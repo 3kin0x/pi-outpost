@@ -13,9 +13,36 @@ import { Compile } from "typebox/compile";
 // copy wherever it is deployed, and this product ships as a bundle: a path
 // relative to this module resolves inside the repository and nowhere else, so a
 // filesystem read works in every test and fails on the first real install.
-import schema from "../schemas/structured-exchange-1.json" with { type: "json" };
+import schemaModule from "../schemas/structured-exchange-1.json" with { type: "json" };
 import type { StructuredExchangeSchemaCheck } from "./structuredExchangeParse.ts";
 import type { StructuredExchangeIssue } from "./structuredExchangeValidation.ts";
+
+/**
+ * The same JSON, whatever loader delivered it.
+ *
+ * Node and esbuild hand back the object itself. jiti — which is what pi uses to
+ * load an extension, and therefore how this module is reached in RPC mode — adds
+ * an interop `default` property pointing at *the object itself*. `default` is a
+ * real JSON Schema keyword, so the compiler descends into it, finds the whole
+ * schema again, and recurses until the stack is gone: every document was refused
+ * with "Maximum call stack size exceeded" instead of being validated.
+ *
+ * Only a self-referential `default` is dropped. A genuine `default` keyword is
+ * part of the schema and stays.
+ */
+export function unwrapSchemaModule(module: unknown): Record<string, unknown> {
+  const raw = module as Record<string, unknown>;
+  // A schema document announces itself; a namespace wrapping one does not. Asking
+  // the object what it is keeps a *legitimate* `default` keyword — a string, say —
+  // from being mistaken for the payload and returned in place of the schema.
+  const looksLikeSchema = "$id" in raw || "type" in raw;
+  const root = (looksLikeSchema ? raw : raw.default) as Record<string, unknown>;
+  if (root.default !== root) return root;
+  const { default: _interop, ...rest } = root;
+  return rest;
+}
+
+const schema: Record<string, unknown> = unwrapSchemaModule(schemaModule);
 
 /** The committed schema itself, bundled with the code that validates against it. */
 export const STRUCTURED_EXCHANGE_SCHEMA: unknown = schema;

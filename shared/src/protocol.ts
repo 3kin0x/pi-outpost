@@ -311,8 +311,16 @@ export interface SessionSnapshot {
   credentials?: CredentialStatus;
   /** Absolute paths of loaded extension files. */
   extensionPaths?: string[];
-  /** Package versions for the settings display. */
-  versions?: { piOutpost: string; piSdk: string };
+  /**
+   * Versions for the settings display: exactly one of `piSdk` and `agent`, naming
+   * whatever is actually answering prompts.
+   *
+   * Embedded reports `piSdk`, the SDK running the conversation in this process.
+   * RPC reports `agent` instead (e.g. `"little-coder 0.83.0"`) and omits `piSdk`:
+   * the bundled SDK still reads the session store there, but a version line that a
+   * reader takes for the agent's, and that is not, is worse than no line at all.
+   */
+  versions?: { piOutpost: string; piSdk?: string; agent?: string };
   /** Sandbox configuration — absent when no sandbox is configured. */
   sandbox?: {
     root: string;

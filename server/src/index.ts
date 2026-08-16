@@ -6,7 +6,7 @@
  * malicious webpages in the user's own browser — WS is exempt from CORS).
  * The agent has bash/edit/write tools: never weaken either check.
  */
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -15,7 +15,6 @@ import type { WebSocket } from "ws";
 import {
   type CreateAgentSessionRuntimeFactory,
   createAgentSessionFromServices,
-  createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
   type SessionInfo,
@@ -23,10 +22,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   type ClientMessage,
-  type CommandInfo,
   type ContextUsage,
   type CredentialStatus,
-  type ExtensionUIRequest,
   type ExtensionUIResponse,
   type GitRevision,
   type ModelChoice,
@@ -38,6 +35,16 @@ import {
   type WireImage,
   WORKTREE_REVISION,
 } from "@pi-outpost/shared";
+import {
+  type AgentRuntime,
+  type RuntimeEvent,
+  type RuntimeTreeNode,
+  RuntimeUnsupportedError,
+} from "./agentRuntime.ts";
+import { createEmbeddedRuntime } from "./embeddedRuntime.ts";
+import { createRpcRuntime } from "./rpcRuntime.ts";
+import { rpcResourceArgs, resolveToolsExtension } from "./rpcResourceArgs.ts";
+import { TOOLS_ENV_VAR, type PiOutpostToolsSettings } from "./piOutpostTools.ts";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
@@ -737,35 +744,75 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 // set before the runtime exists, not merely present in our config object.
 if (config.offline) process.env.PI_OFFLINE = "1";
 
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: AGENT_CWD,
-  agentDir: AGENT_DIR,
-  sessionManager: SessionManager.create(AGENT_CWD, SESSION_DIR),
-});
-
-if (runtime.modelFallbackMessage) console.warn(`[pi] ${runtime.modelFallbackMessage}`);
+/**
+ * The one agent-runtime boundary (see agentRuntime.ts). `embedded` keeps the SDK
+ * session in this process; `rpc` supervises a `pi --mode rpc` child. Both answer
+ * the same WebSocket protocol, and a startup failure here is fatal on purpose —
+ * falling back to the other runtime would silently run something the operator did
+ * not configure.
+ */
+const runtime: AgentRuntime = await (async () => {
+  try {
+    if (config.agentRuntime.mode === "rpc") {
+      // The child builds its own toolset, so everything the embedded runtime hands
+      // to the SDK has to be said on the command line instead: the same skills,
+      // extensions, prompt templates, tool allowlist and system prompt — plus
+      // pi-outpost's own tools, which exist nowhere else and travel as an extension.
+      const toolsExtension = await resolveToolsExtension();
+      return await createRpcRuntime({
+        settings: config.agentRuntime,
+        cwd: AGENT_CWD,
+        agentDir: AGENT_DIR,
+        sessionDir: SESSION_DIR,
+        resourceArgs: [
+          ...rpcResourceArgs(config, {
+            bundledSkills: config.noSkills ? [] : BUNDLED_SKILLS,
+            appendSystemPrompt: [...(config.webContext ? [WEB_UI_CONTEXT] : []), ...config.appendSystemPrompt],
+          }),
+          "--extension",
+          toolsExtension,
+        ],
+        env: {
+          [TOOLS_ENV_VAR]: JSON.stringify({
+            cwd: AGENT_CWD,
+            maxBytes: {
+              pdf: config.pdf.maxBytes,
+              docx: config.docx.maxBytes,
+              xlsx: config.xlsx.maxBytes,
+              pptx: config.pptx.maxBytes,
+            },
+          } satisfies PiOutpostToolsSettings),
+        },
+      });
+    }
+    return await createEmbeddedRuntime({
+      factory: createRuntime,
+      cwd: AGENT_CWD,
+      agentDir: AGENT_DIR,
+      sessionManager: SessionManager.create(AGENT_CWD, SESSION_DIR),
+      onModelFallback: (message) => console.warn(`[pi] ${message}`),
+    });
+  } catch (error) {
+    complain(error);
+    await app.close();
+    process.exit(1);
+  }
+})();
 
 function modelName(): string {
-  const model = runtime.session.model as { provider?: string; id?: string } | undefined;
+  const model = runtime.snapshot().model;
   return model ? `${model.provider}/${model.id}` : "unknown";
 }
 
 function contextUsage(): ContextUsage | undefined {
-  return runtime.session.getContextUsage();
+  return runtime.snapshot().contextUsage;
 }
 
 function availableModels(): ModelChoice[] {
-  let models = runtime.services.modelRuntime.getAvailableSnapshot();
-  if (config.allowedModels) {
-    const allowed = config.allowedModels;
-    models = models.filter((m) => allowed.some((a) => a.provider === m.provider && a.id === m.id));
-  }
-  return models.map((model) => ({
-    provider: model.provider,
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-  }));
+  const models = runtime.snapshot().models;
+  if (!config.allowedModels) return models;
+  const allowed = config.allowedModels;
+  return models.filter((m) => allowed.some((a) => a.provider === m.provider && a.id === m.id));
 }
 
 /**
@@ -777,19 +824,9 @@ function availableModels(): ModelChoice[] {
  * list, which conflates the two.
  */
 function credentialStatus(): CredentialStatus {
-  const runtime_ = runtime.services.modelRuntime;
-  const providers = new Map<string, { id: string; name: string; configured: boolean }>();
-  for (const provider of runtime_.getProviders()) {
-    if (providers.has(provider.id)) continue;
-    providers.set(provider.id, {
-      id: provider.id,
-      name: provider.name ?? provider.id,
-      configured: runtime_.getProviderAuthStatus(provider.id).configured,
-    });
-  }
   const usableModel = availableModels().length > 0;
   return {
-    providers: [...providers.values()],
+    providers: runtime.snapshot().providers,
     usableModel,
     // Only while onboarding needs it: an absolute path names the server's OS account,
     // and there is no reason for a working server to tell every client where it lives.
@@ -798,53 +835,15 @@ function credentialStatus(): CredentialStatus {
 }
 
 /**
- * Slash commands the composer can autocomplete. session.prompt() understands
- * all three: extension commands run immediately, prompt templates and
- * /skill:name are expanded before being sent to the model.
- */
-function availableCommands(): CommandInfo[] {
-  const commands: CommandInfo[] = [];
-  for (const command of runtime.session.extensionRunner.getRegisteredCommands()) {
-    commands.push({
-      name: command.invocationName,
-      ...(command.description ? { description: command.description } : {}),
-      source: "extension",
-    });
-  }
-  const { prompts } = runtime.services.resourceLoader.getPrompts();
-  for (const prompt of prompts) {
-    commands.push({
-      name: prompt.name,
-      ...(prompt.description ? { description: prompt.description } : {}),
-      ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
-      source: "prompt",
-    });
-  }
-  const { skills } = runtime.services.resourceLoader.getSkills();
-  for (const skill of skills) {
-    commands.push({
-      name: `skill:${skill.name}`,
-      ...(skill.description ? { description: skill.description } : {}),
-      source: "skill",
-    });
-  }
-  return commands.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
  * Snapshot for `hello` / `session_replaced`. Mid-stream connects are covered:
- * the SDK pushes the partial assistant message into session.messages at
+ * the runtime keeps the partial assistant message in its message list from
  * message_start, and historyToItems adds running tool cards for toolCalls
  * without a result yet.
  */
 /** User messages persisted on the current branch, oldest first — lets the UI edit a past prompt. */
 function branchUserEntries(): { entryId: string; text: string }[] {
-  const entries = runtime.session.sessionManager.buildContextEntries() as {
-    type: string;
-    id: string;
-    message?: { role?: string; content?: unknown };
-  }[];
-  return entries
+  return runtime
+    .contextEntries()
     .filter((e) => e.type === "message" && e.message?.role === "user")
     .map((e) => ({ entryId: e.id, text: contentText(e.message!.content as never) }));
 }
@@ -853,26 +852,30 @@ function branchUserEntries(): { entryId: string; text: string }[] {
 let lastAnnouncedSandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | undefined;
 
 function snapshot(): SessionSnapshot {
-  const session = runtime.session;
+  const state = runtime.snapshot();
   return {
     branding: config.branding,
-    sessionId: session.sessionId,
+    sessionId: state.sessionId,
     model: modelName(),
-    thinkingLevel: session.thinkingLevel,
-    isStreaming: session.isStreaming,
+    thinkingLevel: state.thinkingLevel,
+    isStreaming: state.isStreaming,
     items: historyToItems(
-      session.messages as never,
-      session.isStreaming,
+      state.messages as never,
+      state.isStreaming,
       branchUserEntries().map((entry) => entry.entryId),
     ),
     models: availableModels(),
-    commands: availableCommands(),
-    contextUsage: contextUsage(),
+    commands: state.commands,
+    contextUsage: state.contextUsage,
     writableRoot: WRITABLE_ROOT,
     gitAvailable: GIT !== null,
     credentials: credentialStatus(),
-    extensionPaths: session.extensionRunner.getExtensionPaths(),
-    versions: { piOutpost: VERSION, piSdk: PI_SDK_VERSION },
+    extensionPaths: state.extensionPaths,
+    // One line for what answers prompts: the SDK in this process, or the child.
+    versions: {
+      piOutpost: VERSION,
+      ...(runtime.agentLabel ? { agent: runtime.agentLabel } : { piSdk: PI_SDK_VERSION }),
+    },
     sandbox: (() => {
       const v = config.sandbox
         ? {
@@ -916,238 +919,23 @@ function send(socket: WebSocket, message: ServerMessage): void {
 }
 
 // --- Extension "Custom UI" bridge -----------------------------------------------
-// See https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui
-// Mirrors pi's own RPC-mode ExtensionUIContext (dialogs forwarded as JSON, client
-// answers by id) but over the WebSocket instead of stdin/stdout, and broadcasts
-// to every connected tab — whichever client answers first resolves the request.
-
-type PendingExtensionRequest = { resolve: (response: ExtensionUIResponse) => void };
-const pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
-
-/** Dialog helper: sends a request, resolves on the matching response, timeout, or abort. */
-function createDialogPromise<T>(
-  opts: { signal?: AbortSignal; timeout?: number } | undefined,
-  defaultValue: T,
-  request: Extract<ExtensionUIRequest, { method: "select" | "confirm" | "input" }>,
-  parseResponse: (response: ExtensionUIResponse) => T,
-): Promise<T> {
-  if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
-  const id = request.id;
-  return new Promise((resolve) => {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      opts?.signal?.removeEventListener("abort", onAbort);
-      pendingExtensionRequests.delete(id);
-    };
-    const onAbort = () => {
-      cleanup();
-      resolve(defaultValue);
-    };
-    opts?.signal?.addEventListener("abort", onAbort, { once: true });
-    if (opts?.timeout) {
-      timeoutId = setTimeout(() => {
-        cleanup();
-        resolve(defaultValue);
-      }, opts.timeout);
-    }
-    pendingExtensionRequests.set(id, {
-      resolve: (response) => {
-        cleanup();
-        resolve(parseResponse(response));
-      },
-    });
-    broadcast(request);
-  });
-}
-
-/**
- * Build the ExtensionUIContext bound to the current AgentSession. TUI-only
- * concerns (custom components, footers/headers, editor replacement, terminal
- * input, themes) have no web equivalent and are no-ops, same as pi's own RPC
- * mode — extensions relying on those still work in the pi CLI, just not here.
- */
-function createExtensionUIContext() {
-  return {
-    select(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }) {
-      const id = randomUUID();
-      return createDialogPromise(opts, undefined, { type: "extension_ui_request", id, method: "select", title, options, timeout: opts?.timeout }, (r) =>
-        "cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
-      );
-    },
-    confirm(title: string, message: string, opts?: { signal?: AbortSignal; timeout?: number }) {
-      const id = randomUUID();
-      return createDialogPromise(opts, false, { type: "extension_ui_request", id, method: "confirm", title, message, timeout: opts?.timeout }, (r) =>
-        "cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false,
-      );
-    },
-    input(title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }) {
-      const id = randomUUID();
-      return createDialogPromise(
-        opts,
-        undefined,
-        { type: "extension_ui_request", id, method: "input", title, placeholder, timeout: opts?.timeout },
-        (r) => ("cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined),
-      );
-    },
-    notify(message: string, notifyType?: "info" | "warning" | "error") {
-      broadcast({ type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType });
-    },
-    onTerminalInput() {
-      // Raw terminal input has no web equivalent
-      return () => {};
-    },
-    setStatus(statusKey: string, statusText: string | undefined) {
-      broadcast({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey, statusText });
-    },
-    setWorkingMessage() {},
-    setWorkingVisible() {},
-    setWorkingIndicator() {},
-    setHiddenThinkingLabel() {},
-    setWidget(
-      widgetKey: string,
-      content: string[] | undefined | ((...args: never[]) => unknown),
-      options?: { placement?: "aboveEditor" | "belowEditor" },
-    ) {
-      // Component factories need a TUI to render into — only string arrays are supported here
-      if (content === undefined || Array.isArray(content)) {
-        broadcast({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "setWidget",
-          widgetKey,
-          widgetLines: content,
-          widgetPlacement: options?.placement,
-        });
-      }
-    },
-    setFooter() {},
-    setHeader() {},
-    setTitle(title: string) {
-      broadcast({ type: "extension_ui_request", id: randomUUID(), method: "setTitle", title });
-    },
-    async custom() {
-      // Custom TUI components can't run in the browser
-      return undefined;
-    },
-    pasteToEditor(text: string) {
-      this.setEditorText(text);
-    },
-    setEditorText(text: string) {
-      broadcast({ type: "extension_ui_request", id: randomUUID(), method: "set_editor_text", text });
-    },
-    getEditorText() {
-      // Synchronous — can't wait on the client's current composer text
-      return "";
-    },
-    editor(title: string, prefill?: string): Promise<string | undefined> {
-      const id = randomUUID();
-      return new Promise((resolve) => {
-        pendingExtensionRequests.set(id, {
-          resolve: (response) => {
-            if ("cancelled" in response && response.cancelled) resolve(undefined);
-            else if ("value" in response) resolve(response.value);
-            else resolve(undefined);
-          },
-        });
-        broadcast({ type: "extension_ui_request", id, method: "editor", title, prefill });
-      });
-    },
-    addAutocompleteProvider() {},
-    setEditorComponent() {},
-    getEditorComponent() {
-      return undefined;
-    },
-    // Terminal ANSI theming has no web equivalent. Identity-returning stub (no
-    // colors) rather than throwing, in case an extension reads it defensively.
-    get theme() {
-      const identity = (_color: unknown, text: string) => text;
-      return {
-        fg: identity,
-        bg: identity,
-        bold: (text: string) => text,
-        italic: (text: string) => text,
-        underline: (text: string) => text,
-        inverse: (text: string) => text,
-        strikethrough: (text: string) => text,
-        getFgAnsi: () => "",
-        getBgAnsi: () => "",
-        getColorMode: () => "truecolor" as const,
-        getThinkingBorderColor: () => (text: string) => text,
-        getBashModeBorderColor: () => (text: string) => text,
-      };
-    },
-    getAllThemes() {
-      return [];
-    },
-    getTheme() {
-      return undefined;
-    },
-    setTheme() {
-      return { success: false, error: "Theme switching not supported in pi-outpost" };
-    },
-    getToolsExpanded() {
-      return false;
-    },
-    setToolsExpanded() {},
-  };
-}
-
-/** Resolve a pending dialog/editor request the client just answered. */
-function handleExtensionUIResponse(response: ExtensionUIResponse): void {
-  const pending = pendingExtensionRequests.get(response.id);
-  if (!pending) return;
-  pendingExtensionRequests.delete(response.id);
-  pending.resolve(response);
-}
-
-/** Unblock any extension still awaiting a dialog/editor answer from a session about to be replaced. */
-function cancelPendingExtensionRequests(): void {
-  for (const pending of pendingExtensionRequests.values()) {
-    pending.resolve({ type: "extension_ui_response", id: "", cancelled: true });
-  }
-  pendingExtensionRequests.clear();
-}
+//
+// Requests reach the browser the same way whichever runtime produced them: the
+// embedded session drives them through ExtensionUiBridge, an RPC child emits them
+// on stdout, and both surface as an `extension_ui_request` runtime event that this
+// file broadcasts. Answers travel back through runtime.answerExtensionUI.
 
 /** Wire extension TUI renderers into the HTML bridge used by the web UI. */
 function refreshExtensionRender(): void {
+  const renderers = runtime.renderers;
   configureExtensionRender({
-    getToolDefinition: (name) => runtime.session.getToolDefinition(name),
-    getMessageRenderer: (customType) => runtime.session.extensionRunner.getMessageRenderer(customType),
+    // An RPC child cannot hand its renderer objects across the pipe, so tool cards
+    // fall back to the built-in rendering rather than an extension-supplied one.
+    getToolDefinition: (name) => renderers?.getToolDefinition(name) as never,
+    getMessageRenderer: (customType) => renderers?.getMessageRenderer(customType) as never,
     cwd: AGENT_CWD,
     themeName: "dark",
   });
-}
-
-/** (Re)bind the extension runtime — UI bridge, mode, error reporting — to the current session. */
-async function bindExtensionsForSession(): Promise<void> {
-  // runtime.session.bindExtensions() has been observed to never settle in some
-  // process contexts (e.g. spawned under `concurrently` / Start-Process, where
-  // stdout isn't a TTY). This warning surfaces that case instead of hanging silently.
-  const stallWarning = setTimeout(() => {
-    console.warn("[pi] bindExtensions has not resolved after 5s — extensions may be unavailable this session");
-  }, 5000);
-  try {
-    await runtime.session.bindExtensions({
-      // Cast: structurally satisfies ExtensionUIContext (verified against the SDK's
-      // own RPC-mode implementation); see the `theme` getter above for the one gap.
-      uiContext: createExtensionUIContext() as any,
-      mode: "rpc",
-      // Extensions can call ctx.abort() themselves; no override needed here.
-      // commandContextActions (fork/tree navigation) isn't wired up — out of scope for the UI bridge.
-      shutdownHandler: () => {
-        // Unlike pi's one-shot RPC subprocess, this server is long-lived and shared
-        // across tabs/sessions — an extension asking to "shut down" shouldn't kill it.
-        console.warn("[pi] extension requested shutdown — ignored (pi-outpost is a persistent server)");
-      },
-      onError: (err) => {
-        reportError(new Error(`[extension ${err.extensionPath}] ${err.error}`));
-      },
-    });
-    refreshExtensionRender();
-  } finally {
-    clearTimeout(stallWarning);
-  }
 }
 
 /** args of an in-flight edit/write call, captured at tool_execution_start and consumed at tool_execution_end. */
@@ -1177,130 +965,125 @@ async function announceFileChange(args: unknown): Promise<void> {
   }
 }
 
-// --- SDK events -> wire events -------------------------------------------------
+// --- Runtime events -> wire events ---------------------------------------------
 
-/** Event subscriptions attach to one AgentSession — rebind after replacement. */
-function bindSession(): () => void {
-  return runtime.session.subscribe((event) => {
-    switch (event.type) {
-      case "agent_start":
-        broadcast({ type: "agent_start" });
-        break;
-      case "agent_end": {
-        broadcast({ type: "agent_end" });
-        const usage = contextUsage();
-        if (usage) broadcast({ type: "context_usage", usage });
-        // Off the prompt path on purpose: a slow title must never delay a reply
-        void maybeNameSession();
-        break;
-      }
-      case "message_start":
-        if (event.message.role === "assistant") {
-          broadcast({ type: "assistant_start" });
-        }
-        break;
-      case "message_update": {
-        const e = event.assistantMessageEvent;
-        if (e.type === "text_delta") {
-          broadcast({ type: "block_delta", block: "text", contentIndex: e.contentIndex, delta: e.delta });
-        } else if (e.type === "thinking_delta") {
-          broadcast({ type: "block_delta", block: "thinking", contentIndex: e.contentIndex, delta: e.delta });
-        }
-        break;
-      }
-      case "message_end":
-        if (event.message.role === "assistant") {
-          // Full sync of the finished message (covers retries/partial rebuilds)
-          broadcast({ type: "assistant_end", item: assistantToItem(event.message as never) });
-        } else if (event.message.role === "custom" && (event.message as { display?: boolean }).display) {
-          broadcast({ type: "custom_message", item: customMessageToItem(event.message as never) });
-        }
-        break;
-      case "tool_execution_start":
-        const callHtml = renderToolCallHtml(event.toolCallId, event.toolName, event.args);
-        broadcast({
-          type: "tool_start",
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          args: event.args,
-          ...(callHtml ? { callHtml } : {}),
-        });
-        if (event.toolName === "edit" || event.toolName === "write") {
-          pendingFileMutations.set(event.toolCallId, event.args);
-        }
-        break;
-      case "tool_execution_update": {
-        const text = contentText(event.partialResult?.content);
-        if (text) {
-          broadcast({ type: "tool_update", toolCallId: event.toolCallId, text: truncate(text) });
-        }
-        break;
-      }
-      case "tool_execution_end": {
-        const raw = contentText(event.result?.content);
-        const truncatedText = truncate(raw);
-        const rendered = renderToolResultHtml(
-          event.toolCallId,
-          event.toolName ?? "tool",
-          event.result?.content,
-          event.result?.details,
-          event.isError ?? false,
-        );
-
-        broadcast({
-          type: "tool_end",
-          toolCallId: event.toolCallId,
-          isError: event.isError,
-          text: truncatedText,
-          ...(rendered
-            ? { outputHtml: rendered.expanded, outputHtmlCollapsed: rendered.collapsed }
-            : {}),
-          ...structuredExchangeField(event.result?.details),
-        });
-        {
-          const args = pendingFileMutations.get(event.toolCallId);
-          pendingFileMutations.delete(event.toolCallId);
-          // Only announce once the write has actually landed on disk — the client
-          // may otherwise refetch a directory/file before the change is visible.
-          if (args !== undefined && !event.isError) void announceFileChange(args);
-        }
-        break;
-      }
-      case "queue_update":
-        broadcast({ type: "queue", steering: [...event.steering], followUp: [...event.followUp] });
-        break;
-      case "thinking_level_changed":
-        broadcast({ type: "thinking_changed", level: event.level });
-        break;
-      case "compaction_start":
-        broadcast({ type: "compaction_start" });
-        break;
-      case "compaction_end": {
-        broadcast({ type: "compaction_end", ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}) });
-        const usage = contextUsage();
-        if (usage) broadcast({ type: "context_usage", usage });
-        break;
-      }
-      default:
-        break;
+/**
+ * The one place a runtime event becomes a browser message. Both runtimes emit the
+ * same normalized union (agentRuntime.ts), so nothing below may branch on which
+ * one is running — a divergence here is what "the frontend is unaware of the
+ * runtime" would cost.
+ */
+function onRuntimeEvent(event: RuntimeEvent): void {
+  switch (event.type) {
+    case "agent_start":
+      broadcast({ type: "agent_start" });
+      break;
+    case "agent_end": {
+      broadcast({ type: "agent_end" });
+      const usage = contextUsage();
+      if (usage) broadcast({ type: "context_usage", usage });
+      // The turn is persisted now: hand the client the entries so the bubbles it
+      // echoed optimistically become editable (edit_prompt targets an entry id).
+      broadcast({ type: "user_entries", entries: branchUserEntries() });
+      broadcast({ type: "tree", roots: buildTree() });
+      // Off the prompt path on purpose: a slow title must never delay a reply
+      void maybeNameSession();
+      break;
     }
-  });
+    case "assistant_start":
+      broadcast({ type: "assistant_start" });
+      break;
+    case "block_delta":
+      broadcast({ type: "block_delta", block: event.block, contentIndex: event.contentIndex, delta: event.delta });
+      break;
+    case "assistant_end":
+      // Full sync of the finished message (covers retries/partial rebuilds)
+      broadcast({ type: "assistant_end", item: assistantToItem(event.message as never) });
+      break;
+    case "custom_message":
+      broadcast({ type: "custom_message", item: customMessageToItem(event.message as never) });
+      break;
+    case "tool_start": {
+      const callHtml = renderToolCallHtml(event.toolCallId, event.toolName, event.args);
+      broadcast({
+        type: "tool_start",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: event.args,
+        ...(callHtml ? { callHtml } : {}),
+      });
+      if (event.toolName === "edit" || event.toolName === "write") {
+        pendingFileMutations.set(event.toolCallId, event.args);
+      }
+      break;
+    }
+    case "tool_update": {
+      const text = contentText(event.content as never);
+      if (text) broadcast({ type: "tool_update", toolCallId: event.toolCallId, text: truncate(text) });
+      break;
+    }
+    case "tool_end": {
+      const rendered = renderToolResultHtml(
+        event.toolCallId,
+        event.toolName,
+        event.content as never,
+        event.details,
+        event.isError,
+      );
+      broadcast({
+        type: "tool_end",
+        toolCallId: event.toolCallId,
+        isError: event.isError,
+        text: truncate(contentText(event.content as never)),
+        ...(rendered ? { outputHtml: rendered.expanded, outputHtmlCollapsed: rendered.collapsed } : {}),
+        ...structuredExchangeField(event.details),
+      });
+      const args = pendingFileMutations.get(event.toolCallId);
+      pendingFileMutations.delete(event.toolCallId);
+      // Only announce once the write has actually landed on disk — the client
+      // may otherwise refetch a directory/file before the change is visible.
+      if (args !== undefined && !event.isError) void announceFileChange(args);
+      break;
+    }
+    case "queue":
+      broadcast({ type: "queue", steering: event.steering, followUp: event.followUp });
+      break;
+    case "thinking_changed":
+      broadcast({ type: "thinking_changed", level: event.level });
+      break;
+    case "compaction_start":
+      broadcast({ type: "compaction_start" });
+      break;
+    case "compaction_end": {
+      broadcast({ type: "compaction_end", ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}) });
+      const usage = contextUsage();
+      if (usage) broadcast({ type: "context_usage", usage });
+      break;
+    }
+    case "session_replaced":
+      // The runtime has already rebound itself; renderers may belong to a new
+      // extension runner, so refresh the HTML bridge before the snapshot goes out.
+      refreshExtensionRender();
+      broadcast({ type: "session_replaced", ...snapshot() });
+      console.log(`[pi] session ${runtime.snapshot().sessionId}`);
+      break;
+    case "extension_ui_request":
+      broadcast(event.request);
+      break;
+    case "error":
+      broadcast({ type: "error", message: event.message });
+      break;
+    case "runtime_failed":
+      // Fail closed: /health already reports unready, and this is the one visible
+      // notice. No restart, no replay — a prompt or tool may have had side effects.
+      console.error(`[pi] agent runtime failed: ${event.message}`);
+      broadcast({ type: "error", message: `Agent runtime failed: ${event.message}` });
+      break;
+  }
 }
 
-let unsubscribe = bindSession();
-// Fire-and-forget: if this hangs (see the stall warning inside bindExtensionsForSession),
-// it must not block app.listen() below — the server should still come up without extensions.
-void bindExtensionsForSession().catch((err) => console.error(`[pi] bindExtensions failed: ${err}`));
-
-/** After runtime.newSession()/switchSession(), runtime.session is a new object. */
-async function rebindAndAnnounce(): Promise<void> {
-  cancelPendingExtensionRequests();
-  unsubscribe();
-  unsubscribe = bindSession();
-  await bindExtensionsForSession();
-  broadcast({ type: "session_replaced", ...snapshot() });
-  console.log(`[pi] session ${runtime.session.sessionId}`);
-}
+runtime.subscribe(onRuntimeEvent);
+refreshExtensionRender();
 
 // --- Client message handling -----------------------------------------------------
 
@@ -1317,20 +1100,50 @@ async function replaceSession(socket: WebSocket, action: () => Promise<{ cancell
   }
   replacingSession = true;
   try {
-    const { cancelled } = await action();
-    if (!cancelled) await rebindAndAnnounce();
+    // The runtime rebinds and emits `session_replaced` itself; this only has to
+    // decide whether a replacement happened at all.
+    await action();
   } catch (error) {
     reportError(error);
-    // The old session may be disposed — land on a fresh one instead
+    // The old session may be disposed — land on a fresh one instead. A runtime that
+    // has failed closed cannot supply one, so don't ask it to.
+    if (!runtime.ok) return;
     try {
-      const { cancelled } = await runtime.newSession();
-      if (!cancelled) await rebindAndAnnounce();
+      await runtime.newSession();
     } catch (recoveryError) {
       reportError(recoveryError);
     }
   } finally {
     replacingSession = false;
   }
+}
+
+/**
+ * A dialog answer is only one of three shapes — validate it before it becomes a
+ * record on the agent's stdin.
+ *
+ * The ceiling matters as much as the shape. Writes to the child are serialized, so
+ * one oversized record holds up every command behind it until the command timeout
+ * fires and fails the runtime permanently. An editor dialog can legitimately carry
+ * a long answer, so the limit is generous rather than tight.
+ */
+const MAX_DIALOG_ANSWER_CHARS = 1_000_000;
+
+function extensionUiAnswer(message: { id: string } & Record<string, unknown>): ExtensionUIResponse | undefined {
+  const { id } = message;
+  if (message.cancelled === true) return { type: "extension_ui_response", id, cancelled: true };
+  if (typeof message.confirmed === "boolean") return { type: "extension_ui_response", id, confirmed: message.confirmed };
+  if (typeof message.value === "string" && message.value.length <= MAX_DIALOG_ANSWER_CHARS) {
+    return { type: "extension_ui_response", id, value: message.value };
+  }
+  return undefined;
+}
+
+/** Refuse a browser command the selected runtime cannot serve, saying which one refused. */
+function refuseUnsupported(socket: WebSocket, error: unknown): boolean {
+  if (!(error instanceof RuntimeUnsupportedError)) return false;
+  send(socket, { type: "error", message: error.message });
+  return true;
 }
 
 /**
@@ -1343,6 +1156,11 @@ async function replaceSession(socket: WebSocket, action: () => Promise<{ cancell
 const CREDENTIAL_SYNC_TIMEOUT_MS = 20_000;
 
 async function handleSetCredential(socket: WebSocket, provider: string, apiKey: string): Promise<void> {
+  const credentials = runtime.credentials;
+  if (!credentials) {
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Storing credentials", runtime.kind).message });
+    return;
+  }
   // Neither of the two SDK calls below carries a deadline of its own. Onboarding is a
   // user pressing Save and watching a spinner, so give each one a ceiling: past it,
   // announce what we have rather than leaving the UI waiting forever.
@@ -1358,12 +1176,7 @@ async function handleSetCredential(socket: WebSocket, provider: string, apiKey: 
     );
 
   try {
-    // Through the session's own ModelRuntime: the live registry reads its auth
-    // through that instance, so a key written with any other one would sit on
-    // disk while the agent still claims to have none.
-    await storeApiKey(AGENT_DIR, provider, apiKey, runtime.services.modelRuntime, {
-      signal: AbortSignal.timeout(CREDENTIAL_SYNC_TIMEOUT_MS),
-    });
+    await credentials.storeApiKey(provider, apiKey, AbortSignal.timeout(CREDENTIAL_SYNC_TIMEOUT_MS));
   } catch (error) {
     // A key that never reached disk is a failed login. One that reached disk but not
     // the live runtime is not: it works on the next start, and the snapshot below
@@ -1382,9 +1195,7 @@ async function handleSetCredential(socket: WebSocket, provider: string, apiKey: 
     // It also *swallows* an abort — it resolves with `{ aborted: true }` instead of
     // throwing — so the catch below never sees one. Read the flag, or a refresh cut
     // short at the ceiling passes for a clean one and the warning never fires.
-    const result = await runtime.services.modelRuntime.refresh({
-      signal: AbortSignal.timeout(CREDENTIAL_SYNC_TIMEOUT_MS),
-    });
+    const result = await credentials.refreshModels(AbortSignal.timeout(CREDENTIAL_SYNC_TIMEOUT_MS));
     if (result?.aborted) stalled("the model refresh", "aborted at the ceiling");
   } catch (error) {
     stalled("the model refresh", error);
@@ -1403,6 +1214,13 @@ async function handleUpdateConfig(
 ): Promise<void> {
   if (replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
+    return;
+  }
+  const rebuildTools = runtime.rebuildTools;
+  if (!rebuildTools) {
+    // The sandbox describes tools this server builds. An RPC child builds its own,
+    // so accepting the change would leave the UI showing a boundary nothing enforces.
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Changing the sandbox", runtime.kind).message });
     return;
   }
 
@@ -1430,13 +1248,11 @@ async function handleUpdateConfig(
     GIT = await probeGit(BROWSER_ROOT);
     sandboxedTools = config.sandbox ? await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes) : undefined;
     // Replace the current session so the new runtime picks up the updated tools
-    const { cancelled } = await runtime.newSession();
-    if (!cancelled) await rebindAndAnnounce();
+    await rebuildTools.call(runtime);
   } catch (error) {
     reportError(error);
     try {
-      const { cancelled } = await runtime.newSession();
-      if (!cancelled) await rebindAndAnnounce();
+      await rebuildTools.call(runtime);
     } catch (recoveryError) {
       reportError(recoveryError);
     }
@@ -1447,14 +1263,14 @@ async function handleUpdateConfig(
 
 /** Declare an OpenAI-compatible endpoint: live for this session, and persisted for the next. */
 async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDeclaration): Promise<void> {
+  const credentials = runtime.credentials;
+  if (!credentials) {
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Declaring a provider", runtime.kind).message });
+    return;
+  }
   try {
-    // Register *first*: it validates, and a declaration the registry rejects must never
-    // reach models.json. The SDK falls back to built-in models only when that file does
-    // not load — so one bad entry would take the user's other custom providers with it.
-    runtime.services.modelRuntime.registerProvider(declaration.provider, providerConfig(declaration));
-    await storeProvider(AGENT_DIR, declaration);
+    await credentials.declareProvider(declaration);
   } catch (error) {
-    runtime.services.modelRuntime.unregisterProvider(declaration.provider);
     send(socket, { type: "error", message: error instanceof CredentialError ? error.message : String(error) });
     return;
   }
@@ -1486,12 +1302,9 @@ async function adoptUsableModel(socket: WebSocket): Promise<void> {
     announce();
     return;
   }
-  const current = runtime.session.model as { provider?: string; id?: string } | undefined;
+  const current = runtime.snapshot().model;
   const usable = choices.some((choice) => choice.provider === current?.provider && choice.id === current?.id);
-  if (!usable) {
-    const target = runtime.services.modelRuntime.getModel(choices[0].provider, choices[0].id);
-    if (target) await runtime.session.setModel(target);
-  }
+  if (!usable) await runtime.credentials?.adoptModel(choices[0]);
   announce();
 }
 
@@ -1510,20 +1323,17 @@ function validImages(images: unknown): WireImage[] | undefined {
 }
 
 async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
-  const session = runtime.session;
-  const options = {
+  await runtime.prompt(text, {
+    ...(images?.length ? { images } : {}),
     // Echo the user message only once accepted (avoids ghost bubbles on reject)
-    preflightResult: (accepted: boolean) => {
+    onAccepted: (accepted) => {
       if (accepted) broadcast({ type: "user", text, ...(images?.length ? { images } : {}) });
     },
-    ...(images?.length ? { images: images.map((i) => ({ type: "image" as const, ...i })) } : {}),
-    ...(session.isStreaming ? { streamingBehavior: "steer" as const } : {}),
-  };
-  await session.prompt(text, options);
-  // The turn is persisted now: hand the client the entries so the bubbles it
-  // echoed optimistically become editable (edit_prompt targets an entry id)
-  broadcast({ type: "user_entries", entries: branchUserEntries() });
-  broadcast({ type: "tree", roots: buildTree() });
+  });
+  // The entries and tree are announced when the turn settles, not here: an RPC
+  // prompt resolves at *acceptance* (that is Pi's contract — a failure after
+  // acceptance reports through the event stream, never as a second result), so
+  // reading the conversation at this point would read it before the turn ran.
 }
 
 /**
@@ -1532,7 +1342,14 @@ async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
  * stays reachable in the tree (that's the whole point of editing here).
  */
 async function editPrompt(socket: WebSocket, entryId: string, text: string, images?: WireImage[]): Promise<void> {
-  if (runtime.session.isStreaming) {
+  const navigate = runtime.navigateTree;
+  if (!navigate) {
+    // Editing rewinds the leaf to just before a past message. Pi RPC forks and
+    // clones but does not move the leaf, so there is no equivalent to offer.
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Editing a past message", runtime.kind).message });
+    return;
+  }
+  if (runtime.snapshot().isStreaming) {
     send(socket, { type: "error", message: "Cannot edit a message while the agent is running" });
     return;
   }
@@ -1546,7 +1363,7 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
   }
   replacingSession = true;
   try {
-    const { cancelled } = await runtime.session.navigateTree(entryId);
+    const { cancelled } = await navigate.call(runtime, entryId);
     if (cancelled) {
       // An extension vetoed the rewind — say so: the client already dropped the draft
       send(socket, { type: "error", message: "Edit cancelled — the conversation was not rewound" });
@@ -1571,8 +1388,13 @@ async function isKnownSessionPath(path: string): Promise<boolean> {
 
 /** Delete a saved session file (allowlisted path, never the live one). */
 async function deleteSession(socket: WebSocket, path: string): Promise<void> {
-  if (path === runtime.session.sessionFile) {
+  const live = liveSessionMatch(path);
+  if (live === "live") {
     send(socket, { type: "error", message: "Cannot delete the active session" });
+    return;
+  }
+  if (live === "unknown") {
+    send(socket, { type: "error", message: `${UNKNOWN_LIVE_SESSION} — deleting it could remove the running conversation` });
     return;
   }
   if (!(await isKnownSessionPath(path))) {
@@ -1641,11 +1463,16 @@ async function renameSession(socket: WebSocket, path: string, rawName: string): 
     return;
   }
   const name = sanitizeName(rawName);
-  if (isLiveSessionFile(path)) {
-    // Through the live AgentSession, so the running session and its file agree.
-    // A second SessionManager over the live file would be a disaster: opening one
-    // can rewrite the file wholesale (version migration), racing the live appends.
-    runtime.session.setSessionName(name);
+  const live = liveSessionMatch(path);
+  if (live === "unknown") {
+    send(socket, { type: "error", message: `${UNKNOWN_LIVE_SESSION} — renaming could corrupt the running conversation` });
+    return;
+  }
+  if (live === "live") {
+    // Through the live runtime, so the running session and its file agree. A second
+    // SessionManager over the live file would be a disaster: opening one can rewrite
+    // the file wholesale (version migration), racing the live appends.
+    await runtime.setSessionName(name);
   } else {
     SessionManager.open(path, SESSION_DIR, AGENT_CWD).appendSessionInfo(name);
   }
@@ -1653,11 +1480,26 @@ async function renameSession(socket: WebSocket, path: string, rawName: string): 
   await broadcastSessions();
 }
 
-/** Is this path the session the agent is running right now? Both sides resolved: they come from different normalizers. */
-function isLiveSessionFile(candidate: string): boolean {
-  const live = runtime.session.sessionManager.getSessionFile();
-  return live !== undefined && path.resolve(candidate) === path.resolve(live);
+/**
+ * Is this path the session the agent is running right now?
+ *
+ * Three answers, not two. Standard Pi reports `sessionFile` in its state, but a
+ * fork may not, and `--no-session` means there is no file at all — and the old
+ * two-valued version read "we don't know" as "not the live one". That is the wrong
+ * way to be wrong: `deleteSession` would unlink the file the agent is appending to,
+ * and `renameSession` would take the `SessionManager.open()` branch over it, which
+ * can rewrite the file wholesale while the agent writes to it.
+ *
+ * Both sides are resolved: they come from different normalizers.
+ */
+function liveSessionMatch(candidate: string): "live" | "not-live" | "unknown" {
+  const live = runtime.snapshot().sessionFile;
+  if (live === undefined) return "unknown";
+  return path.resolve(candidate) === path.resolve(live) ? "live" : "not-live";
 }
+
+/** The refusal for a runtime that will not say which file it is writing to. */
+const UNKNOWN_LIVE_SESSION = "The agent runtime does not report which session file it is using, so this cannot be done safely";
 
 /** Match against the name, the first message and the whole transcript (server-side — see sessions.ts). */
 async function handleSearchSessions(socket: WebSocket, query: string, requestId: string): Promise<void> {
@@ -1687,35 +1529,27 @@ const namingSessions = new Set<string>();
  * they just erased on their next turn would be the opposite of helpful.
  */
 async function maybeNameSession(): Promise<void> {
-  const session = runtime.session;
-  const file = session.sessionManager.getSessionFile();
+  // Titling needs one direct model call with the session's own credentials. Only the
+  // embedded runtime can make it; under RPC the session keeps the UI's fallback (its
+  // first message) unless the user renames it by hand.
+  const titles = runtime.titles;
+  if (!titles) return;
+  const file = runtime.snapshot().sessionFile;
   if (file === undefined || namingSessions.has(file)) return;
-  if (hasBeenNamed(session.sessionManager.getEntries())) return;
-  const exchange = firstExchange(session.sessionManager.buildContextEntries());
+  if (hasBeenNamed(runtime.entries() as never)) return;
+  const exchange = firstExchange(runtime.contextEntries() as never);
   if (!exchange) return;
-  const model = session.model;
-  if (!model) return;
   namingSessions.add(file);
   try {
-    const auth = await runtime.services.modelRuntime.getAuth(model);
-    if (!auth) return;
-    const title = await generateSessionTitle({
-      exchange,
-      model,
-      auth: { apiKey: auth.auth.apiKey, headers: auth.auth.headers as Record<string, string> | undefined, env: auth.env },
-      // Same stream function as a real turn: a provider whose key lives in the
-      // environment (the registry never resolves those) still authenticates
-      streamFn: session.agent.streamFunction,
-      signal: AbortSignal.timeout(TITLE_TIMEOUT_MS),
-    });
+    const title = await titles.generateTitle(exchange, AbortSignal.timeout(TITLE_TIMEOUT_MS));
     if (!title) return;
     // While the model answered, the session may have been named by hand — or replaced.
     // `replacingSession` covers the window where the old session is already disposed
-    // but `runtime.session` still points at it: writing there would emit into a
-    // torn-down extension runner.
-    if (replacingSession || runtime.session !== session) return;
-    if (hasBeenNamed(session.sessionManager.getEntries())) return;
-    session.setSessionName(title);
+    // but the runtime still reports it: writing there would emit into a torn-down
+    // extension runner.
+    if (replacingSession || runtime.snapshot().sessionFile !== file) return;
+    if (hasBeenNamed(runtime.entries() as never)) return;
+    await runtime.setSessionName(title);
     invalidateSessionScan();
     await broadcastSessions();
   } catch (error) {
@@ -1735,13 +1569,6 @@ function reportError(error: unknown): void {
 
 // --- Fork / tree navigation -------------------------------------------------------
 
-/** SDK tree node (structural subset — the SDK type isn't exported at the root). */
-interface SdkTreeNode {
-  entry: { type: string; id: string; message?: { role?: string; content?: unknown } };
-  children: SdkTreeNode[];
-  label?: string;
-}
-
 /**
  * Collapse the raw session tree (every entry is a node: assistant messages,
  * tool results, model changes…) down to user-message nodes only, so the UI
@@ -1749,14 +1576,13 @@ interface SdkTreeNode {
  * leaf lives in its subtree, i.e. it is on the active branch.
  */
 function buildTree(): TreeNode[] {
-  const manager = runtime.session.sessionManager;
-  const leafId = manager.getLeafId();
+  const { roots, leafId } = runtime.tree();
 
-  function subtreeHasLeaf(node: SdkTreeNode): boolean {
+  function subtreeHasLeaf(node: RuntimeTreeNode): boolean {
     return node.entry.id === leafId || node.children.some(subtreeHasLeaf);
   }
 
-  function isUserNode(node: SdkTreeNode): boolean {
+  function isUserNode(node: RuntimeTreeNode): boolean {
     return node.entry.type === "message" && node.entry.message?.role === "user";
   }
 
@@ -1773,9 +1599,9 @@ function buildTree(): TreeNode[] {
    * message into the composer. Undefined when the turn has no reply yet, or when
    * the replies fork (ambiguous — the user node stays the safe fallback).
    */
-  function replyTip(node: SdkTreeNode): string | undefined {
+  function replyTip(node: RuntimeTreeNode): string | undefined {
     let current = node;
-    let tip: SdkTreeNode | undefined;
+    let tip: RuntimeTreeNode | undefined;
     for (;;) {
       const replies = current.children.filter((child) => !isUserNode(child));
       if (replies.length !== 1) break;
@@ -1785,7 +1611,7 @@ function buildTree(): TreeNode[] {
     return tip?.entry.id;
   }
 
-  function collapse(node: SdkTreeNode): TreeNode[] {
+  function collapse(node: RuntimeTreeNode): TreeNode[] {
     const childNodes = node.children.flatMap(collapse);
     if (isUserNode(node)) {
       const text = contentText(node.entry.message!.content as never).split("\n")[0].slice(0, 100);
@@ -1804,7 +1630,7 @@ function buildTree(): TreeNode[] {
     return childNodes;
   }
 
-  return (manager.getTree() as SdkTreeNode[]).flatMap(collapse);
+  return roots.flatMap(collapse);
 }
 
 /** Every entry id the tree exposes as a navigation target (user turns + their reply tips). */
@@ -1825,11 +1651,9 @@ function sendTree(socket: WebSocket): void {
   send(socket, { type: "tree", roots: buildTree() });
 }
 
-/** Fork targets must be user-message entries (the SDK throws on anything else). */
+/** Fork targets must be user-message entries (both runtimes reject anything else). */
 function isUserMessageEntry(entryId: string): boolean {
-  const entry = runtime.session.sessionManager.getEntry(entryId) as
-    | { type: string; message?: { role?: string } }
-    | undefined;
+  const entry = runtime.entries().find((candidate) => candidate.id === entryId);
   return entry?.type === "message" && entry.message?.role === "user";
 }
 
@@ -1841,7 +1665,12 @@ function isUserMessageEntry(entryId: string): boolean {
  * TUI) or a reply tip (restore that exchange in full, reply included).
  */
 async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
-  if (runtime.session.isStreaming) {
+  const navigate = runtime.navigateTree;
+  if (!navigate) {
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Tree navigation", runtime.kind).message });
+    return;
+  }
+  if (runtime.snapshot().isStreaming) {
     send(socket, { type: "error", message: "Cannot navigate the tree while the agent is running" });
     return;
   }
@@ -1859,7 +1688,7 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
   }
   replacingSession = true;
   try {
-    const { cancelled, editorText } = await runtime.session.navigateTree(entryId);
+    const { cancelled, editorText } = await navigate.call(runtime, entryId);
     if (cancelled) return;
     broadcast({ type: "session_replaced", ...snapshot() });
     if (editorText) send(socket, { type: "editor_prefill", text: editorText });
@@ -2162,6 +1991,30 @@ async function handleSearchFiles(socket: WebSocket, query: string, requestId: st
   send(socket, { type: "file_search_results", requestId, query, results });
 }
 
+/**
+ * Browser messages that need a working agent runtime. Everything absent from this
+ * set — the file browser, git, session listing and search — keeps working after a
+ * runtime failure, because none of it goes through the agent.
+ */
+const AGENT_COMMANDS = new Set<ClientMessage["type"]>([
+  "prompt",
+  "abort",
+  "set_model",
+  "set_thinking",
+  "new_session",
+  "switch_session",
+  "compact",
+  "rename_session",
+  "navigate_tree",
+  "fork_session",
+  "edit_prompt",
+  "list_tree",
+  "extension_ui_response",
+  "set_credential",
+  "declare_provider",
+  "update_config",
+]);
+
 function handleClientMessage(socket: WebSocket, raw: string): void {
   let message: ClientMessage;
   try {
@@ -2171,6 +2024,12 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
   }
   // JSON.parse can yield null/primitives — never crash on a malformed frame
   if (typeof message !== "object" || message === null) return;
+  // Fail closed. A prompt sent to a dead runtime must be refused where the user can
+  // see it, not queued for a process that is never coming back.
+  if (!runtime.ok && AGENT_COMMANDS.has(message.type)) {
+    send(socket, { type: "error", message: `Agent runtime unavailable: ${runtime.failure ?? "the runtime stopped"}` });
+    return;
+  }
   switch (message.type) {
     case "prompt": {
       if (typeof message.text !== "string") return;
@@ -2192,30 +2051,32 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       break;
     }
     case "abort":
-      runtime.session.abort().catch(() => {});
+      runtime.abort().catch(() => {});
       break;
     case "set_model": {
       if (typeof message.provider !== "string" || typeof message.id !== "string") return;
-      const model = runtime.services.modelRuntime.getModel(message.provider, message.id);
-      if (!model) {
-        send(socket, { type: "error", message: `Unknown model ${message.provider}/${message.id}` });
-        return;
-      }
-      runtime.session
-        .setModel(model)
-        .then(() => broadcast({ type: "model_changed", model: modelName(), reasoning: model.reasoning }))
+      const { provider, id } = message;
+      runtime
+        .setModel(provider, id)
+        .then((model) => broadcast({ type: "model_changed", model: modelName(), reasoning: model.reasoning ?? false }))
+        .catch((error) => {
+          if (!refuseUnsupported(socket, error)) {
+            send(socket, { type: "error", message: error instanceof Error ? error.message : String(error) });
+          }
+        });
+      break;
+    }
+    case "set_thinking": {
+      if (!THINKING_LEVELS.includes(message.level)) return;
+      const level = message.level;
+      runtime
+        .setThinkingLevel(level)
+        // The runtime is the authority on what it settled at — a model without the
+        // requested level lands elsewhere, and the UI must show what it landed on.
+        .then(() => broadcast({ type: "thinking_changed", level: runtime.snapshot().thinkingLevel }))
         .catch(reportError);
       break;
     }
-    case "set_thinking":
-      if (!THINKING_LEVELS.includes(message.level)) return;
-      try {
-        runtime.session.setThinkingLevel(message.level);
-        broadcast({ type: "thinking_changed", level: runtime.session.thinkingLevel });
-      } catch (error) {
-        reportError(error);
-      }
-      break;
     case "new_session":
       void replaceSession(socket, () => runtime.newSession());
       break;
@@ -2243,11 +2104,20 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       break;
     case "compact":
       // Failures surface via the compaction_end event (errorMessage) — avoid double-reporting.
-      runtime.session.compact().catch(() => {});
+      runtime.compact().catch(() => {});
       break;
-    case "extension_ui_response":
-      handleExtensionUIResponse(message);
+    case "extension_ui_response": {
+      // Every other case here checks its fields; this one used to pass the parsed
+      // frame straight through to the child's stdin. The type is pinned by the
+      // switch, but the rest is a client's to invent: an unbounded `value` stalls
+      // every later command behind the write chain until the command timeout fires
+      // and kills the runtime for good.
+      if (typeof message.id !== "string") return;
+      const answer = extensionUiAnswer(message);
+      if (answer === undefined) return;
+      runtime.answerExtensionUI(answer);
       break;
+    }
     case "list_directory":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
       handleListDirectory(socket, message.path, message.requestId).catch(reportError);
@@ -2420,11 +2290,22 @@ handleWsConnection = (socket) => {
   clients.add(socket);
   send(socket, { type: "hello", ...snapshot() });
   socket.on("message", (data: Buffer) => handleClientMessage(socket, data.toString()));
-  socket.on("close", () => clients.delete(socket));
+  socket.on("close", () => {
+    clients.delete(socket);
+    // Nobody left to answer a dialog. An extension blocked on one holds its command
+    // open, and for `prompt` that command's timeout is deliberately suspended while
+    // a dialog is up — so without this the child waits on a question no one can see,
+    // with no watchdog left to end it, and the way out (a new session) is itself a
+    // command to the blocked child.
+    if (clients.size === 0) runtime.cancelPendingExtensionRequests();
+  });
 };
-getHealth = () => ({ ok: true, sessionId: runtime.session.sessionId });
+// A failed runtime reports unready: /health answers 503 and the operator's probe
+// sees the process is no longer serving an agent, even though HTTP still answers.
+getHealth = () => (runtime.ok ? { ok: true, sessionId: runtime.snapshot().sessionId } : { ok: false });
 
-console.log(`[pi] session ${runtime.session.sessionId}`);
+console.log(`[pi] session ${runtime.snapshot().sessionId}`);
+console.log(`[pi] agent runtime ${runtime.kind}`);
 console.log(`[pi] model ${modelName()} · cwd ${AGENT_CWD} · agentDir ${AGENT_DIR}`);
 if (config.sandbox) {
   const extras = [
