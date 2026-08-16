@@ -236,6 +236,21 @@ describe("RpcRuntimeStarts", () => {
     );
   });
 
+  /**
+   * A fork that lacks a flag names the flag; the operator wrote a setting. The
+   * bridge between the two lives in the startup error, and it silently stopped
+   * working when the child's output was split out of the client-facing cause —
+   * the string being scanned could no longer contain a flag name. Only a test
+   * that goes through the real startup path catches that; the unit test for
+   * `explainRejectedFlags` kept passing on a string nobody was passing it.
+   */
+  test("names the setting behind a flag the executable rejected", async () => {
+    await assert.rejects(
+      startFake({ startupFailure: "Error: unknown flag: --skill\nRun `omp --help` for available flags.", startupExitCode: 2 }),
+      /--skill \(from "skillPaths/,
+    );
+  });
+
   test("accepts a runtime without the optional command catalog", async () => {
     const { runtime } = await startFake({
       failures: {
