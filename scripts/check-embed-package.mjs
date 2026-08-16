@@ -105,7 +105,17 @@ function packedFiles() {
     stdio: ["ignore", "pipe", "ignore"],
     shell: useShell && process.platform === "win32",
   });
-  return JSON.parse(output)[0].files;
+  // Two shapes, because npm changed one. It used to answer with an array of
+  // packed packages; npm 11 answers with an object keyed by package name. Reading
+  // `[0]` on the object yields undefined, and the failure — "Cannot read
+  // properties of undefined (reading 'files')" — names neither npm nor the shape,
+  // so it looks like a broken check rather than a moved field. Accept both.
+  const parsed = JSON.parse(output);
+  const packed = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+  if (!Array.isArray(packed?.files)) {
+    throw new Error(`"npm pack --json" reported no file list (got ${Array.isArray(parsed) ? "an empty array" : `keys: ${Object.keys(parsed).join(", ") || "none"}`})`);
+  }
+  return packed.files;
 }
 
 const unpublished = declared.filter(([, relative]) => !packed.has(relative.replace(/^\.\//, "")));
