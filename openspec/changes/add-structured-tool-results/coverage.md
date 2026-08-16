@@ -1,9 +1,9 @@
 # Scenario-to-test matrix — add-structured-tool-results
 
-All 74 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
+All 75 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
 enumerated with `rg '^#### Scenario:' openspec/changes/add-structured-tool-results/specs/`.
 
-Nineteen arrived after the first pass, describing behaviour that was built and then
+Twenty arrived after the first pass, describing behaviour that was built and then
 specified: element kinds, the two-channel rendering that keeps type from competing
 with change, the key, narrowing the view, relationship geometry that does not lose a
 relationship, the textual equivalent's completeness, mutation needing a target, and a
@@ -85,7 +85,8 @@ Test files, abbreviated below:
 | RefusalIdentifiesTheLimitThatBit | covered | SP "a bound refusal reports the limit, the observed value, and which level bit" |
 | OperationalLimitIsStricterThanTheCeiling | covered | SB "past the deployment's limit but within the ceiling is refused, and says so" |
 | AcceptedSizesAreObservable | covered | SB "acceptance reports what the document weighed" |
-| ApprovedProposalIsExactlyWhatWasValidated | covered *(test)* | UV "hands on exactly the value that was validated" — identity asserted from the real validation boundary, declaration order included, which a normalising step would not preserve. Renamed from *ByteForByte*: the SDK hands the server a parsed object, so the producer's bytes do not exist on this side and promising identity with them would be a promise nothing keeps. What is guaranteed, and tested, is that nothing between validation and handover normalises, reorders or re-encodes. |
+| ValidatedProposalIsRecoverableAsValidated | covered *(test)* | UV "hands on exactly the value that was validated" — identity asserted from the real validation boundary, declaration order included, which a normalising step would not preserve. Renamed twice: from *ByteForByte*, because the SDK hands the server a parsed object and the producer's bytes do not exist on this side; then from *Approved*, because there is no approval action and no handover step in this system and the test should not invent one. What is guaranteed and tested is that the document is still the document, after validation and after rendering. |
+| RenderingAndAdjustingDoNotAlterIt | covered *(test)* | UV "leaves the document untouched after a box is moved and a type is hidden" — the view is asserted to have changed first, so it is not a test of a no-op |
 | ProducerValidatesBeforeEmitting | covered | SC "the command-line interface agrees with the parser" — every valid case, exit zero |
 | TheValidatorRunsWhereTheProducerIs | covered *(out-of-repo)* | CLI "runs at all, outside the repository, with nothing installed" and "agrees with the application on every conformance case" — the bundle copied to a temporary directory with no `node_modules`, no `package.json` and no path back here. It earned itself immediately: the first bundle carried two shebangs and was a syntax error, while every in-repo test stayed green |
 | RefusalIsDistinguishedFromUnreadableInput | covered *(test)* | CLI "exits 1 for a document that was read and does not conform", "exits 2 when the input cannot be read, rather than blaming the schema", "exits 3 when the input is not JSON", and "says how to use it, and documents its exit codes where a caller will look" |
@@ -121,7 +122,7 @@ Test files, abbreviated below:
 
 ## Summary
 
-74 covered, 0 partial, 0 uncovered — 59 by test, 2 by architectural invariant, 2 by
+75 covered, 0 partial, 0 uncovered — 60 by test, 2 by architectural invariant, 2 by
 running the shipped artifact outside this repository, and the rest by the tests named
 against each row.
 
@@ -144,3 +145,42 @@ honestly assert identity with them. Renamed to **ApprovedProposalIsExactlyWhatWa
 which is both what the implementation guarantees and what the requirement was for:
 nothing between validation and handover normalises, reorders or re-encodes. Asserted
 from the real validation boundary, declaration order included.
+
+## What the running app was actually driven through
+
+Every interaction below was driven in a browser against the dev server, after the
+change it exercises, and checked by reading the DOM rather than by looking at a
+screenshot. Recorded here rather than as a spec because seeding a transcript with a
+tool result — which is what an offline running-app test of this needs — requires
+forging a session entry the agent will accept, and that did not land. The session
+loads and the tool call renders; the forged result does not attach. Stated as an open
+gap rather than left as a checked box.
+
+The runs, and what each one caught:
+
+- **A nine-element typed architecture.** Five element types drew in four colours: the
+  hash alone collided. Replaced with hash-preferred slots and linear probing.
+- **A thirty-three element architecture, fourteen element types, thirty-four
+  relationship types, fifty-four relationships.** Four pairs of unrelated element
+  types shared a colour, because elements and relationships shared one table. The key
+  spread across three thousand pixels. Relationships routed above the topmost box were
+  cut off at the canvas edge, and so were self-loops.
+- **Clicking the key.** Filtering did nothing at all: the pan gesture on the canvas
+  cancelled the pointerdown, which suppresses the click that follows. Two hundred unit
+  tests were green throughout, and jsdom does not model click suppression, so this was
+  only ever reachable here.
+- **Dragging a box.** Confirmed the canvas grows upward and leftward, that the route
+  keeps its rounded corners, and that "reset layout" restores the computed positions.
+- **The full-size view.** `elementFromPoint` over the composer and over the toolbar
+  both returned nodes inside the modal — before the portal, neither did.
+- **A hostile proposal.** Producer text carrying `"`, `;` and `-->` rendered as text,
+  manufactured no element, and the mermaid export kept it inside one declaration:
+  four declarations for four elements, five relationships for five.
+- **A sequence proposal.** Showed a change printed past the edge of its box, and the
+  proposal note claiming "only what changes is shown" while a context participant sat
+  beside two marked ones.
+- **The download.** A real `image/svg+xml` blob, named after the document, with no
+  `foreignObject`, no class attributes, an explicit ground, and the key inside it.
+- **The command palette.** `/skill:structured-exchange` was absent because the palette
+  showed twelve matches alphabetically — not, as an earlier note in the server claimed,
+  because skills do not surface as commands. They do.

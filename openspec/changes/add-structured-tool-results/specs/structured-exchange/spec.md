@@ -634,19 +634,25 @@ read is one it cannot answer questions about.
 - **WHEN** the agent corrects a document that was refused and presents it again
 - **THEN** the corrected document is presented, with no trace of the refused one
 
-### Requirement: ApprovedProposalIsRecoverableUnchanged
+### Requirement: ValidatedProposalRemainsRecoverableUnchanged
 
-An approved proposal SHALL remain available in exactly the form it was validated in, so that it can
-be handed to the authority that will apply it. The system SHALL NOT re-serialise, reorder, normalise,
-or otherwise alter a proposal between approval and recovery.
+A validated proposal SHALL remain available in exactly the form it was validated in, for as long as
+the result carrying it is available. The system SHALL NOT re-serialise, reorder, normalise, or
+otherwise alter it — not when validating it, not when rendering it, and not when the reader adjusts,
+narrows or exports the rendering.
 
-How a proposal reaches the authority that applies it, and what that authority reports back, are
-outside this contract. This requirement covers only that nothing is lost or changed on this side of
-that boundary.
+There is deliberately no approval action and no handover step in this system. A proposal is shown so
+a person can judge it; carrying their decision anywhere is the job of whatever integrates this, and
+is outside this contract. What is required here is that when that integration comes to fetch the
+document, it finds the document that was shown.
 
-#### Scenario: ApprovedProposalIsExactlyWhatWasValidated
-- **WHEN** a reader approves a proposal and it is recovered for handover
-- **THEN** it is exactly the value that was validated and displayed, with no normalisation, reordering, or re-encoding applied between validation and handover
+#### Scenario: ValidatedProposalIsRecoverableAsValidated
+- **WHEN** a validated proposal has been rendered and is fetched again from the result that carried it
+- **THEN** it is byte-identical to the value that was validated, with no normalisation, reordering, or re-encoding applied
+
+#### Scenario: RenderingAndAdjustingDoNotAlterIt
+- **WHEN** a reader repositions the rendering, narrows it to selected kinds, or exports it
+- **THEN** the recoverable document is unchanged by any of it
 
 ### Requirement: ReferenceValidationAvailableToProducers
 

@@ -103,7 +103,23 @@ const KIND_TINTS: { fill: string; stroke: string }[] = [
   { fill: "#f0f9ff", stroke: "#0369a1" },
 ];
 
-type Tint = { fill: string; stroke: string };
+/**
+ * A second channel, so colour is not the only thing telling two types apart.
+ *
+ * Sixteen colours against a contract that allows five hundred elements was a promise
+ * that broke on real data, and the honest options were to widen the encoding or to
+ * stop claiming it. Both, in the end: a dash pattern multiplies the distinguishable
+ * presentations fourfold, and past that the key says colours repeat rather than
+ * implying a distinctness that is not there. Nobody reads sixty-five types by eye
+ * anyway — what has to hold beyond that point is that every type is *named*, in the
+ * key and on hover.
+ */
+const KIND_DASHES: (string | undefined)[] = [undefined, "7 3", "2 3", "9 3 2 3"];
+
+/** How many types can be told apart by appearance alone. */
+export const KIND_PRESENTATIONS = KIND_TINTS.length * KIND_DASHES.length;
+
+type Tint = { fill: string; stroke: string; dash?: string };
 
 /** FNV-1a, for a preferred slot that depends only on the name. */
 function hashOf(kind: string): number {
@@ -135,12 +151,13 @@ export function assignTints(kinds: string[]): Map<string, Tint> {
   const assigned = new Map<string, Tint>();
   const taken = new Set<number>();
   for (const kind of kinds) {
-    let slot = hashOf(kind) % KIND_TINTS.length;
-    for (let probe = 0; probe < KIND_TINTS.length && taken.has(slot); probe++) {
-      slot = (slot + 1) % KIND_TINTS.length;
+    let slot = hashOf(kind) % KIND_PRESENTATIONS;
+    for (let probe = 0; probe < KIND_PRESENTATIONS && taken.has(slot); probe++) {
+      slot = (slot + 1) % KIND_PRESENTATIONS;
     }
     taken.add(slot);
-    assigned.set(kind, KIND_TINTS[slot]);
+    const tint = KIND_TINTS[slot % KIND_TINTS.length];
+    assigned.set(kind, { ...tint, dash: KIND_DASHES[Math.floor(slot / KIND_TINTS.length) % KIND_DASHES.length] });
   }
   return assigned;
 }
@@ -192,7 +209,8 @@ export type LegendEntry = {
   label: string;
   fill: string;
   stroke: string;
-  dashed?: boolean;
+  /** The dash the thing is actually drawn with, so the key matches the picture. */
+  dashed?: string;
   /** Set when this entry names a type the reader can show and hide. */
   toggles?: boolean;
   /** The qualified name this entry switches — see `filterKey`. */
@@ -321,7 +339,7 @@ function Legend({
                   y2={top + 5}
                   stroke={entry.stroke}
                   strokeWidth={1.6}
-                  strokeDasharray={entry.dashed === true ? "3 2" : undefined}
+                  strokeDasharray={entry.dashed}
                 />
               ) : (
                 <rect
@@ -333,7 +351,7 @@ function Legend({
                   fill={entry.fill}
                   stroke={entry.stroke}
                   strokeWidth={1.2}
-                  strokeDasharray={entry.dashed === true ? "3 2" : undefined}
+                  strokeDasharray={entry.dashed}
                 />
               )}
               <text x={at + 21} y={top + 9} fontSize={9} fill={MUTED} fontFamily="system-ui, sans-serif">
@@ -514,14 +532,22 @@ function Box({
   hover?: ReturnType<ReturnType<typeof useDiagramTooltip>["hover"]>;
 }) {
   const role_paint = ROLE_PAINT[role];
-  // Type picks the fill; role keeps the outline, and thickens it when something is
-  // actually changing so the approval signal survives the colour.
+  /**
+   * Type and role on channels that do not compete.
+   *
+   * The role may take the outline colour — it is the approval signal and has to be
+   * unmissable — but the type keeps the fill *and* the dash pattern, so two types
+   * sharing a role are still told apart. Before this, every added relationship and
+   * every added element was drawn in one green regardless of what it was.
+   */
   const paint = {
     fill: tint?.fill ?? role_paint.fill,
     stroke: role === "unchanged" ? (tint?.stroke ?? role_paint.stroke) : role_paint.stroke,
     text: role_paint.text === MUTED ? MUTED : INK,
   };
   const outline = role === "added" || role === "changed" ? 2 : 1.2;
+  // Context is dimmed rather than dashed: the dash now says what kind of thing it is.
+  const opacity = role === "context" ? 0.62 : 1;
   const lines = wrapLabel(label, width);
   const written = changeLines(changes, width);
   const totalLines = lines.length + written.length;
@@ -540,7 +566,8 @@ function Box({
         fill={paint.fill}
         stroke={paint.stroke}
         strokeWidth={outline}
-        strokeDasharray={role === "context" ? "4 3" : undefined}
+        strokeDasharray={tint?.dash}
+        opacity={opacity}
       />
       <text x={textX} textAnchor={anchor} fontSize={11} fill={paint.text} fontFamily="system-ui, sans-serif">
         {lines.map((line, index) => (
@@ -963,6 +990,7 @@ function GraphView({
         label: kind,
         fill: tint.fill,
         stroke: tint.stroke,
+        dashed: tint.dash,
         toggles: true,
         key: filterKey(of, kind),
         hidden: hidden.has(filterKey(of, kind)),
@@ -972,7 +1000,7 @@ function GraphView({
     // that is incomplete and a key that is wrong: a reader who trusts colour alone
     // would otherwise read two unrelated types as one.
     const heading = (noun: string, count: number) =>
-      count > KIND_TINT_COUNT ? `${noun} (${count} types, colours repeat)` : noun;
+      count > KIND_PRESENTATIONS ? `${noun} (${count} types, appearances repeat)` : noun;
     const elementKinds = kindsPresent(data.nodes);
     const relationshipKinds = kindsPresent(data.edges);
     const groups: LegendGroup[] = [
@@ -996,7 +1024,7 @@ function GraphView({
           label: ROLE_LABEL[role],
           fill: PAPER,
           stroke: ROLE_PAINT[role].stroke,
-          dashed: role === "context",
+          dashed: role === "context" ? "3 2" : undefined,
         })),
       });
     }
@@ -1074,13 +1102,31 @@ function GraphView({
   const diagramHeight = bottom - top;
 
   // Worked out once: the lines need it, and so do the arrowheads.
-  const edgePaint = (edge: (typeof data.edges)[number]) => {
+  /**
+   * What a relationship looks like: its own colour, and its role beside it.
+   *
+   * A relationship has one stroke and two things to say with it, and role used to
+   * win outright — so every added relationship was drawn in one green whatever it
+   * was, and two relationships of different types with the same role and the same
+   * label were indistinguishable. The line keeps the type's colour and dash; the
+   * role is drawn underneath it as a wider halo, which is a channel of its own and
+   * still impossible to miss.
+   */
+  const edgeLook = (edge: (typeof data.edges)[number]) => {
     const role = relationshipRole(edge, isProposal);
-    // Same rule as the boxes: type carries the colour, role takes the line back the
-    // moment it has something to say about it.
-    if (role !== "unchanged") return RELATIONSHIP_PAINT[role];
-    return (edge.kind === undefined ? undefined : relationshipTints.get(edge.kind)?.stroke) ?? RELATIONSHIP_PAINT[role];
+    const tint = edge.kind === undefined ? undefined : relationshipTints.get(edge.kind);
+    return {
+      role,
+      stroke: tint?.stroke ?? RELATIONSHIP_PAINT["unchanged"],
+      dash: tint?.dash,
+      // The halo marks what would be applied. Context is included so the reader can
+      // place the rest and is applied to nothing, so it is dimmed instead.
+      halo: role === "added" || role === "changed" ? RELATIONSHIP_PAINT[role] : undefined,
+      width: role === "context" ? 1 : role === "unchanged" ? 1.5 : 1.8,
+      opacity: role === "context" ? 0.6 : 1,
+    };
   };
+  const edgePaint = (edge: (typeof data.edges)[number]) => edgeLook(edge).stroke;
   const arrowPaints = [...new Set(shown.edges.map(edgePaint))];
 
   const legendTop = bottom + 4;
@@ -1227,8 +1273,9 @@ function GraphView({
           const from = boxFor(edge.from);
           const to = boxFor(edge.to);
           if (from === undefined || to === undefined) return null;
-          const role = relationshipRole(edge, isProposal);
-          const paint = edgePaint(edge);
+          const look = edgeLook(edge);
+          const role = look.role;
+          const paint = look.stroke;
           const changes = fieldChanges(edge);
           const described = edge.label ?? edge.kind;
           // A layout route stops matching once the reader has moved either end of it
@@ -1255,14 +1302,28 @@ function GraphView({
                 strokeWidth={14}
                 pointerEvents="stroke"
               />
+              {/* The role, underneath: a wider soft stroke that the type's line sits on */}
+              {look.halo !== undefined && (
+                <path
+                  data-edge="role"
+                  pointerEvents="none"
+                  d={shape.d}
+                  fill="none"
+                  stroke={look.halo}
+                  strokeWidth={look.width + 4}
+                  strokeLinecap="round"
+                  opacity={0.3}
+                />
+              )}
               <path
                 data-edge="line"
                 pointerEvents="none"
                 d={shape.d}
                 fill="none"
                 stroke={paint}
-                strokeWidth={role === "context" ? 1 : 1.6}
-                strokeDasharray={role === "context" ? "4 3" : undefined}
+                strokeWidth={look.width}
+                strokeDasharray={look.dash}
+                opacity={look.opacity}
                 markerEnd={`url(#${markerId("se-arrow", paint)})`}
               />
               {described !== undefined && roomFor(described) && (
@@ -1436,7 +1497,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
           label: ROLE_LABEL[role],
           fill: PAPER,
           stroke: ROLE_PAINT[role].stroke,
-          dashed: role === "context",
+          dashed: role === "context" ? "3 2" : undefined,
         })),
       });
     }

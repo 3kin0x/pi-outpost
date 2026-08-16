@@ -96,9 +96,38 @@ elements so the reader can situate it, and there was no way to say so.
 - [x] 5.2 Drive the round trip in the running app with the agent as producer: ask it for a proposal
   through the skill, read back the DOM to confirm the approval view shows additions, changes, and
   removals, and confirm the raw output stays reachable.
+- [x] 5.6 Re-exercise the running app after the interaction work landed — the key, filtering,
+  dragging, panning, the full-size view, loops and parallel relationships. See "What the running app
+  was actually driven through" in coverage.md for what was driven and what each run found.
 - [x] 5.3 Exercise an invalid and an unknown-version envelope in the running app; confirm no
   specialized view appears and the result stays readable.
 - [x] 5.4 Confirm in the running app that the agent recovers from a refusal: given diagnostics from
   the reference validator, it corrects its proposal without being told what was wrong.
 - [x] 5.5 Run the focused tests, the relevant UI suites, and
   `openspec validate add-structured-tool-results --strict`.
+
+## 6. What the reader can do with a diagram
+
+- [x] 6.1 Carry the producer's own type on elements as well as relationships, refusing appearance —
+  colour, position, size — so the document states meaning and the reader's view decides how it looks.
+- [x] 6.2 Colour by type and mark change by role on channels that do not compete, so a proposal's
+  additions stay unmissable without two types of the same role being drawn alike.
+- [x] 6.3 Draw the key inside the figure, elements and relationships on their own lines, so an export
+  explains itself.
+- [x] 6.4 Let the reader narrow the view by type from the key, with element and relationship
+  vocabularies kept separate, and say on screen and inside the figure what is being hidden.
+- [x] 6.5 Let the reader reposition boxes and move around the diagram, without either touching the
+  document.
+- [x] 6.6 Draw every declared relationship perceptibly: a self-relationship with extent, parallel
+  relationships apart, and long ones along the route the layout engine worked out.
+- [x] 6.7 Answer the pointer the same way on every diagram, and say the same thing to a screen reader.
+- [x] 6.8 Describe what a removal removes, rather than showing a reference the reader cannot resolve.
+
+## 7. What a producer outside this repository gets
+
+- [x] 7.1 Bundle the reference validator into one file that runs with nothing installed, and ship it
+  beside the schema and the conformance suite.
+- [x] 7.2 Give it exit codes that separate a non-conforming document from unreadable input and from
+  input that is not JSON.
+- [x] 7.3 Prove the bundled skill loads, that a user's skill of the same name wins, and that
+  `noSkills` still turns it off.

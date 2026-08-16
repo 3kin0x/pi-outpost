@@ -3,6 +3,9 @@ import type { CommandInfo, FileSearchEntry, WireImage } from "@pi-outpost/shared
 import { composePrompt, mentionedPaths, type Attachment } from "../attachments";
 import type { FileSearch } from "../useAgent";
 
+/** A guard on DOM size, not a limit on what a reader may find. The list scrolls. */
+const MAX_COMMAND_SUGGESTIONS = 100;
+
 interface ComposerProps {
   isStreaming: boolean;
   connected: boolean;
@@ -89,9 +92,19 @@ export function Composer({
     return match ? match[1].toLowerCase() : null;
   }, [text]);
 
+  /**
+   * Every command that matches, not the first dozen alphabetically.
+   *
+   * The list scrolls and the selection scrolls into view, so a cap only ever hid
+   * things: with fifty commands installed, typing "/" showed A through C and a skill
+   * named later in the alphabet was simply absent — which reads as "that skill did
+   * not load" rather than "there are more below". The remaining bound is a guard on
+   * how much is put in the DOM at once, not an editorial choice about what is worth
+   * seeing.
+   */
   const commandSuggestions = useMemo(() => {
     if (commandPrefix === null) return [];
-    return commands.filter((c) => c.name.toLowerCase().startsWith(commandPrefix)).slice(0, 12);
+    return commands.filter((c) => c.name.toLowerCase().startsWith(commandPrefix)).slice(0, MAX_COMMAND_SUGGESTIONS);
   }, [commandPrefix, commands]);
 
   const mention = commandPrefix === null ? findMention(text, cursor) : null;

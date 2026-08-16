@@ -561,8 +561,45 @@ describe("relationships in a proposal are legible too", () => {
     const { container } = renderBody(withStructured(graphProposal));
 
     const [context, changed] = [...container.querySelectorAll("g[data-relationship-role]")];
-    expect(context.querySelector('path[data-edge="line"]')?.getAttribute("stroke-dasharray")).toBe("4 3");
-    expect(changed.querySelector('path[data-edge="line"]')?.getAttribute("stroke-dasharray")).toBeNull();
+
+    // The dash now says what kind of relationship it is, so the role speaks through
+    // channels of its own: a halo for anything being applied, and dimming for context.
+    expect(changed.querySelector('path[data-edge="role"]')).not.toBeNull();
+    expect(context.querySelector('path[data-edge="role"]')).toBeNull();
+    expect(Number(context.querySelector('path[data-edge="line"]')!.getAttribute("opacity"))).toBeLessThan(1);
+    expect(Number(changed.querySelector('path[data-edge="line"]')!.getAttribute("opacity"))).toBe(1);
+  });
+
+  it("keeps a relationship's own type visible while its role is marked", () => {
+    /**
+     * Role used to win the stroke outright, so every added relationship was drawn in
+     * one green whatever it was — two relationships of different types, same role and
+     * same label, were indistinguishable.
+     */
+    const twoAdded = {
+      schema: S,
+      kind: "graph",
+      target: "artifact-1",
+      data: {
+        nodes: [
+          { id: "a", ref: "EL-1", label: "A" },
+          { id: "b", ref: "EL-2", label: "B" },
+          { id: "c", ref: "EL-3", label: "C" },
+        ],
+        edges: [
+          { from: "a", to: "b", kind: "power" },
+          { from: "a", to: "c", kind: "signal" },
+        ],
+      },
+    };
+    const { container } = renderBody(withStructured(twoAdded));
+    const lines = [...container.querySelectorAll('path[data-edge="line"]')];
+
+    expect(lines).toHaveLength(2);
+    // Both are additions…
+    expect(container.querySelectorAll('path[data-edge="role"]')).toHaveLength(2);
+    // …and they are still not the same relationship
+    expect(lines[0].getAttribute("stroke")).not.toBe(lines[1].getAttribute("stroke"));
   });
 
   it("does the same for a sequence's messages", () => {
@@ -710,13 +747,13 @@ describe("colour carries type, and the key travels with the picture", () => {
     },
   };
 
-  it("gives the same type the same colour, and different types different ones", () => {
+  it("gives the same type the same appearance, and different types different ones", () => {
     renderBody(withStructured(typed));
-    const boxes = document.querySelectorAll("[data-element-role] rect");
-    const fills = [...boxes].map((box) => box.getAttribute("fill"));
+    const boxes = [...document.querySelectorAll("[data-element-role] rect")];
+    const looks = boxes.map((box) => `${box.getAttribute("fill")}/${box.getAttribute("stroke-dasharray") ?? "solid"}`);
 
-    expect(new Set(fills).size).toBe(3);
-    expect(fills.every((fill) => fill !== null && fill !== "")).toBe(true);
+    expect(new Set(looks).size).toBe(3);
+    expect(boxes.every((box) => (box.getAttribute("fill") ?? "") !== "")).toBe(true);
   });
 
   it("draws the same type the same colour across two renders of the same document", () => {
@@ -1604,13 +1641,19 @@ describe("what the reader is shown is what would be applied", () => {
     expect(exported.filter((name) => /^(from|parse|read)Mermaid/i.test(name))).toEqual([]);
   });
 
-  it("hands on exactly the value that was validated", () => {
-    // ApprovedProposalIsExactlyWhatWasValidated. Identity is asserted from the real
-    // validation boundary: the serialized form the presentation validated is the one
-    // still available for handover, with nothing normalised in between.
-    //
-    // Not identity with the bytes the *producer* wrote — those do not survive to this
-    // side of the process, and claiming otherwise would be a promise nothing keeps.
+  it("is recoverable as validated, after being validated and rendered", () => {
+    /**
+     * ValidatedProposalIsRecoverableAsValidated.
+     *
+     * There is no approval action and no handover step in this system, and the test
+     * does not invent one: a proposal is shown so a person can judge it, and carrying
+     * their decision anywhere belongs to whatever integrates this. What is asserted is
+     * what this side owes — that the document is still the document, after validation
+     * and after rendering, for whatever comes to fetch it.
+     *
+     * Not identity with the bytes the *producer* wrote: those do not survive to this
+     * side of the process, and claiming otherwise would be a promise nothing keeps.
+     */
     const serialized = JSON.stringify({
       schema: S,
       kind: "graph",
@@ -1770,32 +1813,57 @@ describe("a real architecture, at the size real ones come in", () => {
   }));
   const big = { schema: S, kind: "graph", data: { nodes, edges } };
 
-  const fills = (scope: "element" | "relationship") =>
-    [...document.querySelectorAll(`[data-legend-entry^="${scope}:"] rect:not([fill="transparent"])`)].map((r) =>
-      r.getAttribute("fill"),
-    );
+  /** How a type is presented: colour and pattern together, which is what tells them apart. */
+  const presentations = (scope: "element" | "relationship") =>
+    // A relationship's swatch is a line, an element's is a box — both carry the
+    // colour and the pattern that tell one type from another.
+    [...document.querySelectorAll(`[data-legend-entry^="${scope}:"]`)].map((entry) => {
+      const swatch = entry.querySelector('rect:not([fill="transparent"])') ?? entry.querySelector("line")!;
+      const paint = swatch.getAttribute("fill") ?? swatch.getAttribute("stroke");
+      return `${paint}/${swatch.getAttribute("stroke-dasharray") ?? "solid"}`;
+    });
 
-  it("gives fourteen element types fourteen distinct colours", () => {
+  it("gives fourteen element types fourteen distinct presentations", () => {
     // Elements and relationships shared one colour table, so a diagram with many of
     // both exhausted it and drew unrelated types alike: mechanical and security the
-    // same, interface and external the same. They are separate vocabularies on
-    // separate channels and now have separate tables.
+    // same, interface and external the same. Separate tables, and a pattern beside
+    // the colour so sixteen colours are not the ceiling.
     renderBody(withStructured(big));
-    const distinct = new Set(fills("element"));
 
-    expect(fills("element")).toHaveLength(14);
-    expect(distinct.size).toBe(14);
+    expect(presentations("element")).toHaveLength(14);
+    expect(new Set(presentations("element")).size).toBe(14);
   });
 
-  it("says so in the key when a vocabulary outruns the palette", () => {
-    // Thirty-four relationship types cannot all be distinguishable by colour, and a
-    // key that implies they are is worse than one that admits they are not: a reader
-    // trusting colour alone reads two unrelated types as one.
+  it("tells thirty-four relationship types apart too", () => {
+    // Sixteen colours were not enough and the key admitted it. Sixty-four
+    // presentations are, for anything a reader can actually take in.
     renderBody(withStructured(big));
+
+    expect(presentations("relationship")).toHaveLength(34);
+    expect(new Set(presentations("relationship")).size).toBe(34);
+  });
+
+  it("does not claim distinctness once the encoding is genuinely exhausted", () => {
+    // Past sixty-four the appearances repeat, and saying so is the difference between
+    // a key that is incomplete and one that is wrong.
+    const many = {
+      schema: S,
+      kind: "graph",
+      data: {
+        nodes: Array.from({ length: 70 }, (_, index) => ({
+          id: `n${index}`,
+          label: `N${index}`,
+          kind: `kind_${index}`,
+        })),
+        edges: [],
+      },
+    };
+    renderBody(withStructured(many));
     const headings = [...document.querySelectorAll('[data-testid="legend-group"]')].map((t) => t.textContent);
 
-    expect(headings.some((h) => /relationships \(\d+ types, colours repeat\)/.test(h!))).toBe(true);
-    expect(headings.some((h) => h === "elements")).toBe(true);
+    expect(headings.some((h) => /elements \(70 types, appearances repeat\)/.test(h!))).toBe(true);
+    // …and every one of them is still named, which is the guarantee that survives
+    expect(document.querySelectorAll('[data-legend-entry^="element:"]')).toHaveLength(70);
   });
 
   it("keeps the key a block, however wide the drawing gets", () => {

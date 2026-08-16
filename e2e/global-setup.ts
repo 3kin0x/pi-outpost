@@ -130,6 +130,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: onlyOneFakeProvider() },
   );
 
+  // The throwaway workspace, so a spec can seed a session the server will list.
+  process.env.PI_E2E_WORKSPACE = root;
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_GUARDED_URL = guarded.base;

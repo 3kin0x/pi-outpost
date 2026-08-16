@@ -338,3 +338,51 @@ describe("Composer", () => {
     });
   });
 });
+
+describe("finding a command among many", () => {
+  /**
+   * The list is capped at what fits in the DOM, not at what fits on screen: it
+   * scrolls, and the selection scrolls into view. Capped at a dozen it showed the
+   * first dozen alphabetically, and a skill named later was simply absent — which
+   * reads as "that skill did not load" rather than "there are more below". That is
+   * exactly the conclusion it produced.
+   */
+  const many: CommandInfo[] = Array.from({ length: 50 }, (_, index) => ({
+    name: `cmd-${String(index).padStart(2, "0")}`,
+    description: `command ${index}`,
+    source: "extension",
+  }));
+  const withSkill: CommandInfo[] = [
+    ...many,
+    { name: "skill:structured-exchange", description: "author a structured document", source: "skill" },
+  ];
+
+  const shown = () => [...document.querySelectorAll("[data-selected]")];
+
+  it("offers every command when only the slash is typed", () => {
+    setup({ commands: withSkill });
+    type("/");
+    expect(shown()).toHaveLength(withSkill.length);
+  });
+
+  it("keeps a late-alphabet skill reachable rather than cutting it off", () => {
+    setup({ commands: withSkill });
+    type("/");
+    expect(shown().some((item) => item.textContent?.includes("skill:structured-exchange"))).toBe(true);
+  });
+
+  it("still narrows as the name is typed", () => {
+    setup({ commands: withSkill });
+    type("/skill:str");
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0].textContent).toContain("skill:structured-exchange");
+  });
+
+  it("puts the list in something that scrolls, since it no longer truncates", () => {
+    setup({ commands: withSkill });
+    type("/");
+    const list = shown()[0].parentElement!;
+    expect(list.className).toContain("overflow-y-auto");
+    expect(list.className).toMatch(/max-h-/);
+  });
+});

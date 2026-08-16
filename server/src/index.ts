@@ -519,9 +519,12 @@ const skillRoots = [path.resolve(import.meta.dirname, "./skills"), path.resolve(
  * candidates and reported as skills missing a description.
  *
  * Proven to load, and to stay off under noSkills, by server/test/bundledSkill.test.ts.
- * Note that skills do not surface as slash commands in this SDK: they are offered to
- * the model, so "absent from the command list" is not evidence that one failed to
- * load.
+ *
+ * A skill does surface as a slash command — `skill:<name>`. An earlier note here said
+ * the opposite, and was wrong: the skill was absent from the palette because the
+ * palette showed only the first dozen matches alphabetically, not because it had
+ * failed to load. Two wrong conclusions from one symptom, and the second one nearly
+ * became a documented limitation.
  */
 const BUNDLED_SKILLS: string[] = [];
 for (const root of skillRoots) {
