@@ -91,23 +91,43 @@ context they needed and did not get.
 Leave `target` out. Every element declares its `label`; every relationship declares
 its `kind`.
 
+> **Type your elements.** `kind` is optional on an element and you should almost
+> always set it. The reader's view colours by it and builds a key from it, so a
+> diagram whose elements carry no type arrives in a single flat grey — legible, and
+> much harder to read than it needed to be.
+
 ```json
 {
   "schema": "urn:structured-exchange:1",
   "kind": "graph",
   "data": {
     "nodes": [
-      { "id": "gateway", "label": "API Gateway" },
-      { "id": "billing", "label": "Billing" }
+      { "id": "gateway", "label": "API Gateway", "kind": "service" },
+      { "id": "billing", "label": "Billing", "kind": "service" },
+      { "id": "ledger", "label": "Ledger", "kind": "datastore" }
     ],
-    "edges": [{ "from": "gateway", "to": "billing", "kind": "calls" }]
+    "edges": [
+      { "from": "gateway", "to": "billing", "kind": "calls" },
+      { "from": "billing", "to": "ledger", "kind": "writes" }
+    ]
   }
 }
 ```
 
-`kind` on a relationship is an opaque string from your domain. Nothing validates it
-against a list, and nothing interprets it — it is shown, and it tells two otherwise
-identical relationships apart.
+`kind` is an opaque string from your domain, on elements and relationships alike.
+Nothing validates it against a list and nothing interprets it: it is shown, it tells
+two otherwise identical things apart, and whatever applies the document is free to
+map it onto its own type system.
+
+Pick the vocabulary the domain already uses, and use it consistently — the same
+concept must get the same string throughout a document, because that string is what
+groups things in the key. Two or three types for a small diagram, rarely more than
+about eight; past that the key stops helping.
+
+A physical architecture might use `battery`, `converter`, `motor`, `controller`,
+`sensor`; a software one `service`, `datastore`, `queue`, `external`; a stereotyped
+model whatever its profile defines. Relationships likewise: `power`, `thermal`,
+`communication` on a physical model, `calls`, `writes`, `publishes` on a software one.
 
 ## Proposing a change to something that exists
 

@@ -106,6 +106,18 @@
     {
       "file": "invalid/duplicate-reference-twice.json",
       "expectedRule": "duplicate-reference"
+    },
+    {
+      "file": "invalid/change-without-target.json",
+      "expectedRule": "change-without-target"
+    },
+    {
+      "file": "invalid/relationship-change-without-target.json",
+      "expectedRule": "change-without-target"
+    },
+    {
+      "file": "invalid/table-with-empty-removals.json",
+      "expectedRule": "kind-not-proposable"
     }
   ]
 }

@@ -3,7 +3,7 @@ import {
   displayLabel,
   elementRole,
   fieldChanges,
-  layerGraph,
+  layoutGraph,
   readStructuredExchange,
   relationshipRole,
   toMermaid,
@@ -108,6 +108,9 @@ describe("what each part of a proposal means", () => {
 });
 
 describe("layout", () => {
+  /** A uniform size, so tests that care about placement are not about text metrics. */
+  const uniform = () => ({ width: 100, height: 40 });
+
   const chain = {
     nodes: [
       { id: "a", label: "A" },
@@ -120,13 +123,87 @@ describe("layout", () => {
     ],
   };
 
-  it("places a chain in successive layers", () => {
-    const placed = layerGraph(chain);
-    expect(placed.map((entry) => entry.depth)).toEqual([0, 1, 2]);
+  const xOf = (layout: ReturnType<typeof layoutGraph>, id: string) => layout.nodes.find((n) => n.id === id)!.x;
+
+  it("places a chain in successive layers, left to right", () => {
+    const layout = layoutGraph(chain, uniform);
+    expect(xOf(layout, "a")).toBeLessThan(xOf(layout, "b"));
+    expect(xOf(layout, "b")).toBeLessThan(xOf(layout, "c"));
   });
 
   it("is deterministic: the same document lays out the same way", () => {
-    expect(layerGraph(chain)).toEqual(layerGraph(chain));
+    expect(layoutGraph(chain, uniform)).toEqual(layoutGraph(chain, uniform));
+  });
+
+  it("sizes each box to its own contents rather than to the widest", () => {
+    // One long label used to widen every box in the diagram, because the layout
+    // took a single width for all of them.
+    const sized = layoutGraph(chain, (node) => ({ width: node.id === "b" ? 300 : 100, height: 40 }));
+    expect(sized.nodes.find((n) => n.id === "b")!.width).toBe(300);
+    expect(sized.nodes.find((n) => n.id === "a")!.width).toBe(100);
+  });
+
+  const id = (n: string) => ({ id: n, label: n });
+  const to = (from: string, target: string) => ({ from, to: target, kind: "k" });
+  const cyclic = {
+    nodes: ["batt", "bms", "ond", "mot", "dcdc", "vcu", "therm", "zcu", "hmi", "conn"].map(id),
+    edges: [
+      to("batt", "ond"),
+      to("ond", "mot"),
+      to("batt", "dcdc"),
+      to("dcdc", "vcu"),
+      to("vcu", "ond"),
+      to("vcu", "bms"),
+      to("bms", "batt"), // closes a loop
+      to("bms", "vcu"), // and another
+      to("vcu", "therm"),
+      to("therm", "batt"), // and another
+      to("vcu", "zcu"),
+      to("zcu", "hmi"),
+      to("hmi", "conn"),
+      to("conn", "vcu"), // and another
+    ],
+  };
+
+  it("keeps a cyclic architecture to a readable extent", () => {
+    // The failure this exists for: a real seventeen-node architecture with feedback
+    // loops — a battery manager sensing the battery it is controlled through — drew
+    // twenty thousand pixels wide and one row tall, and arrived on screen as an
+    // empty line. A cycle must not manufacture depth.
+    const layout = layoutGraph(cyclic, uniform);
+
+    expect(layout.width).toBeLessThan(cyclic.nodes.length * 100);
+    // And it must have real height rather than collapsing to a single row
+    expect(layout.height).toBeGreaterThan(40 * 2);
+  });
+
+  it("draws every element somewhere on the canvas", () => {
+    const layout = layoutGraph(cyclic, uniform);
+
+    expect(layout.nodes).toHaveLength(cyclic.nodes.length);
+    for (const node of layout.nodes) {
+      expect(node.x).toBeGreaterThanOrEqual(0);
+      expect(node.y).toBeGreaterThanOrEqual(0);
+      expect(node.x + node.width).toBeLessThanOrEqual(layout.width);
+      expect(node.y + node.height).toBeLessThanOrEqual(layout.height);
+    }
+  });
+
+  it("never overlaps two boxes", () => {
+    // The property that decides whether a diagram can be read at all, and the one
+    // the hand-rolled layout could not promise.
+    const layout = layoutGraph(cyclic, uniform);
+
+    const overlaps = [];
+    for (const a of layout.nodes) {
+      for (const b of layout.nodes) {
+        if (a.id >= b.id) continue;
+        const apart =
+          a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+        if (!apart) overlaps.push(`${a.id}/${b.id}`);
+      }
+    }
+    expect(overlaps).toEqual([]);
   });
 
   it("terminates on a cycle instead of relaxing forever", () => {
@@ -140,8 +217,24 @@ describe("layout", () => {
         { from: "b", to: "a", kind: "k" },
       ],
     };
-    expect(() => layerGraph(cycle)).not.toThrow();
-    expect(layerGraph(cycle)).toHaveLength(2);
+    expect(() => layoutGraph(cycle, uniform)).not.toThrow();
+    expect(layoutGraph(cycle, uniform).nodes).toHaveLength(2);
+  });
+
+  it("keeps two relationships between the same pair as two relationships", () => {
+    // Collapsed into one edge, the second would stop influencing the layout.
+    const parallel = {
+      nodes: [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+      ],
+      edges: [
+        { from: "a", to: "b", kind: "power" },
+        { from: "a", to: "b", kind: "signal" },
+      ],
+    };
+    expect(() => layoutGraph(parallel, uniform)).not.toThrow();
+    expect(layoutGraph(parallel, uniform).nodes).toHaveLength(2);
   });
 
   it("falls back to a reference when an element declares no label", () => {
@@ -200,5 +293,113 @@ describe("derived diagram export", () => {
   it("offers nothing for a table, rather than inventing a diagram for it", () => {
     const table = validStructuredExchange(serialize({ schema: S, kind: "table", data: { columns: ["c"], rows: [["v"]] } }))!;
     expect(toMermaid(table)).toBeUndefined();
+  });
+});
+
+describe("producer text can never become diagram structure", () => {
+  /**
+   * The vectors, each of which is a plausible label and a piece of mermaid grammar.
+   * `;` is the one that got through: it separates statements, so a participant name
+   * carrying it declared a participant that was in no document.
+   */
+  const HOSTILE = [
+    "A; participant injected as INJECTED",
+    'A" --> evil["pwned',
+    "A\nparticipant injected",
+    "A #quot; injected",
+    "A[injected]",
+    "A-->B",
+    "sequenceDiagram",
+    "A;;;participant x",
+    "A<script>alert(1)</script>",
+    "A participant injected",
+  ];
+
+  const sequenceOf = (labels: string[]) =>
+    validStructuredExchange(
+      serialize({
+        schema: S,
+        kind: "sequence",
+        data: {
+          participants: labels.map((label, index) => ({ id: `p${index}`, label })),
+          messages: labels.length > 1 ? [{ from: "p0", to: "p1", label: labels[0] }] : [],
+        },
+      }),
+    )!;
+
+  const graphOf = (labels: string[]) =>
+    validStructuredExchange(
+      serialize({
+        schema: S,
+        kind: "graph",
+        data: {
+          nodes: labels.map((label, index) => ({ id: `n${index}`, label })),
+          edges: labels.length > 1 ? [{ from: "n0", to: "n1", kind: labels[0] }] : [],
+        },
+      }),
+    )!;
+
+  it("declares exactly as many sequence participants as the document has", () => {
+    for (const hostile of HOSTILE) {
+      const mermaid = toMermaid(sequenceOf([hostile, "Plain"]))!;
+      const declarations = mermaid.split("\n").filter((line) => /^\s*participant\s/.test(line));
+      expect(declarations, `for label ${JSON.stringify(hostile)}`).toHaveLength(2);
+    }
+  });
+
+  it("declares exactly as many graph elements and relationships as the document has", () => {
+    for (const hostile of HOSTILE) {
+      const mermaid = toMermaid(graphOf([hostile, "Plain"]))!;
+      const declarations = mermaid.split("\n").filter((line) => /^\s+n[0-9a-z]+\[/.test(line));
+      const relationships = mermaid.split("\n").filter((line) => /-->/.test(line));
+      expect(declarations, `for label ${JSON.stringify(hostile)}`).toHaveLength(2);
+      expect(relationships, `for label ${JSON.stringify(hostile)}`).toHaveLength(1);
+    }
+  });
+
+  it("emits no line the document did not call for", () => {
+    for (const hostile of HOSTILE) {
+      const lines = toMermaid(sequenceOf([hostile, "Plain"]))!.split("\n");
+      // header + two participants + one message, and nothing else
+      expect(lines, `for label ${JSON.stringify(hostile)}`).toHaveLength(4);
+      expect(lines[0]).toBe("sequenceDiagram");
+    }
+  });
+
+  it("lets no producer text spell an escape of its own", () => {
+    // `#` opens mermaid's entity syntax and is what the escapes are written in.
+    const mermaid = toMermaid(graphOf(["#quot; #59; #35;"]))!;
+    expect(mermaid).toContain("#35;quot#59; #35;59#59; #35;35#59;");
+    expect(mermaid).not.toMatch(/[^#]#quot;/);
+  });
+
+  it("names nodes only with identifiers it generated itself", () => {
+    // Every id is derived from character codes, so no label can spell one.
+    const mermaid = toMermaid(graphOf(["A; n0 --> n1", "Plain"]))!;
+    for (const id of mermaid.match(/\bn[0-9a-z]+\b(?=[\s[])/g) ?? []) {
+      expect(id).toMatch(/^n[0-9a-z]+$/);
+    }
+    expect(mermaid.split("\n").filter((line) => /-->/.test(line))).toHaveLength(1);
+  });
+
+  it("stays parseable by mermaid itself", async () => {
+    const mermaid = (await import("mermaid")).default;
+    mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true });
+
+    for (const hostile of HOSTILE) {
+      await expect(
+        mermaid.parse(toMermaid(sequenceOf([hostile, "Plain"]))!),
+        `sequence for ${JSON.stringify(hostile)}`,
+      ).resolves.toBeTruthy();
+      await expect(
+        mermaid.parse(toMermaid(graphOf([hostile, "Plain"]))!),
+        `graph for ${JSON.stringify(hostile)}`,
+      ).resolves.toBeTruthy();
+    }
+  });
+
+  it("is still deterministic under hostile input", () => {
+    const envelope = sequenceOf([HOSTILE[0], "Plain"]);
+    expect(toMermaid(envelope)).toBe(toMermaid(envelope));
   });
 });

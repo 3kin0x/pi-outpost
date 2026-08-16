@@ -519,8 +519,8 @@ describe("relationships in a proposal are legible too", () => {
     const { container } = renderBody(withStructured(graphProposal));
 
     const [context, changed] = [...container.querySelectorAll("g[data-relationship-role]")];
-    expect(context.querySelector("line")?.getAttribute("stroke-dasharray")).toBe("4 3");
-    expect(changed.querySelector("line")?.getAttribute("stroke-dasharray")).toBeNull();
+    expect(context.querySelector("path")?.getAttribute("stroke-dasharray")).toBe("4 3");
+    expect(changed.querySelector("path")?.getAttribute("stroke-dasharray")).toBeNull();
   });
 
   it("does the same for a sequence's messages", () => {
@@ -602,5 +602,562 @@ describe("producer text is data, not markup", () => {
     expect(container.querySelector("img")).toBeNull();
     // Once in the drawn label and once in the hover, both as text
     expect(screen.getAllByText("<img src=x onerror=alert(1)>").length).toBeGreaterThan(0);
+  });
+});
+
+describe("labels the producer wrote on two lines", () => {
+  // Real producers write a name and the thing that qualifies it — "Batterie HV"
+  // over "400-800V". Splitting on all whitespace reflowed the two into one
+  // paragraph and lost the distinction they meant.
+  const twoLine = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "batt", label: "Batterie HV\n400-800V" },
+        { id: "bms", label: "BMS\nGestion batterie" },
+      ],
+      edges: [{ from: "bms", to: "batt", kind: "sense" }],
+    },
+  };
+
+  it("keeps the break the producer asked for", () => {
+    const { container } = renderBody(withStructured(twoLine));
+
+    const first = [...container.querySelectorAll("[data-element-role]")][0];
+    const lines = [...first.querySelectorAll("tspan")].map((line) => line.textContent);
+    expect(lines).toEqual(["Batterie HV", "400-800V"]);
+  });
+
+  it("sizes the box to its longest line, not to the whole string", () => {
+    const { container } = renderBody(withStructured(twoLine));
+    const width = Number(container.querySelector("[data-element-role] rect")?.getAttribute("width"));
+
+    // "Gestion batterie" is the longest line at 16 characters; the concatenation
+    // would be 20 and would make every box needlessly wide.
+    expect(width).toBeLessThan(20 * 6.6 + 22);
+  });
+
+  it("still draws at a readable height rather than collapsing to a line", () => {
+    const { container } = renderBody(withStructured(twoLine));
+    const svg = container.querySelector("svg")!;
+
+    // The symptom that started this: a diagram scaled into the chat column until
+    // it was a few pixels tall. It keeps its own size and scrolls instead.
+    expect(Number(svg.getAttribute("height"))).toBeGreaterThan(40);
+    // No max-width to scale it down; the container scrolls instead
+    expect(svg.getAttribute("style") ?? "").not.toContain("max-width");
+    expect(container.querySelector(".overflow-x-auto")).toBeInTheDocument();
+  });
+});
+
+describe("colour carries type, and the key travels with the picture", () => {
+  const typed = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "batt", label: "Battery", kind: "storage" },
+        { id: "inv", label: "Inverter", kind: "converter" },
+        { id: "mot", label: "Motor", kind: "actuator" },
+      ],
+      edges: [
+        { from: "batt", to: "inv", kind: "power" },
+        { from: "inv", to: "mot", kind: "power" },
+      ],
+    },
+  };
+
+  it("gives the same type the same colour, and different types different ones", () => {
+    renderBody(withStructured(typed));
+    const boxes = document.querySelectorAll("[data-element-role] rect");
+    const fills = [...boxes].map((box) => box.getAttribute("fill"));
+
+    expect(new Set(fills).size).toBe(3);
+    expect(fills.every((fill) => fill !== null && fill !== "")).toBe(true);
+  });
+
+  it("draws the same type the same colour across two renders of the same document", () => {
+    const first = renderBody(withStructured(typed));
+    const fillOf = () =>
+      [...document.querySelectorAll("[data-element-role] rect")].map((box) => box.getAttribute("fill"));
+    const before = fillOf();
+    first.unmount();
+
+    renderBody(withStructured(typed));
+    expect(fillOf()).toEqual(before);
+  });
+
+  it("names every type present in a key inside the SVG, so an exported figure explains itself", () => {
+    renderBody(withStructured(typed));
+    const legend = screen.getByTestId("diagram-legend");
+
+    // Inside the SVG, not beside it on the page
+    expect(legend.closest("svg")).not.toBeNull();
+    const named = [...legend.querySelectorAll("text")].map((text) => text.textContent);
+    expect(named).toEqual(expect.arrayContaining(["storage", "converter", "actuator", "power"]));
+  });
+
+  it("offers no key when the document declares no types", () => {
+    // A key listing nothing is noise, and it would take up room in the export.
+    renderBody(withStructured(newArtifact));
+    expect(screen.queryByTestId("diagram-legend")).toBeNull();
+  });
+
+  it("keeps the approval signal when a proposal is also typed", () => {
+    // Type takes the fill; role must still own the outline, or an added element
+    // becomes indistinguishable from an existing one of the same type.
+    const typedProposal = {
+      ...proposal,
+      data: {
+        nodes: [
+          { id: "keep", ref: "EL-1", label: "Existing", kind: "service" },
+          { id: "fresh", label: "Brand new", kind: "service" },
+        ],
+        edges: [],
+      },
+    };
+    renderBody(withStructured(typedProposal));
+
+    const added = document.querySelector('[data-element-role="added"] rect')!;
+    const context = document.querySelector('[data-element-role="context"] rect')!;
+
+    // Same type, so the same fill…
+    expect(added.getAttribute("fill")).toBe(context.getAttribute("fill"));
+    // …and the role still tells them apart, by outline and by weight
+    expect(added.getAttribute("stroke")).not.toBe(context.getAttribute("stroke"));
+    expect(Number(added.getAttribute("stroke-width"))).toBeGreaterThan(
+      Number(context.getAttribute("stroke-width")),
+    );
+  });
+
+  it("explains the roles in the key too, but only for a proposal", () => {
+    renderBody(withStructured(proposal));
+    const named = [...screen.getByTestId("diagram-legend").querySelectorAll("text")].map((t) => t.textContent);
+    expect(named).toEqual(expect.arrayContaining(["added"]));
+  });
+
+  it("tips an arrow in the colour of the line it ends", () => {
+    // Keyed by role, a type-coloured relationship got a grey arrowhead.
+    renderBody(withStructured(typed));
+    const line = document.querySelector("[data-relationship-role] path")!;
+    const stroke = line.getAttribute("stroke")!;
+    const marker = line.getAttribute("marker-end")!.replace(/^url\(#|\)$/g, "");
+
+    const tip = document.getElementById(marker)!.querySelector("path")!;
+    expect(tip.getAttribute("fill")).toBe(stroke);
+  });
+});
+
+describe("filtering, without weakening the approval gate", () => {
+  const typed = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "batt", label: "Battery", kind: "storage" },
+        { id: "inv", label: "Inverter", kind: "converter" },
+        { id: "mot", label: "Motor", kind: "actuator" },
+      ],
+      edges: [
+        { from: "batt", to: "inv", kind: "power" },
+        { from: "inv", to: "mot", kind: "power" },
+      ],
+    },
+  };
+  const entry = (key: string) => document.querySelector(`[data-legend-entry="${key}"]`)!;
+
+  it("shows everything until the reader hides something", () => {
+    renderBody(withStructured(typed));
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
+    expect(screen.queryByTestId("structured-filtered")).toBeNull();
+  });
+
+  it("hides a type when its key entry is clicked, and brings it back on a second click", () => {
+    renderBody(withStructured(typed));
+
+    fireEvent.click(entry("element:converter"));
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(2);
+
+    fireEvent.click(entry("element:converter"));
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
+  });
+
+  it("drops a relationship whose end has gone, rather than drawing a line to nowhere", () => {
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("element:converter"));
+    // Both relationships ended at the inverter
+    expect(document.querySelectorAll("[data-relationship-role]").length).toBe(0);
+  });
+
+  it("hides a relationship type on its own without touching the elements", () => {
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("relationship:power"));
+
+    expect(document.querySelectorAll("[data-relationship-role]").length).toBe(0);
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
+  });
+
+  it("says on screen that the picture is no longer the whole document", () => {
+    // The view is an approval gate. A reader approving a filtered picture has to
+    // know they are doing it.
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("element:converter"));
+
+    const banner = screen.getByTestId("structured-filtered");
+    expect(banner.textContent).toContain("converter");
+    expect(banner.textContent).toMatch(/filtered/i);
+  });
+
+  it("keeps a hidden type in the key, struck through, so an exported figure says what is missing", () => {
+    // The banner is HTML and stays behind on export; the key is inside the SVG.
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("element:converter"));
+
+    const stillListed = entry("element:converter");
+    expect(stillListed.closest("svg")).not.toBeNull();
+    expect(stillListed.getAttribute("data-hidden")).toBe("true");
+    expect(stillListed.querySelector("text")!.getAttribute("text-decoration")).toBe("line-through");
+  });
+
+  it("restores everything from the banner", () => {
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("element:converter"));
+    fireEvent.click(screen.getByText("show everything"));
+
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(3);
+    expect(screen.queryByTestId("structured-filtered")).toBeNull();
+  });
+
+  it("tells assistive technology that what it is describing is a subset", () => {
+    renderBody(withStructured(typed));
+    fireEvent.click(entry("element:converter"));
+
+    const svg = document.querySelector('svg[role="img"]')!;
+    expect(svg.getAttribute("aria-label")).toMatch(/filtered to 2 elements/);
+  });
+
+  it("keeps a type's colour when another type is hidden", () => {
+    // Re-assigning colours over the visible subset would repaint the diagram every
+    // time the reader toggled something, which is exactly when they are comparing.
+    renderBody(withStructured(typed));
+    const fillOf = (id: string) =>
+      [...document.querySelectorAll("[data-element-role]")]
+        .find((box) => box.querySelector("title")?.textContent?.includes(id))
+        ?.querySelector("rect")
+        ?.getAttribute("fill");
+
+    const before = fillOf("Battery");
+    fireEvent.click(entry("element:converter"));
+    expect(fillOf("Battery")).toBe(before);
+  });
+});
+
+describe("moving around the diagram", () => {
+  const typed = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "A", kind: "block" },
+        { id: "b", label: "B", kind: "block" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "calls" }],
+    },
+  };
+
+  /** jsdom reports no layout, so a scrollable ancestor has to be declared. */
+  const scrollable = (element: HTMLElement, over: number) => {
+    Object.defineProperty(element, "scrollWidth", { value: 1000, configurable: true });
+    Object.defineProperty(element, "clientWidth", { value: 1000 - over, configurable: true });
+    Object.defineProperty(element, "scrollHeight", { value: 100, configurable: true });
+    Object.defineProperty(element, "clientHeight", { value: 100, configurable: true });
+    element.scrollLeft = 200;
+    element.scrollTop = 0;
+    return element;
+  };
+
+  const press = (target: Element, type: string, x: number, y: number) =>
+    target.dispatchEvent(
+      Object.assign(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 }), {
+        pointerId: 1,
+      }),
+    );
+
+  it("pans the view when the ground is dragged, without moving anything in the drawing", () => {
+    renderBody(withStructured(typed));
+    const svg = document.querySelector('svg[role="img"]')! as SVGSVGElement;
+    const box = svg.querySelector('[data-element-role] rect')!;
+    const before = box.getAttribute("x");
+    const scroller = scrollable(svg.parentElement as HTMLElement, 400);
+
+    press(svg, "pointerdown", 500, 50);
+    press(svg, "pointermove", 440, 50);
+    press(svg, "pointerup", 440, 50);
+
+    // The box scrolled into view; it did not move on the canvas, so the export is
+    // exactly what it was.
+    expect(scroller.scrollLeft).toBe(260);
+    expect(box.getAttribute("x")).toBe(before);
+  });
+
+  it("leaves a press that landed on a box to that box, so panning cannot fight dragging", () => {
+    renderBody(withStructured(typed));
+    const svg = document.querySelector('svg[role="img"]')! as SVGSVGElement;
+    const scroller = scrollable(svg.parentElement as HTMLElement, 400);
+    const node = svg.querySelector('[data-draggable="node"]')!;
+
+    press(node, "pointerdown", 500, 50);
+    press(svg, "pointermove", 440, 50);
+
+    expect(scroller.scrollLeft).toBe(200);
+  });
+});
+
+describe("the two type vocabularies are independent", () => {
+  // "power" is a plausible kind of block and a plausible kind of connection. Held in
+  // one namespace, hiding either hid both.
+  const shared = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "Pack", kind: "power" },
+        { id: "b", label: "Motor", kind: "drive" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "power" }],
+    },
+  };
+  const entry = (key: string) => document.querySelector(`[data-legend-entry="${key}"]`)!;
+
+  it("hides a relationship type without hiding an element type of the same name", () => {
+    renderBody(withStructured(shared));
+    fireEvent.click(entry("relationship:power"));
+
+    expect(document.querySelectorAll("[data-relationship-role]").length).toBe(0);
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(2);
+  });
+
+  it("hides an element type without hiding a relationship type of the same name", () => {
+    renderBody(withStructured(shared));
+    fireEvent.click(entry("element:power"));
+
+    // The element goes, and the relationship goes with it only because it lost an end
+    expect(document.querySelectorAll("[data-element-role]").length).toBe(1);
+    // …and the relationship's own type is still switched on
+    expect(entry("relationship:power").getAttribute("data-hidden")).toBeNull();
+  });
+
+  it("lists the shared name once per vocabulary", () => {
+    renderBody(withStructured(shared));
+    expect(entry("element:power")).not.toBeNull();
+    expect(entry("relationship:power")).not.toBeNull();
+  });
+
+  it("names the type plainly in the banner, not by its internal key", () => {
+    renderBody(withStructured(shared));
+    fireEvent.click(entry("relationship:power"));
+    expect(screen.getByTestId("structured-filtered").textContent).toContain("power");
+    expect(screen.getByTestId("structured-filtered").textContent).not.toContain("relationship:power");
+  });
+});
+
+describe("a gesture never outlives what it was made on", () => {
+  const typed = {
+    schema: S,
+    kind: "graph",
+    data: { nodes: [{ id: "a", label: "A", kind: "block" }], edges: [] },
+  };
+
+  it("starts a drag where the pointer-capture API is missing entirely", () => {
+    // jsdom has no pointer capture. Calling it unguarded threw inside a handler,
+    // which surfaced as an unhandled rejection: every assertion passed and the suite
+    // still exited non-zero.
+    const view = renderBody(withStructured(typed));
+    const node = document.querySelector('[data-draggable="node"]')!;
+
+    expect(() =>
+      node.dispatchEvent(
+        Object.assign(new MouseEvent("pointerdown", { bubbles: true, clientX: 5, clientY: 5, button: 0 }), {
+          pointerId: 1,
+        }),
+      ),
+    ).not.toThrow();
+    view.unmount();
+  });
+
+  it("drops its listeners when the component goes away mid-drag", () => {
+    const view = renderBody(withStructured(typed));
+    const node = document.querySelector('[data-draggable="node"]')! as HTMLElement;
+    const removals: string[] = [];
+    const realRemove = node.removeEventListener.bind(node);
+    node.removeEventListener = (type: string, ...rest: unknown[]) => {
+      removals.push(type);
+      return realRemove(type, ...(rest as [EventListenerOrEventListenerObject]));
+    };
+
+    node.dispatchEvent(
+      Object.assign(new MouseEvent("pointerdown", { bubbles: true, clientX: 5, clientY: 5, button: 0 }), {
+        pointerId: 1,
+      }),
+    );
+    view.unmount();
+
+    expect(removals).toEqual(expect.arrayContaining(["pointermove", "pointerup", "pointercancel"]));
+  });
+});
+
+describe("every declared relationship is a relationship you can see", () => {
+  const graphOf = (edges: unknown[]) => ({
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+      ],
+      edges,
+    },
+  });
+  const paths = () =>
+    [...document.querySelectorAll("[data-relationship-role] path")].map((p) => p.getAttribute("d")!);
+
+  /** Sample a path so two shapes can be compared as geometry rather than as strings. */
+  const pointsOf = (d: string) =>
+    (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number).reduce<{ x: number; y: number }[]>((acc, n, i, all) => {
+      if (i % 2 === 0 && i + 1 < all.length) acc.push({ x: n, y: all[i + 1] });
+      return acc;
+    }, []);
+
+  it("draws a relationship from something to itself as a shape with real extent", () => {
+    // A straight line between one box's centre and itself has zero length: the
+    // document declared a relationship and the picture showed nothing at all.
+    renderBody(withStructured(graphOf([{ from: "a", to: "a", kind: "feeds" }])));
+    const [d] = paths();
+
+    expect(d).toBeDefined();
+    const points = pointsOf(d);
+    const spanX = Math.max(...points.map((p) => p.x)) - Math.min(...points.map((p) => p.x));
+    const spanY = Math.max(...points.map((p) => p.y)) - Math.min(...points.map((p) => p.y));
+    expect(spanX).toBeGreaterThan(10);
+    expect(spanY).toBeGreaterThan(10);
+    expect(document.querySelector('[data-relationship-shape="loop"]')).not.toBeNull();
+  });
+
+  it("keeps several loops on one element apart from each other", () => {
+    renderBody(
+      withStructured(
+        graphOf([
+          { from: "a", to: "a", kind: "feeds" },
+          { from: "a", to: "a", kind: "senses" },
+        ]),
+      ),
+    );
+    const drawn = paths();
+    expect(drawn).toHaveLength(2);
+    expect(drawn[0]).not.toBe(drawn[1]);
+  });
+
+  it("draws two relationships between the same pair as two distinct shapes", () => {
+    // Straight lines between centres put these on exactly the same pixels, so a
+    // reader counting connections counted one where the document had two.
+    renderBody(
+      withStructured(
+        graphOf([
+          { from: "a", to: "b", kind: "power" },
+          { from: "a", to: "b", kind: "signal" },
+        ]),
+      ),
+    );
+    const drawn = paths();
+
+    expect(drawn).toHaveLength(2);
+    expect(drawn[0]).not.toBe(drawn[1]);
+    // …and genuinely apart, not merely different strings
+    const [first, second] = drawn.map(pointsOf);
+    const apart = Math.max(...second.map((p, i) => Math.hypot(p.x - (first[i]?.x ?? p.x), p.y - (first[i]?.y ?? p.y))));
+    expect(apart).toBeGreaterThan(8);
+  });
+
+  it("fans three relationships between one pair to either side of the straight run", () => {
+    renderBody(
+      withStructured(
+        graphOf([
+          { from: "a", to: "b", kind: "one" },
+          { from: "a", to: "b", kind: "two" },
+          { from: "a", to: "b", kind: "three" },
+        ]),
+      ),
+    );
+    const drawn = paths();
+    expect(drawn).toHaveLength(3);
+    expect(new Set(drawn).size).toBe(3);
+    // The first is the straight run; the other two curve, one each way
+    expect(drawn[0]).toMatch(/^M [\d.-]+ [\d.-]+ L/);
+    expect(drawn[1]).toContain("Q");
+    expect(drawn[2]).toContain("Q");
+  });
+
+  it("gives opposite directions between the same pair their own straight run each", () => {
+    // A→B and B→A are not the same pair, and neither should be pushed off the
+    // straight line to make room for the other.
+    renderBody(
+      withStructured(
+        graphOf([
+          { from: "a", to: "b", kind: "requests" },
+          { from: "b", to: "a", kind: "replies" },
+        ]),
+      ),
+    );
+    const drawn = paths();
+    expect(drawn).toHaveLength(2);
+    expect(drawn.every((d) => !d.includes("Q"))).toBe(true);
+    expect(drawn[0]).not.toBe(drawn[1]);
+  });
+
+  it("keeps direction, arrow, type and hover on every shape it draws", () => {
+    renderBody(
+      withStructured(
+        graphOf([
+          { from: "a", to: "b", kind: "power" },
+          { from: "a", to: "b", kind: "signal" },
+          { from: "a", to: "a", kind: "feeds" },
+        ]),
+      ),
+    );
+    const groups = [...document.querySelectorAll("[data-relationship-role]")];
+    expect(groups).toHaveLength(3);
+
+    for (const group of groups) {
+      const path = group.querySelector("path")!;
+      expect(path.getAttribute("marker-end")).toMatch(/^url\(#se-arrow-/);
+      expect(path.getAttribute("fill")).toBe("none");
+      expect(group.querySelector("title")!.textContent).toBeTruthy();
+    }
+    // The types are all shown, so two parallel relationships stay tellable apart
+    expect(document.querySelector("svg")!.textContent).toContain("power");
+    expect(document.querySelector("svg")!.textContent).toContain("signal");
+  });
+
+  it("follows the layout engine's route rather than cutting across the boxes between", () => {
+    // A long relationship in a layered graph is routed around whatever sits in the
+    // ranks it spans; a straight line between centres draws over them.
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        data: {
+          nodes: ["a", "b", "c", "d"].map((id) => ({ id, label: id.toUpperCase() })),
+          edges: [
+            { from: "a", to: "b", kind: "k" },
+            { from: "b", to: "c", kind: "k" },
+            { from: "c", to: "d", kind: "k" },
+            { from: "a", to: "d", kind: "k" },
+          ],
+        },
+      }),
+    );
+    const spanning = paths().find((d) => (d.match(/L/g) ?? []).length > 1);
+    expect(spanning, "the relationship spanning three ranks should be a routed polyline").toBeDefined();
   });
 });

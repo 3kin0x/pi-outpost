@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   StructuredElement,
   StructuredGraphData,
@@ -10,7 +10,7 @@ import {
   displayLabel,
   elementRole,
   fieldChanges,
-  layerGraph,
+  layoutGraph,
   relationshipRole,
   ROLE_LABEL,
   toMermaid,
@@ -67,6 +67,269 @@ const RELATIONSHIP_PAINT: Record<ChangeRole, string> = {
 
 const ROLES: ChangeRole[] = ["added", "changed", "context", "unchanged"];
 
+/**
+ * Colour by type, emphasis by role.
+ *
+ * The contract carries a producer's own type for a thing — "block", "sensor",
+ * "power", "thermal" — and never a colour. Presentation in the document would be
+ * meaningless to whatever applies the proposal, which has its own styling, and it
+ * would fight the one signal this view exists to carry: what is changing. So the
+ * type picks the fill and the role can always override the outline.
+ *
+ * The assignment is a hash rather than a registry, so the same type draws the same
+ * colour in every session and every diagram without anyone maintaining a mapping.
+ * Nothing downstream depends on which colour a type gets, only that it is stable.
+ */
+const KIND_TINTS: { fill: string; stroke: string }[] = [
+  { fill: "#eff6ff", stroke: "#2563eb" },
+  { fill: "#f5f3ff", stroke: "#7c3aed" },
+  { fill: "#ecfeff", stroke: "#0891b2" },
+  { fill: "#fff1f2", stroke: "#e11d48" },
+  { fill: "#f7fee7", stroke: "#65a30d" },
+  { fill: "#fff7ed", stroke: "#ea580c" },
+  { fill: "#f0fdfa", stroke: "#0d9488" },
+  { fill: "#fdf4ff", stroke: "#c026d3" },
+  { fill: "#fefce8", stroke: "#ca8a04" },
+  { fill: "#f8fafc", stroke: "#475569" },
+];
+
+type Tint = { fill: string; stroke: string };
+
+/** FNV-1a, for a preferred slot that depends only on the name. */
+function hashOf(kind: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < kind.length; index++) {
+    hash ^= kind.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+/**
+ * A colour per type, distinct within the diagram.
+ *
+ * The hash alone was wrong, and wrong in a way that only showed on real data: five
+ * types drew in four colours, because five names into ten slots collide about seven
+ * times in ten. Two types rendered identically while the key beside them insisted
+ * they differed — worse than no colour at all, because it reads as information.
+ *
+ * So the hash picks a preferred slot and a taken slot probes forward. A name keeps
+ * the same colour across documents when nothing contends for it, and two types in
+ * one diagram are never the same colour until the palette is genuinely exhausted.
+ * Distinctness wins the trade: stability across documents is a convenience, two
+ * things that look alike and are not is a misreading.
+ */
+export function assignTints(kinds: string[]): Map<string, Tint> {
+  const assigned = new Map<string, Tint>();
+  const taken = new Set<number>();
+  for (const kind of kinds) {
+    let slot = hashOf(kind) % KIND_TINTS.length;
+    for (let probe = 0; probe < KIND_TINTS.length && taken.has(slot); probe++) {
+      slot = (slot + 1) % KIND_TINTS.length;
+    }
+    taken.add(slot);
+    assigned.set(kind, KIND_TINTS[slot]);
+  }
+  return assigned;
+}
+
+/** The types present, in the order they first appear, so the legend is stable too. */
+export function kindsPresent(things: { kind?: string }[]): string[] {
+  const seen: string[] = [];
+  for (const thing of things) {
+    if (thing.kind !== undefined && thing.kind !== "" && !seen.includes(thing.kind)) seen.push(thing.kind);
+  }
+  return seen;
+}
+
+/** Which vocabulary a type name belongs to. */
+export type FilterScope = "element" | "relationship";
+
+/**
+ * A type name qualified by what it is a type of.
+ *
+ * The two vocabularies are independent and may share a word, so they cannot share a
+ * namespace: with a bare name, a graph whose blocks and whose connections both used
+ * "power" lost both when the reader hid either.
+ */
+export function filterKey(of: FilterScope, kind: string): string {
+  return `${of}:${kind}`;
+}
+
+const LEGEND_ROW = 17;
+const LEGEND_GAP = 18;
+const LEGEND_TITLE = 58;
+
+/** One line of the key: what the swatches mean, and the swatches. */
+export type LegendEntry = {
+  label: string;
+  fill: string;
+  stroke: string;
+  dashed?: boolean;
+  /** Set when this entry names a type the reader can show and hide. */
+  toggles?: boolean;
+  /** The qualified name this entry switches — see `filterKey`. */
+  key?: string;
+  hidden?: boolean;
+};
+
+export type LegendGroup = {
+  title: string;
+  sample: "box" | "line";
+  entries: LegendEntry[];
+};
+
+function entryWidth(label: string): number {
+  return 16 + 5 + label.length * 5.6 + LEGEND_GAP;
+}
+
+/** Rows a group needs, so the canvas can make room before anything is drawn. */
+function groupRows(group: LegendGroup, width: number): number {
+  let rows = 1;
+  let cursor = 0;
+  for (const entry of group.entries) {
+    const needed = entryWidth(entry.label);
+    if (cursor > 0 && LEGEND_TITLE + cursor + needed > width - 20) {
+      rows += 1;
+      cursor = 0;
+    }
+    cursor += needed;
+  }
+  return rows;
+}
+
+/** How tall the whole key will be. */
+function legendHeight(groups: LegendGroup[], width: number): number {
+  const populated = groups.filter((group) => group.entries.length > 0);
+  if (populated.length === 0) return 0;
+  return populated.reduce((rows, group) => rows + groupRows(group, width), 0) * LEGEND_ROW + 12;
+}
+
+/**
+ * The key to the picture, inside the picture.
+ *
+ * Drawn in the SVG rather than beside it in HTML, because the diagram is meant to
+ * leave this application — a legend that stays behind on the page turns the
+ * exported figure into a set of unexplained colours.
+ *
+ * Elements and relationships get a line each, and a relationship's swatch is a line
+ * rather than a box: run together, a reader had to work out which of two vocabularies
+ * a name belonged to, which is the one thing a key must not make them do.
+ */
+function Legend({
+  groups,
+  x,
+  y,
+  width,
+  onToggle,
+}: {
+  groups: LegendGroup[];
+  x: number;
+  y: number;
+  width: number;
+  onToggle?: (kind: string) => void;
+}) {
+  const populated = groups.filter((group) => group.entries.length > 0);
+  if (populated.length === 0) return null;
+
+  let row = 0;
+
+  return (
+    <g data-testid="diagram-legend">
+      {populated.map((group) => {
+        const startedAt = row;
+        let cursor = 0;
+
+        const drawn = group.entries.map((entry) => {
+          const needed = entryWidth(entry.label);
+          if (cursor > 0 && LEGEND_TITLE + cursor + needed > width - 20) {
+            row += 1;
+            cursor = 0;
+          }
+          const at = x + LEGEND_TITLE + cursor;
+          const top = y + row * LEGEND_ROW;
+          cursor += needed;
+
+          return (
+            <g
+              key={entry.label}
+              data-legend-entry={entry.key ?? entry.label}
+              data-hidden={entry.hidden === true ? "true" : undefined}
+              onClick={
+                entry.toggles === true && entry.key !== undefined && onToggle !== undefined
+                  ? () => onToggle(entry.key!)
+                  : undefined
+              }
+              style={entry.toggles === true ? { cursor: "pointer" } : undefined}
+              opacity={entry.hidden === true ? 0.45 : 1}
+            >
+              {/* A generous hit area, since the swatch itself is ten pixels tall */}
+              {entry.toggles === true && (
+                <rect x={at - 3} y={top - 3} width={entryWidth(entry.label) - 8} height={16} fill="transparent" />
+              )}
+              {group.sample === "line" ? (
+                <line
+                  x1={at}
+                  y1={top + 5}
+                  x2={at + 16}
+                  y2={top + 5}
+                  stroke={entry.stroke}
+                  strokeWidth={1.6}
+                  strokeDasharray={entry.dashed === true ? "3 2" : undefined}
+                />
+              ) : (
+                <rect
+                  x={at}
+                  y={top}
+                  width={16}
+                  height={10}
+                  rx={2}
+                  fill={entry.fill}
+                  stroke={entry.stroke}
+                  strokeWidth={1.2}
+                  strokeDasharray={entry.dashed === true ? "3 2" : undefined}
+                />
+              )}
+              <text
+                x={at + 21}
+                y={top + 9}
+                fontSize={9}
+                fill={MUTED}
+                fontFamily="system-ui, sans-serif"
+                textDecoration={entry.hidden === true ? "line-through" : undefined}
+              >
+                {entry.label}
+              </text>
+            </g>
+          );
+        });
+
+        const title = (
+          <text
+            key={`${group.title}-title`}
+            data-testid="legend-group"
+            x={x}
+            y={y + startedAt * LEGEND_ROW + 9}
+            fontSize={9}
+            fontWeight={600}
+            fill={MUTED}
+            fontFamily="system-ui, sans-serif"
+          >
+            {group.title}
+          </text>
+        );
+        row += 1;
+        return (
+          <g key={group.title}>
+            {title}
+            {drawn}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
 /* ── Text measurement and wrapping ──────────────────────────────────────────── */
 
 const CHAR_WIDTH = 6.6;
@@ -76,7 +339,9 @@ const BOX_VERTICAL_PADDING = 14;
 const MAX_LINES = 3;
 
 function boxWidth(labels: string[], min: number, max: number): number {
-  const longest = labels.reduce((widest, label) => Math.max(widest, label.length), 0);
+  const longest = labels
+    .flatMap((label) => label.split(/\r?\n/))
+    .reduce((widest, line) => Math.max(widest, line.length), 0);
   return Math.min(Math.max(longest * CHAR_WIDTH + BOX_PADDING, min), max);
 }
 
@@ -92,6 +357,14 @@ function boxWidth(labels: string[], min: number, max: number): number {
 export function wrapLabel(label: string, width: number): string[] {
   const perLine = Math.max(Math.floor((width - BOX_PADDING) / CHAR_WIDTH), 4);
   const lines: string[] = [];
+  // An explicit newline is a break the producer asked for — a name and the thing
+  // that qualifies it. Reflowing the two into one paragraph loses what they meant.
+  const paragraphs = label.split(/\r?\n/);
+  if (paragraphs.length > 1) {
+    return paragraphs
+      .flatMap((paragraph) => wrapLabel(paragraph, width))
+      .slice(0, MAX_LINES);
+  }
   let current = "";
   for (const word of label.split(/\s+/)) {
     const candidate = current === "" ? word : `${current} ${word}`;
@@ -144,6 +417,7 @@ function Box({
   height,
   role,
   label,
+  tint,
   changes,
   title,
   anchor = "start",
@@ -154,11 +428,20 @@ function Box({
   height: number;
   role: ChangeRole;
   label: string;
+  tint?: Tint;
   changes: ReturnType<typeof fieldChanges>;
   title: string;
   anchor?: "start" | "middle";
 }) {
-  const paint = ROLE_PAINT[role];
+  const role_paint = ROLE_PAINT[role];
+  // Type picks the fill; role keeps the outline, and thickens it when something is
+  // actually changing so the approval signal survives the colour.
+  const paint = {
+    fill: tint?.fill ?? role_paint.fill,
+    stroke: role === "unchanged" ? (tint?.stroke ?? role_paint.stroke) : role_paint.stroke,
+    text: role_paint.text === MUTED ? MUTED : INK,
+  };
+  const outline = role === "added" || role === "changed" ? 2 : 1.2;
   const lines = wrapLabel(label, width);
   const totalLines = lines.length + changes.length;
   const firstBaseline = y + height / 2 - ((totalLines - 1) * LINE_HEIGHT) / 2 + 4;
@@ -167,7 +450,17 @@ function Box({
   return (
     <g data-element-role={role}>
       <title>{title}</title>
-      <rect x={x} y={y} width={width} height={height} rx={5} fill={paint.fill} stroke={paint.stroke} strokeWidth={1.2} />
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        rx={5}
+        fill={paint.fill}
+        stroke={paint.stroke}
+        strokeWidth={outline}
+        strokeDasharray={role === "context" ? "4 3" : undefined}
+      />
       <text x={textX} textAnchor={anchor} fontSize={11} fill={paint.text} fontFamily="system-ui, sans-serif">
         {lines.map((line, index) => (
           <tspan key={index} x={textX} y={firstBaseline + index * LINE_HEIGHT}>
@@ -192,13 +485,25 @@ function Box({
 }
 
 /** Arrow heads, one per role, since a marker cannot inherit a stroke colour. */
-function ArrowMarkers({ prefix }: { prefix: string }) {
+/** A marker id for a colour, since a hex is not a valid id on its own. */
+export function markerId(prefix: string, paint: string): string {
+  return `${prefix}-${paint.replace("#", "")}`;
+}
+
+/**
+ * One arrowhead per colour actually drawn.
+ *
+ * Keyed by role, a type-coloured relationship got a role-coloured tip — a blue line
+ * ending in a grey arrow. The colours in play are known before anything is drawn,
+ * so they key themselves.
+ */
+function ArrowMarkers({ prefix, paints }: { prefix: string; paints: string[] }) {
   return (
     <defs>
-      {ROLES.map((role) => (
+      {paints.map((paint) => (
         <marker
-          key={role}
-          id={`${prefix}-${role}`}
+          key={paint}
+          id={markerId(prefix, paint)}
           viewBox="0 0 10 10"
           refX="9"
           refY="5"
@@ -206,7 +511,7 @@ function ArrowMarkers({ prefix }: { prefix: string }) {
           markerHeight="6.5"
           orient="auto"
         >
-          <path d="M0,0 L10,5 L0,10 z" fill={RELATIONSHIP_PAINT[role]} />
+          <path d="M0,0 L10,5 L0,10 z" fill={paint} />
         </marker>
       ))}
     </defs>
@@ -214,6 +519,9 @@ function ArrowMarkers({ prefix }: { prefix: string }) {
 }
 
 /* ── Graph ──────────────────────────────────────────────────────────────────── */
+
+/** How far the reader has moved a box from where the layout put it. */
+export type Nudge = { dx: number; dy: number };
 
 /**
  * Where an edge should touch a box: from centre to centre, stopping at the border
@@ -234,6 +542,76 @@ function anchorPoint(
   return { x: from.cx + dx * scale, y: from.cy + dy * scale };
 }
 
+type Box = { x: number; y: number; cx: number; cy: number; w: number; h: number };
+
+/**
+ * The shape a relationship is drawn as, and where its label goes.
+ *
+ * Every relationship gets its own `path`, for three reasons the straight `line` it
+ * replaced could not meet. A relationship from something to itself has no direction
+ * to draw along, and came out as a line of zero length — declared in the document,
+ * invisible in the picture. Two relationships between the same pair were drawn on
+ * exactly the same pixels, so a diagram showed one where the document had two. And
+ * the layout engine works out routes that go around the boxes in between, which a
+ * straight line between centres throws away and draws over.
+ */
+function edgePath(
+  from: Box,
+  to: Box,
+  route: { x: number; y: number }[] | undefined,
+  /** Which of the relationships between this same pair, in declaration order. */
+  rank: number,
+): { d: string; labelAt: { x: number; y: number }; span: number } {
+  if (from === to) {
+    // A loop, drawn by hand: out of the top, around, and back into the right side.
+    // Nested by rank so several loops on one element stay countable.
+    const reach = 26 + rank * 12;
+    const startX = from.cx - from.w / 4;
+    const endX = from.cx + from.w / 4;
+    const top = from.y;
+    return {
+      d: `M ${startX} ${top} C ${startX} ${top - reach}, ${endX} ${top - reach}, ${endX} ${top}`,
+      labelAt: { x: from.cx, y: top - reach * 0.75 },
+      span: reach * 2,
+    };
+  }
+
+  const start = anchorPoint(from, to);
+  const finish = anchorPoint(to, from);
+  const span = Math.hypot(finish.x - start.x, finish.y - start.y);
+
+  // Middle points from the layout engine, if it routed this one. The ends are
+  // recomputed against the boxes so the arrow still lands on a border.
+  const waypoints = (route ?? []).slice(1, -1);
+  if (waypoints.length > 0 && rank === 0) {
+    const middle = waypoints[Math.floor((waypoints.length - 1) / 2)];
+    return {
+      d: `M ${start.x} ${start.y} ${waypoints.map((point) => `L ${point.x} ${point.y}`).join(" ")} L ${finish.x} ${finish.y}`,
+      labelAt: middle,
+      span,
+    };
+  }
+
+  // No route, or one of several between the same pair: bow the line out by a fixed
+  // amount per rank, alternating sides so they fan rather than stack.
+  const bow = rank === 0 ? 0 : (Math.ceil(rank / 2) * 22 * (rank % 2 === 1 ? 1 : -1));
+  const midX = (start.x + finish.x) / 2;
+  const midY = (start.y + finish.y) / 2;
+  if (bow === 0) {
+    return { d: `M ${start.x} ${start.y} L ${finish.x} ${finish.y}`, labelAt: { x: midX, y: midY }, span };
+  }
+  const nx = span === 0 ? 0 : -(finish.y - start.y) / span;
+  const ny = span === 0 ? 0 : (finish.x - start.x) / span;
+  const controlX = midX + nx * bow * 2;
+  const controlY = midY + ny * bow * 2;
+  return {
+    d: `M ${start.x} ${start.y} Q ${controlX} ${controlY} ${finish.x} ${finish.y}`,
+    // On a quadratic the curve sits halfway between the midpoint and the control
+    labelAt: { x: midX + nx * bow, y: midY + ny * bow },
+    span,
+  };
+}
+
 function edgeSummary(data: StructuredGraphData, edge: StructuredGraphData["edges"][number], role: ChangeRole): string {
   const name = (id: string) => {
     const node = data.nodes.find((candidate) => candidate.id === id);
@@ -250,132 +628,428 @@ function edgeSummary(data: StructuredGraphData, edge: StructuredGraphData["edges
     .join(" ");
 }
 
-function GraphView({ data, isProposal }: { data: StructuredGraphData; isProposal: boolean }) {
-  const placed = useMemo(() => layerGraph(data), [data]);
-  const at = useMemo(() => new Map(placed.map((entry) => [entry.id, entry])), [placed]);
-  const nodeWidth = useMemo(() => boxWidth(data.nodes.map(displayLabel), 120, 240), [data.nodes]);
-  const nodeHeight = useMemo(
-    () =>
-      data.nodes.reduce(
-        (tallest, node) =>
-          Math.max(tallest, boxHeight(wrapLabel(displayLabel(node), nodeWidth).length, fieldChanges(node).length)),
-        boxHeight(1, 0),
-      ),
-    [data.nodes, nodeWidth],
+function GraphView({
+  data,
+  isProposal,
+  nudges,
+  setNudges,
+  hidden,
+  setHidden,
+}: {
+  data: StructuredGraphData;
+  isProposal: boolean;
+  /**
+   * Positions the reader has adjusted, as offsets from the computed layout. Held as
+   * offsets rather than absolute points so a nudged box still follows if the document
+   * changes underneath it, and held by the parent rather than here because the small
+   * view and the enlarged one are two instances of this component: adjusting a
+   * diagram at full size and finding the change gone on closing the modal is the kind
+   * of loss that makes the feature not worth using.
+   */
+  nudges: ReadonlyMap<string, Nudge>;
+  setNudges: (nudges: ReadonlyMap<string, Nudge>) => void;
+  /**
+   * Types the reader has switched off, qualified by what they are a type *of*.
+   *
+   * Elements and relationships have separate vocabularies that may well share a
+   * word — "power" is a plausible kind of block and a plausible kind of connection.
+   * Held in one namespace, hiding one hid the other.
+   */
+  hidden: ReadonlySet<string>;
+  setHidden: (hidden: ReadonlySet<string>) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dragging, setDragging] = useState<string | undefined>(undefined);
+  const [panning, setPanning] = useState(false);
+  /**
+   * Teardown for a gesture still in flight.
+   *
+   * A drag that outlives its component keeps listeners on a detached node and leaves
+   * the pointer captured. It also made the test suite exit non-zero while every
+   * assertion passed — the failure was an unhandled rejection, which a summary line
+   * saying "63 passed" does not mention.
+   */
+  const endGesture = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => endGesture.current?.(), []);
+
+  // Each box is sized to its own contents. Handing dagre a real size per node is
+  // what stops one long label from widening every box in the diagram.
+  const sizeOf = useCallback(
+    (node: StructuredElement) => {
+      const width = boxWidth([displayLabel(node)], 120, 260);
+      return { width, height: boxHeight(wrapLabel(displayLabel(node), width).length, fieldChanges(node).length) };
+    },
+    [],
   );
-  const columnWidth = nodeWidth + 60;
-  const rowHeight = nodeHeight + 26;
-  const width = (Math.max(...placed.map((entry) => entry.depth), 0) + 1) * columnWidth;
-  const height = (Math.max(...placed.map((entry) => entry.order), 0) + 1) * rowHeight + 8;
+
+  /**
+   * What the reader has left showing.
+   *
+   * A relationship goes when its own type goes, and also when either end of it goes:
+   * a line to nowhere is worse than no line. Everything shows until the reader hides
+   * something, so the default is still the whole document.
+   */
+  const shown = useMemo(() => {
+    const nodes = data.nodes.filter((node) => node.kind === undefined || !hidden.has(filterKey("element", node.kind)));
+    const present = new Set(nodes.map((node) => node.id));
+    const edges = data.edges.filter(
+      (edge) =>
+        (edge.kind === undefined || !hidden.has(filterKey("relationship", edge.kind))) &&
+        present.has(edge.from) &&
+        present.has(edge.to),
+    );
+    return { nodes, edges };
+  }, [data, hidden]);
+
+  const layout = useMemo(() => layoutGraph(shown, sizeOf), [shown, sizeOf]);
+  const at = useMemo(() => new Map(layout.nodes.map((node) => [node.id, node])), [layout]);
 
   const boxFor = (id: string) => {
-    const position = at.get(id);
-    if (position === undefined) return undefined;
-    const x = position.depth * columnWidth + 10;
-    const y = position.order * rowHeight + 8;
-    return { x, y, cx: x + nodeWidth / 2, cy: y + nodeHeight / 2, w: nodeWidth, h: nodeHeight };
+    const placed = at.get(id);
+    if (placed === undefined) return undefined;
+    const nudge = nudges.get(id);
+    const x = placed.x + (nudge?.dx ?? 0);
+    const y = placed.y + (nudge?.dy ?? 0);
+    return { x, y, cx: x + placed.width / 2, cy: y + placed.height / 2, w: placed.width, h: placed.height };
+  };
+
+  // A nudged box can leave the computed extent in any direction, so the canvas
+  // follows it in any direction. Bounded below at zero only, the first drag upwards
+  // or leftwards clipped the box against the edge instead of making room for it.
+  const drawn = layout.nodes.map((node) => boxFor(node.id)!);
+  const left = Math.min(0, ...drawn.map((box) => box.x - 12));
+  const top = Math.min(0, ...drawn.map((box) => box.y - 12));
+  const right = Math.max(layout.width, ...drawn.map((box) => box.x + box.w + 12));
+  const bottom = Math.max(layout.height, ...drawn.map((box) => box.y + box.h + 12));
+  const width = right - left;
+  const diagramHeight = bottom - top;
+
+  // One colour table for the whole diagram, so an element type and a relationship
+  // type never contend for the same slot and end up drawn alike.
+  const tints = useMemo(
+    () => assignTints([...kindsPresent(data.nodes), ...kindsPresent(data.edges)]),
+    [data],
+  );
+
+  // The key explains the two channels the picture uses, and only the parts of them
+  // this document exercises: no types declared, no type key; not a proposal, no roles.
+  const legend = useMemo((): LegendGroup[] => {
+    const swatch = (of: FilterScope) => (kind: string) => {
+      const tint = tints.get(kind)!;
+      return {
+        label: kind,
+        fill: tint.fill,
+        stroke: tint.stroke,
+        toggles: true,
+        key: filterKey(of, kind),
+        hidden: hidden.has(filterKey(of, kind)),
+      };
+    };
+    const groups: LegendGroup[] = [
+      { title: "elements", sample: "box", entries: kindsPresent(data.nodes).map(swatch("element")) },
+      { title: "relationships", sample: "line", entries: kindsPresent(data.edges).map(swatch("relationship")) },
+    ];
+
+    if (isProposal) {
+      const used = new Set<ChangeRole>([
+        ...shown.nodes.map((node) => elementRole(node, true)),
+        ...shown.edges.map((edge) => relationshipRole(edge, true)),
+      ]);
+      groups.push({
+        title: "changes",
+        sample: "box",
+        entries: ROLES.filter((role) => role !== "unchanged" && used.has(role)).map((role) => ({
+          label: ROLE_LABEL[role],
+          fill: PAPER,
+          stroke: ROLE_PAINT[role].stroke,
+          dashed: role === "context",
+        })),
+      });
+    }
+    return groups;
+  }, [data, shown, isProposal, tints, hidden]);
+
+  /**
+   * Which relationships share a pair of endpoints, and in what order.
+   *
+   * Rank decides how far a relationship bows away from the straight run between two
+   * boxes. Without it two relationships between the same pair were drawn on exactly
+   * the same pixels; a reader counting connections counted one where there were two.
+   * Direction is part of the key, so A→B and B→A each start at rank zero and stay on
+   * the straight run they are entitled to.
+   */
+  const rankOf = useMemo(() => {
+    const rank = new Map<(typeof data.edges)[number], number>();
+    const seen = new Map<string, number>();
+    for (const edge of shown.edges) {
+      const pair = `${edge.from}\u0000${edge.to}`;
+      const next = seen.get(pair) ?? 0;
+      rank.set(edge, next);
+      seen.set(pair, next + 1);
+    }
+    return rank;
+  }, [shown]);
+
+  /** Layout routes, matched back to the relationships they were computed for. */
+  const routeOf = useMemo(() => {
+    const byIndex = new Map(layout.edges.map((placed) => [placed.index, placed.points]));
+    const routes = new Map<(typeof data.edges)[number], { x: number; y: number }[]>();
+    shown.edges.forEach((edge, index) => {
+      const points = byIndex.get(index);
+      if (points !== undefined) routes.set(edge, points);
+    });
+    return routes;
+  }, [layout, shown]);
+
+  // Worked out once: the lines need it, and so do the arrowheads.
+  const edgePaint = (edge: (typeof data.edges)[number]) => {
+    const role = relationshipRole(edge, isProposal);
+    // Same rule as the boxes: type carries the colour, role takes the line back the
+    // moment it has something to say about it.
+    if (role !== "unchanged") return RELATIONSHIP_PAINT[role];
+    return (edge.kind === undefined ? undefined : tints.get(edge.kind)?.stroke) ?? RELATIONSHIP_PAINT[role];
+  };
+  const arrowPaints = [...new Set(shown.edges.map(edgePaint))];
+
+  const legendTop = bottom + 4;
+  const height = diagramHeight + legendHeight(legend, width);
+
+  /**
+   * Drag to adjust.
+   *
+   * No automatic layout satisfies every real model, so the reader can move a box
+   * before approving what it shows. Deltas are measured in client space and divided
+   * by the on-screen scale, so dragging tracks the pointer whether the diagram is
+   * shown at natural size or enlarged.
+   *
+   * These positions are presentation only: they are not part of the document and
+   * are not sent back. Re-opening the result shows the computed layout again.
+   */
+  /**
+   * Drag the ground to pan.
+   *
+   * A wide diagram lives in a scrolling box, and reaching for a scrollbar to look at
+   * the right-hand half of a picture you are in the middle of rearranging breaks the
+   * gesture you were already making. Panning moves the box rather than the drawing,
+   * so it composes with a node drag instead of competing with it, and it leaves the
+   * exported figure untouched.
+   */
+  const startPan = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0) return;
+    // A press that landed on a box is that box's to handle
+    if ((event.target as Element).closest('[data-draggable="node"]') !== null) return;
+
+    let scroller: HTMLElement | null = svgRef.current?.parentElement ?? null;
+    while (
+      scroller !== null &&
+      scroller.scrollWidth <= scroller.clientWidth &&
+      scroller.scrollHeight <= scroller.clientHeight
+    ) {
+      scroller = scroller.parentElement;
+    }
+    if (scroller === null) return;
+
+    event.preventDefault();
+    const originX = event.clientX;
+    const originY = event.clientY;
+    const fromLeft = scroller.scrollLeft;
+    const fromTop = scroller.scrollTop;
+    const target = event.currentTarget;
+    target.setPointerCapture?.(event.pointerId);
+    setPanning(true);
+
+    const move = (moved: PointerEvent) => {
+      scroller.scrollLeft = fromLeft - (moved.clientX - originX);
+      scroller.scrollTop = fromTop - (moved.clientY - originY);
+    };
+    const done = () => {
+      endGesture.current = undefined;
+      target.releasePointerCapture?.(event.pointerId);
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", done);
+      target.removeEventListener("pointercancel", done);
+      setPanning(false);
+    };
+    endGesture.current?.();
+    endGesture.current = done;
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", done);
+    target.addEventListener("pointercancel", done);
+  };
+
+  const startDrag = (id: string) => (event: React.PointerEvent<SVGGElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const svg = svgRef.current;
+    const scale = svg === null ? 1 : (svg.getBoundingClientRect().width || width) / width;
+    const originX = event.clientX;
+    const originY = event.clientY;
+    const from = nudges.get(id) ?? { dx: 0, dy: 0 };
+    const target = event.currentTarget;
+    // Guarded: jsdom has no pointer capture at all, and a real browser can refuse it
+    target.setPointerCapture?.(event.pointerId);
+    setDragging(id);
+
+    const move = (moved: PointerEvent) => {
+      const next = new Map(nudges);
+      next.set(id, {
+        dx: from.dx + (moved.clientX - originX) / scale,
+        dy: from.dy + (moved.clientY - originY) / scale,
+      });
+      setNudges(next);
+    };
+    const done = () => {
+      endGesture.current = undefined;
+      target.releasePointerCapture?.(event.pointerId);
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", done);
+      target.removeEventListener("pointercancel", done);
+      setDragging(undefined);
+    };
+    endGesture.current?.();
+    endGesture.current = done;
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", done);
+    target.addEventListener("pointercancel", done);
   };
 
   return (
-    <svg
-      role="img"
-      aria-label={`Graph of ${data.nodes.length} elements and ${data.edges.length} relationships`}
-      viewBox={`0 0 ${width} ${height}`}
-      width={width}
-      height={height}
-      style={{ maxWidth: "100%", height: "auto" }}
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <rect x={0} y={0} width={width} height={height} fill={PAPER} />
-      <ArrowMarkers prefix="se-arrow" />
+    <>
+      {nudges.size > 0 && (
+        <button
+          type="button"
+          className="mb-1 text-xs underline text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
+          onClick={() => setNudges(new Map())}
+        >
+          reset layout
+        </button>
+      )}
+      <svg
+        ref={svgRef}
+        role="img"
+        aria-label={
+          shown.nodes.length === data.nodes.length
+            ? `Graph of ${data.nodes.length} elements and ${data.edges.length} relationships`
+            : `Graph of ${data.nodes.length} elements and ${data.edges.length} relationships, ` +
+              `filtered to ${shown.nodes.length} elements and ${shown.edges.length} relationships`
+        }
+        viewBox={`${left} ${top} ${width} ${height}`}
+        width={width}
+        height={height}
+        xmlns="http://www.w3.org/2000/svg"
+        onPointerDown={startPan}
+        style={{ cursor: panning ? "grabbing" : "grab", touchAction: "none" }}
+      >
+        <rect x={left} y={top} width={width} height={height} fill={PAPER} />
+        <ArrowMarkers prefix="se-arrow" paints={arrowPaints} />
 
-      {data.edges.map((edge, index) => {
-        const from = boxFor(edge.from);
-        const to = boxFor(edge.to);
-        if (from === undefined || to === undefined) return null;
-        const role = relationshipRole(edge, isProposal);
-        const paint = RELATIONSHIP_PAINT[role];
-        const start = anchorPoint(from, to);
-        const finish = anchorPoint(to, from);
-        const changes = fieldChanges(edge);
-        const described = edge.label ?? edge.kind;
-        const span = Math.hypot(finish.x - start.x, finish.y - start.y);
-        // A label wider than the gap it sits in ends up printed under the box it
-        // points at, which reads as a clipped word rather than a missing one. Past
-        // that point the hover carries it.
-        const roomFor = (text: string) => text.length * 5.2 + 8 <= span;
-        const alongEdge = 0.34 + (index % 3) * 0.16;
-        const labelX = start.x + (finish.x - start.x) * alongEdge;
-        const labelY = start.y + (finish.y - start.y) * alongEdge;
+        {shown.edges.map((edge, index) => {
+          const from = boxFor(edge.from);
+          const to = boxFor(edge.to);
+          if (from === undefined || to === undefined) return null;
+          const role = relationshipRole(edge, isProposal);
+          const paint = edgePaint(edge);
+          const changes = fieldChanges(edge);
+          const described = edge.label ?? edge.kind;
+          // A layout route stops matching once the reader has moved either end of it
+          const moved = nudges.has(edge.from) || nudges.has(edge.to);
+          const shape = edgePath(
+            from,
+            edge.from === edge.to ? from : to,
+            moved ? undefined : routeOf.get(edge),
+            rankOf.get(edge) ?? 0,
+          );
+          // A label wider than the run it sits on ends up printed under the box it
+          // points at, which reads as a clipped word rather than a missing one. Past
+          // that point the hover carries it.
+          const roomFor = (text: string) => text.length * 5.2 + 8 <= shape.span;
 
-        return (
-          <g key={`edge-${index}`} data-relationship-role={role}>
-            <title>{edgeSummary(data, edge, role)}</title>
-            <line
-              x1={start.x}
-              y1={start.y}
-              x2={finish.x}
-              y2={finish.y}
-              stroke={paint}
-              strokeWidth={role === "context" ? 1 : 1.6}
-              strokeDasharray={role === "context" ? "4 3" : undefined}
-              markerEnd={`url(#se-arrow-${role})`}
-            />
-            {described !== undefined && roomFor(described) && (
-              <text
-                x={labelX}
-                y={labelY - 5}
-                textAnchor="middle"
-                fontSize={9}
-                fill={paint}
-                fontFamily="system-ui, sans-serif"
-                stroke={PAPER}
-                strokeWidth={3}
-                paintOrder="stroke"
-              >
-                {described}
-              </text>
-            )}
-            {changes.length > 0 && roomFor(changes.map(changeText).join(", ")) && (
-              <text
-                data-testid="relationship-change"
-                x={labelX}
-                y={labelY + 10}
-                textAnchor="middle"
-                fontSize={9}
-                fontWeight={600}
-                fill={paint}
-                fontFamily="system-ui, sans-serif"
-                stroke={PAPER}
-                strokeWidth={3}
-                paintOrder="stroke"
-              >
-                {changes.map(changeText).join(", ")}
-              </text>
-            )}
-          </g>
-        );
-      })}
+          return (
+            <g key={`edge-${index}`} data-relationship-role={role} data-relationship-shape={edge.from === edge.to ? "loop" : "open"}>
+              <title>{edgeSummary(data, edge, role)}</title>
+              <path
+                d={shape.d}
+                fill="none"
+                stroke={paint}
+                strokeWidth={role === "context" ? 1 : 1.6}
+                strokeDasharray={role === "context" ? "4 3" : undefined}
+                markerEnd={`url(#${markerId("se-arrow", paint)})`}
+              />
+              {described !== undefined && roomFor(described) && (
+                <text
+                  x={shape.labelAt.x}
+                  y={shape.labelAt.y - 5}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fill={paint}
+                  fontFamily="system-ui, sans-serif"
+                  stroke={PAPER}
+                  strokeWidth={3}
+                  paintOrder="stroke"
+                >
+                  {described}
+                </text>
+              )}
+              {changes.length > 0 && roomFor(changes.map(changeText).join(", ")) && (
+                <text
+                  data-testid="relationship-change"
+                  x={shape.labelAt.x}
+                  y={shape.labelAt.y + 10}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fontWeight={600}
+                  fill={paint}
+                  fontFamily="system-ui, sans-serif"
+                  stroke={PAPER}
+                  strokeWidth={3}
+                  paintOrder="stroke"
+                >
+                  {changes.map(changeText).join(", ")}
+                </text>
+              )}
+            </g>
+          );
+        })}
 
-      {data.nodes.map((node) => {
-        const box = boxFor(node.id);
-        if (box === undefined) return null;
-        const role = elementRole(node, isProposal);
-        return (
-          <Box
-            key={node.id}
-            x={box.x}
-            y={box.y}
-            width={nodeWidth}
-            height={nodeHeight}
-            role={role}
-            label={displayLabel(node)}
-            changes={fieldChanges(node)}
-            title={elementSummary(node, role)}
-          />
-        );
-      })}
-    </svg>
+        {shown.nodes.map((node) => {
+          const box = boxFor(node.id);
+          if (box === undefined) return null;
+          const role = elementRole(node, isProposal);
+          return (
+            <g
+              key={node.id}
+              data-draggable="node"
+              onPointerDown={startDrag(node.id)}
+              style={{ cursor: dragging === node.id ? "grabbing" : "grab" }}
+            >
+              <Box
+                x={box.x}
+                y={box.y}
+                width={box.w}
+                height={box.h}
+                role={role}
+                label={displayLabel(node)}
+                tint={node.kind === undefined ? undefined : tints.get(node.kind)}
+                changes={fieldChanges(node)}
+                title={elementSummary(node, role)}
+              />
+            </g>
+          );
+        })}
+
+        <Legend
+          groups={legend}
+          x={left + 12}
+          y={legendTop}
+          width={width}
+          onToggle={(key) => {
+            const next = new Set(hidden);
+            if (!next.delete(key)) next.add(key);
+            setHidden(next);
+          }}
+        />
+      </svg>
+    </>
   );
 }
 
@@ -421,7 +1095,43 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
   );
   const x = (id: string) => (columnOf.get(id) ?? 0) * lifelineX + lifelineX / 2;
   const width = Math.max(data.participants.length * lifelineX, 240);
-  const height = headerHeight + (data.messages.length + 1) * MESSAGE_GAP;
+  const diagramHeight = headerHeight + (data.messages.length + 1) * MESSAGE_GAP;
+
+  // Participants are elements and carry a type like any other; a message does not,
+  // because its label is what it is.
+  const tints = useMemo(() => assignTints(kindsPresent(data.participants)), [data.participants]);
+  const legend = useMemo((): LegendGroup[] => {
+    const groups: LegendGroup[] = [
+      {
+        title: "participants",
+        sample: "box",
+        entries: kindsPresent(data.participants).map((kind) => {
+          const tint = tints.get(kind)!;
+          return { label: kind, fill: tint.fill, stroke: tint.stroke, key: filterKey("element", kind) };
+        }),
+      },
+    ];
+    if (isProposal) {
+      const used = new Set<ChangeRole>([
+        ...data.participants.map((participant) => elementRole(participant, true)),
+        ...data.messages.map((message) => relationshipRole(message, true)),
+      ]);
+      groups.push({
+        title: "changes",
+        sample: "box",
+        entries: ROLES.filter((role) => role !== "unchanged" && used.has(role)).map((role) => ({
+          label: ROLE_LABEL[role],
+          fill: PAPER,
+          stroke: ROLE_PAINT[role].stroke,
+          dashed: role === "context",
+        })),
+      });
+    }
+    return groups;
+  }, [data, isProposal, tints]);
+
+  const legendTop = diagramHeight + 4;
+  const height = diagramHeight + legendHeight(legend, width);
 
   return (
     <svg
@@ -430,11 +1140,10 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}
-      style={{ maxWidth: "100%", height: "auto" }}
       xmlns="http://www.w3.org/2000/svg"
     >
       <rect x={0} y={0} width={width} height={height} fill={PAPER} />
-      <ArrowMarkers prefix="se-msg" />
+      <ArrowMarkers prefix="se-msg" paints={ROLES.map((role) => RELATIONSHIP_PAINT[role])} />
 
       {data.participants.map((participant) => (
         <line
@@ -442,7 +1151,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
           x1={x(participant.id)}
           y1={headerHeight}
           x2={x(participant.id)}
-          y2={height - 6}
+          y2={diagramHeight - 6}
           stroke="#d4d4d8"
           strokeDasharray="3 3"
           strokeWidth={1}
@@ -460,6 +1169,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
             height={headerHeight - 8}
             role={role}
             label={displayLabel(participant)}
+            tint={participant.kind === undefined ? undefined : tints.get(participant.kind)}
             changes={fieldChanges(participant)}
             title={elementSummary(participant, role)}
             anchor="middle"
@@ -501,10 +1211,10 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
                 fill="none"
                 stroke={paint}
                 strokeWidth={1.4}
-                markerEnd={`url(#se-msg-${role})`}
+                markerEnd={`url(#${markerId("se-msg", RELATIONSHIP_PAINT[role])})`}
               />
             ) : (
-              <line x1={fromX} y1={y} x2={toX} y2={y} stroke={paint} strokeWidth={1.4} markerEnd={`url(#se-msg-${role})`} />
+              <line x1={fromX} y1={y} x2={toX} y2={y} stroke={paint} strokeWidth={1.4} markerEnd={`url(#${markerId("se-msg", RELATIONSHIP_PAINT[role])})`} />
             )}
             <text
               x={labelX}
@@ -542,6 +1252,8 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
           </g>
         );
       })}
+
+      <Legend groups={legend} x={12} y={legendTop} width={width} />
     </svg>
   );
 }
@@ -591,11 +1303,16 @@ function EnlargedView({
   open,
   onClose,
   children,
+  actions,
+  containerRef,
 }: {
   label: string;
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  /** Export controls, so a diagram adjusted at full size can be taken away from here. */
+  actions?: ReactNode;
+  containerRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -622,16 +1339,21 @@ function EnlargedView({
       >
         <div className="mb-2 flex items-center justify-between gap-4">
           <span className="text-xs text-zinc-500">{label}</span>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-3">
+            {actions}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              ✕
+            </button>
+          </div>
         </div>
-        <div className="[&_svg]:!max-w-none">{children}</div>
+        <div ref={containerRef} className="[&_svg]:!max-w-none">
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -689,6 +1411,9 @@ function textualEquivalent(envelope: ValidatedStructuredExchange, isProposal: bo
 
 /* ── The presentation ───────────────────────────────────────────────────────── */
 
+/** The control row's link styling, shared with the same controls inside the modal. */
+const LINK_BUTTON = "text-xs text-zinc-500 underline hover:text-zinc-800 dark:hover:text-zinc-200";
+
 function StructuredExchangeBody({ item }: PresentationProps) {
   const envelope = validStructuredExchange(item.structured);
   const [enlarged, setEnlarged] = useState(false);
@@ -697,6 +1422,9 @@ function StructuredExchangeBody({ item }: PresentationProps) {
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const diagramRef = useRef<HTMLDivElement>(null);
+  const enlargedRef = useRef<HTMLDivElement>(null);
+  const [nudges, setNudges] = useState<ReadonlyMap<string, Nudge>>(new Map());
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const mermaid = useMemo(() => (envelope ? toMermaid(envelope) : undefined), [envelope]);
 
   // Defensive: the registry only selects this entry for a validated envelope, so
@@ -707,7 +1435,14 @@ function StructuredExchangeBody({ item }: PresentationProps) {
   const removals = envelope.removals ?? [];
   const view =
     envelope.kind === "graph" ? (
-      <GraphView data={envelope.data as StructuredGraphData} isProposal={isProposal} />
+      <GraphView
+        data={envelope.data as StructuredGraphData}
+        isProposal={isProposal}
+        nudges={nudges}
+        setNudges={setNudges}
+        hidden={hidden}
+        setHidden={setHidden}
+      />
     ) : envelope.kind === "sequence" ? (
       <SequenceView data={envelope.data as StructuredSequenceData} isProposal={isProposal} />
     ) : (
@@ -718,9 +1453,17 @@ function StructuredExchangeBody({ item }: PresentationProps) {
   // that follows the guard above does not reach inside one.
   const fileName = `${envelope.kind}-${envelope.target ?? "diagram"}.svg`.replace(/[^\w.-]+/g, "-");
 
-  /** The diagram's markup, standing on its own — colours and ground included. */
+  /**
+   * The diagram's markup, standing on its own — colours and ground included.
+   *
+   * Taken from whichever copy the reader is actually looking at. The enlarged view
+   * is a second instance of the same component with its own adjusted positions, so
+   * reading the small one while the modal is open would export a picture the reader
+   * had just finished rearranging away from.
+   */
   function serializeDiagram(): string | undefined {
-    const svg = diagramRef.current?.querySelector("svg");
+    const container = enlargedRef.current ?? diagramRef.current;
+    const svg = container?.querySelector("svg");
     return svg ? new XMLSerializer().serializeToString(svg) : undefined;
   }
 
@@ -766,8 +1509,50 @@ function StructuredExchangeBody({ item }: PresentationProps) {
         </p>
       )}
 
-      <div ref={diagramRef}>{view}</div>
-      <EnlargedView label={`${envelope.kind} view`} open={enlarged} onClose={() => setEnlarged(false)}>
+      {/* Filtering is for reading, and this view is an approval gate: the reader has
+          to be told, plainly and while they are looking, that the picture in front of
+          them is no longer the whole document. The key inside the SVG carries the same
+          news to anywhere the figure is exported to. */}
+      {hidden.size > 0 && (
+        <p
+          data-testid="structured-filtered"
+          className="flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          <span>
+            Filtered view — {[...hidden].map((key) => key.replace(/^(element|relationship):/, "")).join(", ")} hidden.{" "}
+            {isProposal ? "The full proposal still applies." : ""}
+          </span>
+          <button type="button" className="underline" onClick={() => setHidden(new Set())}>
+            show everything
+          </button>
+        </p>
+      )}
+
+      {/* Scrolls rather than scaling: a wide diagram squeezed into the chat column
+          arrives as a sliver, which is how a seventeen-node architecture rendered as
+          an empty line. Enlarge gives the whole thing without the horizontal scrub. */}
+      <div ref={diagramRef} className="overflow-x-auto">
+        {view}
+      </div>
+      <EnlargedView
+        label={`${envelope.kind} view`}
+        open={enlarged}
+        onClose={() => setEnlarged(false)}
+        containerRef={enlargedRef}
+        actions={
+          envelope.kind !== "table" && (
+            <>
+              <button type="button" onClick={downloadDiagram} className={LINK_BUTTON}>
+                ⤓ download SVG
+              </button>
+              <button type="button" onClick={copyDiagram} className={LINK_BUTTON}>
+                copy markup
+              </button>
+              {copied !== null && <span className="text-xs text-zinc-500">{copied}</span>}
+            </>
+          )
+        }
+      >
         {view}
       </EnlargedView>
 

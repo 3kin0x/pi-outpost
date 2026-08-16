@@ -76,7 +76,7 @@ describe("structured-exchange schema", () => {
       ["ref", schema.$defs.ref.maxLength],
       ["localId", schema.$defs.localId.maxLength],
       ["label", schema.$defs.label.maxLength],
-      ["edgeKind", schema.$defs.edge.properties.kind.maxLength],
+      ["kind", schema.$defs.kind.maxLength],
       ["columnName", tableVariant.properties.columns.items.maxLength],
       ["cell", tableVariant.properties.rows.items.items.maxLength],
     ];
@@ -116,6 +116,25 @@ describe("structured-exchange schema", () => {
 
     test("a referenced element may declare nothing else, and is then context", () => {
       assert.equal(Check(schema, graph({ data: { nodes: [{ id: "a", ref: "R" }], edges: [] } })), true);
+    });
+
+    test("an element and a relationship share one definition of a type", () => {
+      // Two definitions of the same idea drift. A reader colours by this field on
+      // both, so they have to mean the same thing and be bounded the same way.
+      assert.deepEqual(schema.$defs.element.properties.kind, { $ref: "#/$defs/kind" });
+      assert.deepEqual(schema.$defs.edge.properties.kind, { $ref: "#/$defs/kind" });
+    });
+
+    test("an element may declare its type, and a patch may retype it", () => {
+      const typed = { id: "a", label: "A", kind: "block" };
+      assert.equal(Check(schema, graph({ data: { nodes: [typed], edges: [] } })), true);
+      assert.equal(
+        Check(schema, graph({ data: { nodes: [{ id: "a", ref: "R", set: { kind: "sensor" } }], edges: [] } })),
+        true,
+      );
+      // Still opaque: no enumeration, any non-empty domain vocabulary goes through
+      assert.equal(Check(schema, graph({ data: { nodes: [{ id: "a", label: "A", kind: "«subsystem»" }], edges: [] } })), true);
+      assert.equal(Check(schema, graph({ data: { nodes: [{ id: "a", label: "A", kind: "" }], edges: [] } })), false);
     });
 
     test("a referenced element may patch just its label", () => {

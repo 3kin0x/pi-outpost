@@ -14,6 +14,7 @@
     "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.thresholds.lines=91 --coverage.thresholds.branches=85 --coverage.thresholds.functions=93"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
     "@pi-outpost/shared": "*",
     "highlight.js": "^11.11.1",
     "mermaid": "^11.16.0",

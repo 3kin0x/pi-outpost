@@ -6,6 +6,7 @@
  * here — a proposal's rendering is an approval gate, and "what did the reader
  * actually see" has to be answerable.
  */
+import dagre from "@dagrejs/dagre";
 import {
   parseSerializedStructuredExchange,
   type StructuredExchangeVerdict,
@@ -104,50 +105,105 @@ export const ROLE_LABEL: Record<ChangeRole, string> = {
   unchanged: "",
 };
 
+/** Where an element sits, and how big its box is. */
+export type PlacedNode = { id: string; x: number; y: number; width: number; height: number };
+
+/** A point on the canvas. */
+export type Point = { x: number; y: number };
+
 /**
- * A deterministic layered layout.
+ * A route for one relationship, as the layout engine drew it.
  *
- * Depth is the longest path from any element nothing points at; within a layer,
- * declaration order decides. Deterministic because the same document must draw
- * the same way every time — a reader approving a proposal should not have to
- * wonder whether the picture moved for a reason.
- *
- * Geometry carries no meaning: it is chosen so the thing can be read, and the
- * textual equivalent beside it is what states the relationships.
+ * Keyed by the relationship's index in the document, because two relationships
+ * between the same pair are two relationships and must not share a route: drawn as
+ * straight lines between centres they landed exactly on top of each other, and the
+ * diagram showed one line where the document had two.
  */
-export function layerGraph(data: StructuredGraphData): { id: string; depth: number; order: number }[] {
-  const indegree = new Map<string, number>();
-  for (const node of data.nodes) indegree.set(node.id, 0);
-  for (const edge of data.edges) {
-    if (indegree.has(edge.to)) indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
-  }
+export type PlacedEdge = { index: number; points: Point[] };
 
-  const depth = new Map<string, number>();
-  for (const node of data.nodes) depth.set(node.id, 0);
+/** A laid-out graph: boxes in a plane, the routes between them, and the extent. */
+export type GraphLayout = { nodes: PlacedNode[]; edges: PlacedEdge[]; width: number; height: number };
 
-  // Relax along declared edges, bounded by the node count: a cycle cannot make
-  // this run forever, it just stops improving.
-  for (let pass = 0; pass < data.nodes.length; pass++) {
-    let moved = false;
-    for (const edge of data.edges) {
-      const from = depth.get(edge.from);
-      const to = depth.get(edge.to);
-      if (from === undefined || to === undefined) continue;
-      if (to < from + 1) {
-        depth.set(edge.to, from + 1);
-        moved = true;
-      }
+/** Spacing between the boxes, in the same units as the sizes handed in. */
+const RANK_GAP = 64;
+const NODE_GAP = 24;
+const MARGIN = 12;
+
+/**
+ * A layered layout, delegated to dagre.
+ *
+ * This used to be hand-rolled: longest-path ranking with a DFS to spot the edges
+ * that close a cycle. It was a fraction of Sugiyama and it showed — a seventeen-node
+ * architecture with feedback loops drew twenty thousand pixels wide and arrived on
+ * screen as a sliver. Ranking is the easy quarter of the problem; ordering within a
+ * rank to reduce crossings, and assigning coordinates so long edges stay straight,
+ * are the parts that decide whether a diagram can be read, and they are a solved
+ * problem worth importing rather than approximating.
+ *
+ * Deterministic: dagre is a pure function of the graph and the insertion order, and
+ * both come from the document. The same document must draw the same way every time —
+ * a reader approving a proposal should not have to wonder whether the picture moved
+ * for a reason.
+ *
+ * Geometry still carries no meaning: it is chosen so the thing can be read, and the
+ * textual equivalent beside it is what states the relationships.
+ *
+ * `size` is supplied by the caller because only the view knows its own text metrics,
+ * and giving dagre a real size per box is what lets one long label widen its own box
+ * instead of every box.
+ */
+export function layoutGraph(
+  data: StructuredGraphData,
+  size: (node: StructuredElement) => { width: number; height: number },
+): GraphLayout {
+  const graph = new dagre.graphlib.Graph({ multigraph: true });
+  graph.setGraph({ rankdir: "LR", ranksep: RANK_GAP, nodesep: NODE_GAP, marginx: MARGIN, marginy: MARGIN });
+  graph.setDefaultEdgeLabel(() => ({}));
+
+  for (const node of data.nodes) graph.setNode(node.id, size(node));
+  // Named by index so two relationships between the same pair stay two edges;
+  // collapsed, the second one would silently stop influencing the layout.
+  data.edges.forEach((edge, index) => {
+    // A self-loop is drawn by hand rather than routed: dagre reserves rank space for
+    // one and still returns a degenerate path, which came out as a line of zero
+    // length — a relationship the document declared and the picture did not show.
+    if (edge.from !== edge.to && graph.hasNode(edge.from) && graph.hasNode(edge.to)) {
+      graph.setEdge(edge.from, edge.to, {}, String(index));
     }
-    if (!moved) break;
-  }
-
-  const perLayer = new Map<number, number>();
-  return data.nodes.map((node) => {
-    const nodeDepth = depth.get(node.id) ?? 0;
-    const order = perLayer.get(nodeDepth) ?? 0;
-    perLayer.set(nodeDepth, order + 1);
-    return { id: node.id, depth: nodeDepth, order };
   });
+
+  dagre.layout(graph);
+
+  // dagre reports centres; boxes are drawn from their top-left corner.
+  const nodes = data.nodes.map((node) => {
+    const placed = graph.node(node.id) as { x: number; y: number; width: number; height: number } | undefined;
+    const { width, height } = size(node);
+    return {
+      id: node.id,
+      x: (placed?.x ?? MARGIN + width / 2) - width / 2,
+      y: (placed?.y ?? MARGIN + height / 2) - height / 2,
+      width,
+      height,
+    };
+  });
+
+  const edges: PlacedEdge[] = [];
+  data.edges.forEach((edge, index) => {
+    if (edge.from === edge.to) return;
+    const routed = graph.edge(edge.from, edge.to, String(index)) as { points?: Point[] } | undefined;
+    if (routed?.points !== undefined && routed.points.length > 0) {
+      edges.push({ index, points: routed.points.map((point) => ({ x: point.x, y: point.y })) });
+    }
+  });
+
+  // dagre's own graph extent ignores nothing, but a node it failed to place would
+  // fall outside it, so measure what is actually drawn.
+  const extent = nodes.reduce(
+    (box, node) => ({ width: Math.max(box.width, node.x + node.width), height: Math.max(box.height, node.y + node.height) }),
+    { width: 0, height: 0 },
+  );
+
+  return { nodes, edges, width: extent.width + MARGIN, height: extent.height + MARGIN };
 }
 
 /** Label to show for an element: its own when declared, else its reference. */
@@ -179,7 +235,7 @@ export function toMermaid(envelope: ValidatedStructuredExchange): string | undef
     const data = envelope.data as StructuredSequenceData;
     const lines = ["sequenceDiagram"];
     for (const participant of data.participants) {
-      lines.push(`  participant ${safeId(participant.id)} as ${escapeMermaid(displayLabel(participant))}`);
+      lines.push(`  participant ${safeId(participant.id)} as "${escapeMermaid(displayLabel(participant))}"`);
     }
     for (const message of data.messages) {
       lines.push(`  ${safeId(message.from)}->>${safeId(message.to)}: ${escapeMermaid(message.label ?? "")}`);
@@ -191,11 +247,47 @@ export function toMermaid(envelope: ValidatedStructuredExchange): string | undef
   return undefined;
 }
 
-/** Producer identifiers are opaque; mermaid's syntax is not. Keep them apart. */
+/**
+ * Producer identifiers are opaque; mermaid's syntax is not. Keep them apart.
+ *
+ * Producer text is never an identifier. Every id in the export is generated here from
+ * the character codes of the local id, so the only tokens that can name a node are
+ * ones this function made.
+ */
 function safeId(id: string): string {
   return `n${[...id].map((character) => character.charCodeAt(0).toString(36)).join("")}`;
 }
 
+/**
+ * Producer text, rendered so it cannot become syntax.
+ *
+ * The earlier version escaped quotes and newlines and let everything else through,
+ * which was not enough: `;` separates statements in mermaid, so a participant named
+ *
+ *     A; participant injected as INJECTED
+ *
+ * declared a second participant that was in no document. The label was data and it
+ * arrived as structure.
+ *
+ * `#` goes first and unconditionally. It opens mermaid's entity syntax, and it is
+ * also what the escapes below are written in — escaping it second would let producer
+ * text spell `#quot;` itself and reintroduce the quote it was denied.
+ */
+const MERMAID_ENTITY: Record<string, string> = {
+  "#": "#35;",
+  '"': "#quot;",
+  ";": "#59;",
+  "<": "#60;",
+  ">": "#62;",
+};
+
 function escapeMermaid(text: string): string {
-  return text.replace(/"/g, "#quot;").replace(/[\r\n]+/g, " ");
+  return (
+    text
+      // One pass, so no replacement can be fed to another: escaping `#` first and `;`
+      // second turned `#` into `#35;` and then into `#35#59;`, which decodes to
+      // nothing at all. The escapes are written in the very character they escape.
+      .replace(/[#";<>]/g, (character) => MERMAID_ENTITY[character])
+      .replace(/[\r\n\t\f\v\u0000-\u001f\u2028\u2029]+/g, " ")
+  );
 }

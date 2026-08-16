@@ -24,6 +24,12 @@
       "type": "string",
       "maxLength": 500
     },
+    "kind": {
+      "description": "The producing tool's type or stereotype for this thing \u2014 'block', 'sensor', 'power', 'thermal'. Free text, because the vocabulary belongs to the domain and not to this contract. Carries meaning, not presentation: a reader may colour by it, and a consumer may map it back to its own type system.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
     "element": {
       "type": "object",
       "additionalProperties": false,
@@ -39,6 +45,9 @@
         },
         "label": {
           "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
         },
         "set": {
           "$ref": "#/$defs/elementChange"
@@ -72,9 +81,7 @@
           "$ref": "#/$defs/localId"
         },
         "kind": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 100
+          "$ref": "#/$defs/kind"
         },
         "ref": {
           "$ref": "#/$defs/ref"
@@ -162,6 +169,9 @@
       "properties": {
         "label": {
           "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
         }
       }
     },
@@ -171,9 +181,7 @@
       "minProperties": 1,
       "properties": {
         "kind": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 100
+          "$ref": "#/$defs/kind"
         },
         "label": {
           "$ref": "#/$defs/label"

@@ -1,0 +1,13 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "nodes": [
+      { "id": "a", "label": "A" },
+      { "id": "b", "label": "B" }
+    ],
+    "edges": [
+      { "from": "a", "to": "b", "ref": "REL-1", "kind": "calls", "set": { "kind": "invokes" } }
+    ]
+  }
+}

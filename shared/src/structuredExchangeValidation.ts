@@ -104,7 +104,10 @@ export function validateStructuredExchangeSemantics(envelope: StructuredExchange
       message: `a ${envelope.kind} is a projection and cannot be proposed, so it carries no target`,
     });
   }
-  if (envelope.removals !== undefined && envelope.removals.length > 0) {
+  // Presence is the assertion, not length. An empty `removals` on a projection still
+  // claims the document is a proposal, and a producer that sends one has misunderstood
+  // the contract in a way worth telling them about rather than quietly tolerating.
+  if (envelope.removals !== undefined) {
     if (!proposable) {
       issues.push({
         rule: "kind-not-proposable",
@@ -190,11 +193,29 @@ export function validateStructuredExchangeSemantics(envelope: StructuredExchange
     })),
   ];
   for (const candidate of changeables) {
-    if (candidate.set !== undefined && candidate.ref === undefined) {
+    if (candidate.set === undefined) continue;
+    if (candidate.ref === undefined) {
       issues.push({
         rule: "change-without-reference",
         path: `${candidate.at}/set`,
         message: "a change names a reference to change; without one this is a new thing, and its fields are its values",
+      });
+    } else if (!proposable) {
+      issues.push({
+        rule: "kind-not-proposable",
+        path: `${candidate.at}/set`,
+        message: `a ${envelope.kind} is a projection and cannot be proposed, so nothing in it declares a change`,
+      });
+    } else if (envelope.target === undefined) {
+      // `target` is the whole of what makes a document a proposal, and the reader's
+      // rendering keys every "added"/"changed" mark off it. A `set` without one asks
+      // an authority to mutate something while the envelope claims to describe a new
+      // artifact, and it draws as an unremarkable box: a mutation nobody was shown.
+      issues.push({
+        rule: "change-without-target",
+        path: `${candidate.at}/set`,
+        message:
+          "a change needs a target: naming what is being changed is what makes this a proposal rather than a new artifact",
       });
     }
   }

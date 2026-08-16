@@ -44,7 +44,8 @@ export interface StructuredElement {
   id: string;
   ref?: string;
   label?: string;
-  set?: { label?: string };
+  kind?: string;
+  set?: { label?: string; kind?: string };
 }
 
 /**
@@ -55,9 +56,11 @@ export interface StructuredElement {
  * even on a patch and are never read as a request to move it. Re-attaching is a
  * removal plus a creation.
  *
- * `kind` is opaque. The renderer may show it and may use it to tell two otherwise
- * identical relationships apart; it never interprets the value, and the schema
- * never enumerates the possibilities — that vocabulary belongs to the producer.
+ * `kind` is the producer's own type for the thing — the same opaque field an
+ * element carries. The renderer may show it, may tell two otherwise identical
+ * relationships apart by it, and may colour by it; it never interprets the value,
+ * and the schema never enumerates the possibilities. That vocabulary belongs to
+ * the domain, and a consumer is free to map it back onto its own type system.
  */
 export interface StructuredEdge {
   from: string;
@@ -154,7 +157,7 @@ export const STRUCTURED_EXCHANGE_CEILINGS = {
   ref: 200,
   localId: 200,
   label: 500,
-  edgeKind: 100,
+  kind: 100,
   columnName: 200,
   cell: 1000,
 } as const;
