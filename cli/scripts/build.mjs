@@ -135,6 +135,22 @@ await esbuild.build({
   await writeFile(SEA_BUNDLE, src, "utf-8");
 }
 
+// Skills are part of the product, not local configuration: an agent that has the
+// present_structure tool and not the skill explaining it has the mechanism without
+// the instructions. .pi/skills and .agents/skills are runtime locations and are
+// gitignored, so the tracked skills/ directory is what ships.
+// The contract, at a path a producer can be pointed at. A format meant for
+// producers built elsewhere is not delivered by living in the repository: someone
+// who installed this package has the schema inlined in the bundle, which validates
+// their input and tells them nothing about what to send.
+console.log("[build] copying the structured-exchange contract …");
+await cp(resolve(REPO_ROOT, "shared/schemas"), resolve(OUT_DIR, "contract/schemas"), { recursive: true });
+await cp(resolve(REPO_ROOT, "shared/conformance"), resolve(OUT_DIR, "contract/conformance"), { recursive: true });
+await cp(resolve(REPO_ROOT, "docs/structured-exchange.md"), resolve(OUT_DIR, "contract/README.md"));
+
+console.log("[build] copying skills …");
+await cp(resolve(REPO_ROOT, "skills"), resolve(OUT_DIR, "skills"), { recursive: true });
+
 console.log("[build] copying the web UI …");
 await cp(WEB_SRC, WEB_OUT, { recursive: true });
 

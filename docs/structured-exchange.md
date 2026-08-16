@@ -104,16 +104,35 @@ Diagnostics name the rule and point at the value:
 
 Every broken rule is reported, not just the first.
 
+## Getting a diagram into a document
+
+Use **download SVG**, then insert the file as a picture. Word does not accept an SVG
+pasted from the clipboard — it wants a file. **copy markup** is there for the places
+that do take it directly: an editor, a wiki, a repository.
+
+The markup stands on its own. Boxes are `rect` and `text` with colours as attributes
+and an explicit white ground, so what lands in the document is what was on screen. An
+earlier version drew them as HTML inside `foreignObject`, which looks identical in the
+browser and loses everything the moment it is serialized.
+
 ## If you are not building in this repository
 
-You do not need our command-line interface. Two artifacts are portable and are the
-whole contract:
+You do not need our command-line interface, and you do not need this repository. The
+contract ships with the package, under `contract/`:
 
-- **`shared/schemas/structured-exchange-1.json`** — any JSON Schema validator runs it.
-- **[`shared/conformance/`](../shared/conformance/README.md)** — valid and invalid
-  documents with the expected verdict for each, including the relational rules JSON
-  Schema cannot express. Run your implementation against it; if it agrees on every
-  case, it conforms.
+```
+node_modules/pi-outpost/dist/contract/
+  schemas/structured-exchange-1.json   the normative schema — any validator runs it
+  conformance/                          documents and the verdict each should get
+  README.md                             this page
+```
+
+- The **schema** is what the application validates against, byte for byte: it is the
+  same file, copied at build time rather than restated.
+- The **conformance suite** covers the relational rules JSON Schema cannot express.
+  Run your implementation against it; if it agrees on every case, it conforms.
+
+In this repository the same two live at `shared/schemas/` and `shared/conformance/`.
 
 ## What is deliberately not here
 

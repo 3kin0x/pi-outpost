@@ -182,3 +182,23 @@ describe("structured-exchange schema", () => {
     });
   });
 });
+
+/**
+ * The schema the agent reads, beside the schema the code validates against.
+ *
+ * The skill ships a copy so the agent can read the contract without leaving its
+ * skill directory — `skillPaths` are read-only exceptions to the sandbox, so a
+ * file there is reachable and one in the application's own tree is not. Two
+ * copies means two things that can drift, which is what this refuses.
+ */
+describe("the skill's copy of the schema", () => {
+  test("is identical to the one the runtime validates against", () => {
+    const contract = readFileSync(SCHEMA_PATH, "utf8");
+    const beside = readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/structured-exchange/structured-exchange-1.json"),
+      "utf8",
+    );
+
+    assert.equal(beside, contract, "the skill's schema copy has drifted from the contract");
+  });
+});

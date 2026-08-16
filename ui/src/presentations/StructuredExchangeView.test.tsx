@@ -288,6 +288,62 @@ describe("declared order and declared kinds survive", () => {
   });
 });
 
+describe("a diagram can leave the application", () => {
+  const graph = {
+    schema: S,
+    kind: "graph",
+    target: "arch v4",
+    data: { nodes: [{ id: "a", label: "A" }], edges: [] },
+  };
+
+  it("offers a download, because a document wants a file", () => {
+    // Word does not take an SVG pasted from the clipboard: it wants a file to
+    // insert as a picture. Offering only "copy" would look like a feature and fail
+    // at the one place it was for.
+    renderBody(withStructured(graph));
+    expect(screen.getByText(/download SVG/)).toBeInTheDocument();
+    expect(screen.getByText(/copy markup/)).toBeInTheDocument();
+  });
+
+  it("names the file after what it holds, with nothing a filesystem would refuse", () => {
+    const clicked: { download?: string; href?: string }[] = [];
+    const realCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const element = realCreate(tag);
+      if (tag === "a") {
+        element.click = () => clicked.push({ download: element.getAttribute("download") ?? undefined });
+      }
+      return element;
+    });
+    // jsdom has no object URLs
+    (URL as unknown as { createObjectURL: unknown }).createObjectURL = () => "blob:x";
+    (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = () => {};
+
+    renderBody(withStructured(graph));
+    fireEvent.click(screen.getByText(/download SVG/));
+
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0].download).toBe("graph-arch-v4.svg");
+    vi.restoreAllMocks();
+  });
+
+  it("hands over markup that stands on its own", () => {
+    const { container } = renderBody(withStructured(graph));
+    const markup = new XMLSerializer().serializeToString(container.querySelector("svg")!);
+
+    // No stylesheet to leave behind, no foreign content to lose, and a ground of
+    // its own so it does not arrive transparent.
+    expect(markup).not.toContain("foreignObject");
+    expect(markup).not.toContain('class="');
+    expect(markup).toContain('fill="#ffffff"');
+  });
+
+  it("offers neither for a table, which is not a picture", () => {
+    renderBody(withStructured({ schema: S, kind: "table", data: { columns: ["c"], rows: [["v"]] } }));
+    expect(screen.queryByText(/download SVG/)).not.toBeInTheDocument();
+  });
+});
+
 describe("a diagram can be seen at full size", () => {
   // A chat card is a narrow column. Shrinking a real diagram to fit it is how a
   // view becomes unreadable without anyone noticing.

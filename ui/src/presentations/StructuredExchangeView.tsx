@@ -714,19 +714,43 @@ function StructuredExchangeBody({ item }: PresentationProps) {
       <TableView data={envelope.data as StructuredTableData} />
     );
 
-  /**
-   * The diagram as a file, for wherever it is going next.
-   *
-   * The SVG carries its own colours and its own ground, so what lands in a
-   * document looks like what was on screen — which is the whole reason the boxes
-   * are `rect` and `text` rather than HTML in a `foreignObject`.
-   */
-  async function copyDiagram() {
+  // Named outside the handlers: a function declaration is hoisted, so the narrowing
+  // that follows the guard above does not reach inside one.
+  const fileName = `${envelope.kind}-${envelope.target ?? "diagram"}.svg`.replace(/[^\w.-]+/g, "-");
+
+  /** The diagram's markup, standing on its own — colours and ground included. */
+  function serializeDiagram(): string | undefined {
     const svg = diagramRef.current?.querySelector("svg");
-    if (!svg) return;
+    return svg ? new XMLSerializer().serializeToString(svg) : undefined;
+  }
+
+  /**
+   * Save the diagram as a file.
+   *
+   * The path that actually works for a document: Word does not accept an SVG
+   * pasted from the clipboard — it wants a file, inserted as a picture. Offering
+   * only "copy" would look like a feature and fail at the one place it was for.
+   */
+  function downloadDiagram() {
+    const markup = serializeDiagram();
+    if (markup === undefined) return;
+    const url = URL.createObjectURL(new Blob([markup], { type: "image/svg+xml" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+    setCopied("SVG downloaded");
+    window.setTimeout(() => setCopied(null), 2500);
+  }
+
+  /** For anywhere that does take SVG markup directly — an editor, a wiki, a repo. */
+  async function copyDiagram() {
+    const markup = serializeDiagram();
+    if (markup === undefined) return;
     try {
-      await navigator.clipboard.writeText(new XMLSerializer().serializeToString(svg));
-      setCopied("SVG copied");
+      await navigator.clipboard.writeText(markup);
+      setCopied("SVG markup copied");
     } catch {
       setCopied("could not copy");
     }
@@ -771,9 +795,24 @@ function StructuredExchangeBody({ item }: PresentationProps) {
           ⤢ enlarge
         </button>
         {envelope.kind !== "table" && (
-          <button type="button" className="text-zinc-500 underline" onClick={() => void copyDiagram()}>
-            copy diagram
-          </button>
+          <>
+            <button
+              type="button"
+              className="text-zinc-500 underline"
+              title="Save as .svg — insert it as a picture in a document"
+              onClick={downloadDiagram}
+            >
+              ⤓ download SVG
+            </button>
+            <button
+              type="button"
+              className="text-zinc-500 underline"
+              title="Copy the SVG markup, for somewhere that takes it directly"
+              onClick={() => void copyDiagram()}
+            >
+              copy markup
+            </button>
+          </>
         )}
         <button type="button" className="text-zinc-500 underline" onClick={() => setShowText((open) => !open)}>
           {showText ? "hide" : "show"} text equivalent

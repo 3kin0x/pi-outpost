@@ -500,6 +500,33 @@ const hasIndexHtml = (candidate: string) =>
     .stat(path.join(candidate, "index.html"))
     .then((s) => s.isFile())
     .catch(() => false);
+/**
+ * Skills that ship with the product, found the same way the web UI is.
+ *
+ * A tool without the skill that explains it is a mechanism with no instructions:
+ * the agent can call `present_structure` and has nothing telling it what a valid
+ * document looks like. The user's own skill paths come after, so anything they
+ * configure can still override what we bundle.
+ */
+const skillRoots = [path.resolve(import.meta.dirname, "./skills"), path.resolve(import.meta.dirname, "../../skills")];
+/**
+ * One entry per skill, not the directory holding them: the SDK takes a path to a
+ * skill — a directory with a SKILL.md in it — and silently finds nothing when
+ * handed their parent.
+ */
+const BUNDLED_SKILLS: string[] = [];
+for (const root of skillRoots) {
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skill = path.join(root, entry.name);
+    if (await fs.stat(path.join(skill, "SKILL.md")).then((file) => file.isFile()).catch(() => false)) {
+      BUNDLED_SKILLS.push(skill);
+    }
+  }
+  if (BUNDLED_SKILLS.length > 0) break;
+}
+
 const webDistCandidates = process.env.PI_OUTPOST_WEB_DIST
   ? [path.resolve(process.env.PI_OUTPOST_WEB_DIST)]
   : [
@@ -592,8 +619,15 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         ? { additionalExtensionPaths: allExtPaths }
         : {}),
       ...(config.noSkills ? { noSkills: true } : {}),
-      ...(config.skillPaths.length > 0
-        ? { additionalSkillPaths: config.skillPaths }
+      // The user's paths first: the loader keeps the first skill it meets under a
+      // given name, so anything they configure has to come before what we bundle
+      // for "override" to mean anything.
+      //
+      // And nothing at all under noSkills. additionalSkillPaths is loaded even in
+      // that mode, so passing the bundled ones regardless would quietly defeat the
+      // switch that exists precisely to get real isolation.
+      ...(!config.noSkills && (config.skillPaths.length > 0 || BUNDLED_SKILLS.length > 0)
+        ? { additionalSkillPaths: [...config.skillPaths, ...BUNDLED_SKILLS] }
         : {}),
       ...(config.noPromptTemplates ? { noPromptTemplates: true } : {}),
       ...(config.promptPaths.length > 0

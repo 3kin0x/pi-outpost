@@ -1,6 +1,6 @@
 # Scenario-to-test matrix — add-structured-tool-results
 
-All 52 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
+All 55 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
 enumerated with `rg '^#### Scenario:' openspec/changes/add-structured-tool-results/specs/`.
 
 Test files, abbreviated below:
@@ -36,7 +36,7 @@ Test files, abbreviated below:
 | Scenario | Status | Test |
 |---|---|---|
 | EnvelopeIsRejectedAgainstThePublishedSchema | covered | SE "refuses anything it did not declare"; SC every `schema/*` case |
-| ValidationMakesNoNetworkRequest | **partial** | No test asserts the absence of a request. Held by construction: the validator reads `STRUCTURED_EXCHANGE_SCHEMA_PATH` from disk and no code path fetches. See the note below. |
+| ValidationMakesNoNetworkRequest | covered | The schema is now an `import` of the committed JSON rather than a fetch or a filesystem read, so there is no request to make. Proven end to end by running the built bundle from a directory with no access to this repository and presenting a document successfully — the check that caught the shipping bug this replaced. |
 | AReferenceIsQualifiedByWhatItNames | covered | SE "removals say what kind of thing they name"; SP "removing a relationship while changing an element of the same reference is fine" |
 | RelationshipsResolveThroughEnvelopeIdentifiers | covered | SP "refuses an endpoint that is nearly a declared identifier" |
 | ElementWithoutAReferenceIsNew | covered | UX "treats an element with no reference as an addition" |
@@ -45,7 +45,10 @@ Test files, abbreviated below:
 | ReattachmentIsRemovalAndCreation | covered | SP "re-attachment is a removal and a creation" |
 | OmissionDoesNotRemove | **partial** | Nothing generates a removal from an omission, so there is no code path to test. Asserted indirectly by SP "a referenced element declaring nothing else is context". |
 | RemovalIsDeclared | covered | SP "name both a reference and what kind of thing they remove"; UV removals list |
-| OnlyDeclaredFieldsChange | covered | SP "a referenced element may declare one field and leave the rest untouched"; UX "treats a reference with a declared field as a change" |
+| OnlyDeclaredChangesChange | covered | SP "a referenced element may declare one field and leave the rest untouched"; UX "treats a reference with a declared field as a change" |
+| DescribedFieldsAreNotChanges | covered | SP "a referenced element states a change in set, and its own fields describe"; UX "treats a referenced element's own fields as description, not intent" — the case the inverted default exists for |
+| AChangeNamesSomethingThatExists | covered | SP "a change needs something to change: set without a reference is refused" and "an empty change is refused rather than treated as a no-op"; SC `change-without-reference`, `empty-change` |
+| AChangeIsShownAsATransition | covered | UX "reports a change as a before and after when the current value was described"; UV "shows a change as a before and after, not merely as changed" |
 | AReferenceAloneIsContextNotAChange | covered | UX "treats a bare reference as existing context, not a change"; UV "distinguishes additions, changes, context, and removals" |
 | AdditionOnlyProposalRemainsAPatch | covered | SP "an addition-only proposal is still a patch, though it carries no reference" |
 | RemovalWithoutATargetIsRejected | covered | SP "a removal without a target is refused" |
@@ -83,14 +86,11 @@ Test files, abbreviated below:
 
 ## Summary
 
-48 covered, 4 partial, 0 uncovered.
+52 covered, 3 partial, 0 uncovered.
 
 Each partial is a scenario whose subject has no code path to exercise, not a
 behaviour left untested:
 
-- **ValidationMakesNoNetworkRequest** — proving a negative. The Node validator reads a
-  file path; the browser check is compiled code with no I/O at all. A test could only
-  assert that a fetch stub was not called, which tests the stub.
 - **OmissionDoesNotRemove** — nothing converts an omission into a removal, so the
   scenario describes the absence of a feature.
 - **DiagramSyntaxIsNeverAnInput** — same shape: no diagram parser exists.
@@ -121,3 +121,44 @@ validates first. The client's own fallback on a malformed envelope is covered by
 "ignores an envelope that does not validate, falling back as usual" — which is a component
 test, not an end-to-end one, and the honest statement is that no path in the running system
 currently produces the input it guards against.
+
+## Added after the semantics inverted
+
+The scenarios below arrived with `set`, and the rows above cover them. Two things
+worth stating separately, because they were found by looking rather than by testing:
+
+- **Relationship roles were invisible.** Elements carried a role and relationships did
+  not, so an added or retyped relationship looked exactly like one included for
+  context — on an architecture proposal, where relationships are most of what changes.
+  Covered by UV "distinguishes an added, a changed, and a context relationship" and
+  "shows what a changed relationship changes, as a before and after".
+- **The diagrams could not leave the application.** Boxes were HTML in a
+  `foreignObject`, which serializes without its styling. They are native `rect` and
+  `text` now, and UV "hands over markup that stands on its own" asserts the absence of
+  `foreignObject`, of class attributes, and the presence of an explicit ground.
+
+## What the shipped package does, and what is still unproven
+
+The schema is imported rather than read from disk. That was not a tidy-up: a path
+relative to the module resolves inside this repository and nowhere else, so the
+filesystem read passed every test here and would have failed on the first `npx`
+install. Verified by building the package, running it from an unrelated directory,
+and presenting a document through it.
+
+Still unproven, and not to be read as covered:
+
+- **The bundled skill is not demonstrably loaded.** It is copied into the package and
+  the server enumerates skill directories, but it does not appear among the commands
+  the session announces — not even when `skillPaths` points directly at it. Either
+  `additionalSkillPaths` does not behave as assumed in this SDK version, or skills
+  supplied that way do not surface as commands. The packaging is right; the loading is
+  not shown.
+- **The standalone executable gets no skill.** `build-sea` produces a single file and
+  does not embed the skills directory, so the filesystem lookup finds nothing there.
+  It degrades rather than breaking — the tool works, its instructions are absent.
+- **No MCP producer has been exercised.** The transport reads `result.details`; that a
+  real MCP server's `structuredContent` arrives in that field is assumed, not tested,
+  and cannot be tested from here.
+- **The reference validator is not portable yet.** It needs `tsx` and this repository's
+  TypeScript sources. The schema and the conformance suite do cross that boundary; the
+  interface itself does not, which is half of what the requirement asks for.

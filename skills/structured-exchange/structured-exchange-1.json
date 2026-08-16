@@ -1,0 +1,307 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:structured-exchange:1",
+  "title": "Structured exchange envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "data"
+  ],
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "localId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "element": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/localId"
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "set": {
+          "$ref": "#/$defs/elementChange"
+        }
+      },
+      "if": {
+        "not": {
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "label"
+        ]
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/localId"
+        },
+        "to": {
+          "$ref": "#/$defs/localId"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "set": {
+          "$ref": "#/$defs/edgeChange"
+        }
+      },
+      "if": {
+        "not": {
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "kind"
+        ]
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/localId"
+        },
+        "to": {
+          "$ref": "#/$defs/localId"
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "set": {
+          "$ref": "#/$defs/messageChange"
+        }
+      },
+      "if": {
+        "not": {
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "label"
+        ]
+      }
+    },
+    "removal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "ref"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "element",
+            "relationship"
+          ]
+        },
+        "ref": {
+          "$ref": "#/$defs/ref"
+        }
+      }
+    },
+    "elementChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        }
+      }
+    },
+    "edgeChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        }
+      }
+    },
+    "messageChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/label"
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema": {
+      "const": "urn:structured-exchange:1"
+    },
+    "kind": {
+      "enum": [
+        "graph",
+        "sequence",
+        "table"
+      ]
+    },
+    "target": {
+      "$ref": "#/$defs/ref"
+    },
+    "removals": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/removal"
+      }
+    },
+    "data": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 500,
+              "items": {
+                "$ref": "#/$defs/element"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "maxItems": 2000,
+              "items": {
+                "$ref": "#/$defs/edge"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "participants",
+            "messages"
+          ],
+          "properties": {
+            "participants": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/element"
+              }
+            },
+            "messages": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": {
+                "$ref": "#/$defs/message"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "columns",
+            "rows"
+          ],
+          "properties": {
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "rows": {
+              "type": "array",
+              "maxItems": 5000,
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ],
+                  "maxLength": 1000
+                },
+                "maxItems": 50
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -26,8 +26,9 @@ validated, or applied.
 > claims that is already its name, and the proposal silently does nothing. If the
 > tool answers `0 changed`, this is what happened.
 
-Everything you need is on this page. **Do not go looking for a schema file** — it
-lives with the application, not in your workspace, and hunting for it wastes a turn.
+Everything you need is on this page. The normative contract sits beside it, as
+`structured-exchange-1.json` in this same directory — read it when a detail here is
+not enough, and do not go hunting elsewhere in the workspace for it.
 
 ## The tool validates for you
 

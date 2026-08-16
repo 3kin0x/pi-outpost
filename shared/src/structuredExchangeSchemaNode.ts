@@ -5,20 +5,20 @@
  * where someone is going to have to act on a refusal. The browser gets a smaller
  * check generated from the same schema; see the build step for that one.
  *
- * Not importable from browser code: it reads the schema file from disk.
+ * Carries the whole compiler, so it is Node-only by weight rather than by API —
+ * the browser gets a generated check instead.
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Compile } from "typebox/compile";
+// Imported, not read from disk. The runtime has to validate against its committed
+// copy wherever it is deployed, and this product ships as a bundle: a path
+// relative to this module resolves inside the repository and nowhere else, so a
+// filesystem read works in every test and fails on the first real install.
+import schema from "../schemas/structured-exchange-1.json" with { type: "json" };
 import type { StructuredExchangeSchemaCheck } from "./structuredExchangeParse.ts";
 import type { StructuredExchangeIssue } from "./structuredExchangeValidation.ts";
 
-/** Path of the committed schema, resolved from this module rather than from cwd. */
-export const STRUCTURED_EXCHANGE_SCHEMA_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../schemas/structured-exchange-1.json",
-);
+/** The committed schema itself, bundled with the code that validates against it. */
+export const STRUCTURED_EXCHANGE_SCHEMA: unknown = schema;
 
 /**
  * Compiled once. The compiler is the expensive part; the check it produces is
@@ -28,9 +28,9 @@ let compiled: ReturnType<typeof Compile> | undefined;
 
 function validator(): ReturnType<typeof Compile> {
   if (compiled === undefined) {
-    // Read from the committed copy, never fetched: validation must not depend on
-    // the network being there or on what is at the other end of it.
-    compiled = Compile(JSON.parse(readFileSync(STRUCTURED_EXCHANGE_SCHEMA_PATH, "utf8")));
+    // The committed copy, never fetched: validation must not depend on the network
+    // being there or on what is at the other end of it.
+    compiled = Compile(schema);
   }
   return compiled;
 }
