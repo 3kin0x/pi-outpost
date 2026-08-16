@@ -27,11 +27,14 @@ const index = JSON.parse(readFileSync(path.join(SUITE, "index.json"), "utf8")) a
 
 describe("generated browser check", () => {
   test("is up to date with the committed schema", () => {
-    const committed = readFileSync(GENERATED_CHECK_PATH, "utf8");
+    // Compared without line endings: the generator writes LF, and a Windows checkout
+    // hands back CRLF, so the literal comparison reported a file that had not changed
+    // as stale — on that platform only, and only in CI.
+    const withoutLineEndings = (text: string) => text.replace(/\r\n/g, "\n");
 
     assert.equal(
-      committed,
-      generate(),
+      withoutLineEndings(readFileSync(GENERATED_CHECK_PATH, "utf8")),
+      withoutLineEndings(generate()),
       "the generated check is stale — run: node --import tsx/esm shared/scripts/generate-structured-exchange-check.mjs",
     );
   });
