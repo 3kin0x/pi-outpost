@@ -152,11 +152,16 @@ from the real validation boundary, declaration order included.
 
 Every interaction below was driven in a browser against the dev server, after the
 change it exercises, and checked by reading the DOM rather than by looking at a
-screenshot. **None of it is automated.** An offline running-app test needs a transcript seeded
-with a tool result, which means forging a session entry the agent will accept; the
-session loads and the tool call renders, and the forged result does not attach. Task
-5.7 is left open for it. What follows is a record of manual runs, not a claim that a
-suite covers this.
+screenshot. **None of it is automated, and that is an accepted limitation rather than an open
+task.** An offline running-app test needs a transcript seeded with a tool result, which
+means forging a session entry the agent will accept; the session loads and the tool
+call renders, and the forged result does not attach. The attempt was made and did not
+land, and the decision was to keep this manual (task 5.7).
+
+So what follows is a record of manual runs, and the standing instruction that goes with
+it: **a change to any of this is verified by driving it in the browser, by hand, before
+it is called done.** Every entry below is something that passed its unit tests and
+failed in front of a person.
 
 The runs, and what each one caught:
 

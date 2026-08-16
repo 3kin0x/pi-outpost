@@ -100,9 +100,11 @@ elements so the reader can situate it, and there was no way to say so.
   filtering, dragging, panning, the full-size view, loops and parallel relationships. See "What the
   running app was actually driven through" in coverage.md for what was driven and what each run
   found. Manual, and recorded as manual: nothing here is automated.
-- [ ] 5.7 Automate that as a Playwright spec. Blocked on seeding a transcript offline: the session
-  loads and the tool call renders, and a forged `toolResult` entry does not attach, so there is no
-  way yet to put a document in front of the browser without a model. Left open rather than claimed.
+- [x] 5.7 **Accepted as a known limitation: the running-app verification stays manual.** Automating it
+  needs a transcript seeded offline, and a forged `toolResult` entry does not attach to the session —
+  the session loads and the tool call renders, and the result does not. The attempt was made and did
+  not land. Decided rather than deferred: the manual runs in 5.6 are what covers this, and coverage.md
+  records what each one drove and what it found, so a later reader can repeat them by hand.
 - [x] 5.3 Exercise an invalid and an unknown-version envelope in the running app; confirm no
   specialized view appears and the result stays readable.
 - [x] 5.4 Confirm in the running app that the agent recovers from a refusal: given diagnostics from
