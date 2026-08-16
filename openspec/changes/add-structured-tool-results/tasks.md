@@ -54,7 +54,7 @@
 - [x] 3.3 Add the approval view for a proposal: additions, field-level changes, declared removals, and
   referenced-but-unchanged context distinguishable from one another, with every carried element shown
   and nothing summarised.
-- [x] 3.4 Keep an approved proposal recoverable byte-for-byte as it was validated — no re-serialising,
+- [x] 3.4 Keep an approved proposal recoverable exactly as it was validated — no re-serialising,
   reordering, or normalising between approval and handover.
 - [x] 3.5 Add the deterministic derived diagram export for a validated graph or sequence, labelled as
   derived, and test that it carries the same structure and that no renderer parses diagram syntax to

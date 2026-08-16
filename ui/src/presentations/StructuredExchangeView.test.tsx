@@ -4,6 +4,8 @@ import type { ChatItem } from "@pi-outpost/shared";
 import { STRUCTURED_EXCHANGE_SCHEMA_V1 as S } from "@pi-outpost/shared/structured-exchange";
 import { selectPresentation, PRESENTATIONS } from "./registry";
 import { structuredExchangePresentation } from "./StructuredExchangeView";
+import { validStructuredExchange } from "./structuredExchange";
+import * as structuredExchangeModule from "./structuredExchange";
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -537,8 +539,8 @@ describe("relationships in a proposal are legible too", () => {
     const { container } = renderBody(withStructured(graphProposal));
 
     const [context, changed] = [...container.querySelectorAll("g[data-relationship-role]")];
-    expect(context.querySelector("path")?.getAttribute("stroke-dasharray")).toBe("4 3");
-    expect(changed.querySelector("path")?.getAttribute("stroke-dasharray")).toBeNull();
+    expect(context.querySelector('path[data-edge="line"]')?.getAttribute("stroke-dasharray")).toBe("4 3");
+    expect(changed.querySelector('path[data-edge="line"]')?.getAttribute("stroke-dasharray")).toBeNull();
   });
 
   it("does the same for a sequence's messages", () => {
@@ -758,7 +760,7 @@ describe("colour carries type, and the key travels with the picture", () => {
   it("tips an arrow in the colour of the line it ends", () => {
     // Keyed by role, a type-coloured relationship got a grey arrowhead.
     renderBody(withStructured(typed));
-    const line = document.querySelector("[data-relationship-role] path")!;
+    const line = document.querySelector('[data-relationship-role] path[data-edge="line"]')!;
     const stroke = line.getAttribute("stroke")!;
     const marker = line.getAttribute("marker-end")!.replace(/^url\(#|\)$/g, "");
 
@@ -1047,7 +1049,7 @@ describe("every declared relationship is a relationship you can see", () => {
     },
   });
   const paths = () =>
-    [...document.querySelectorAll("[data-relationship-role] path")].map((p) => p.getAttribute("d")!);
+    [...document.querySelectorAll('[data-relationship-role] path[data-edge="line"]')].map((p) => p.getAttribute("d")!);
 
   /** Sample a path so two shapes can be compared as geometry rather than as strings. */
   const pointsOf = (d: string) =>
@@ -1160,7 +1162,7 @@ describe("every declared relationship is a relationship you can see", () => {
     expect(groups).toHaveLength(3);
 
     for (const group of groups) {
-      const path = group.querySelector("path")!;
+      const path = group.querySelector('path[data-edge="line"]')!;
       expect(path.getAttribute("marker-end")).toMatch(/^url\(#se-arrow-/);
       expect(path.getAttribute("fill")).toBe("none");
       expect(group.querySelector("title")!.textContent).toBeTruthy();
@@ -1499,5 +1501,432 @@ describe("the canvas gesture does not swallow the controls drawn on it", () => {
     );
 
     expect(scroller.scrollLeft).toBe(260);
+  });
+});
+
+describe("what the reader is shown is what would be applied", () => {
+  /**
+   * Three invariants that hold by construction rather than by a code path, and are
+   * asserted here as invariants — a test that merely exercised them would be testing
+   * that absent code stays absent, which is not what makes them true.
+   */
+
+  it("proposes no removal for something a proposal simply does not mention", () => {
+    // OmissionDoesNotRemove. The application never holds the authority's full model:
+    // it sees one document, so it cannot know what is missing from it, and could not
+    // infer a removal even if the contract allowed one. Removals are declared or they
+    // do not exist.
+    const proposalOmittingPlenty = {
+      schema: S,
+      kind: "graph",
+      target: "artifact-1",
+      data: {
+        nodes: [{ id: "one", ref: "EL-1", label: "The only one mentioned" }],
+        edges: [],
+      },
+    };
+    renderBody(withStructured(proposalOmittingPlenty));
+
+    expect(screen.queryByTestId("structured-removals")).toBeNull();
+    expect(document.querySelectorAll('[data-relationship-role="removed"]')).toHaveLength(0);
+    fireEvent.click(screen.getByText("show text equivalent"));
+    expect(screen.getByTestId("structured-text-equivalent").textContent).not.toContain("removed");
+  });
+
+  it("presents exactly the removals declared, and no more", () => {
+    const withRemovals = {
+      schema: S,
+      kind: "graph",
+      target: "artifact-1",
+      removals: [{ type: "element", ref: "EL-7" }],
+      data: { nodes: [{ id: "a", ref: "EL-1", label: "Kept" }], edges: [] },
+    };
+    renderBody(withStructured(withRemovals));
+
+    const shown = screen.getByTestId("structured-removals");
+    expect(shown.querySelectorAll("li")).toHaveLength(1);
+    expect(shown.textContent).toContain("EL-7");
+  });
+
+  it("never reads diagram syntax back, whatever is sitting beside the data", () => {
+    // DiagramSyntaxIsNeverAnInput. The export is a one-way door: there is no parser
+    // of diagram syntax anywhere in the path that produces, completes or corrects a
+    // document. Mermaid in the tool's own output must therefore change nothing.
+    const document_ = {
+      schema: S,
+      kind: "graph",
+      data: { nodes: [{ id: "a", label: "A" }], edges: [] },
+    };
+    const hostileOutput = [
+      "flowchart TD",
+      '  nX["Injected"]',
+      "  nX --> nY",
+      "sequenceDiagram",
+      "  participant Z as Zed",
+    ].join("\n");
+
+    renderBody(withStructured(document_, { output: hostileOutput }));
+
+    // One element, no relationships: exactly the document, none of the syntax
+    expect(document.querySelectorAll("[data-element-role]")).toHaveLength(1);
+    expect(document.querySelectorAll("[data-relationship-role]")).toHaveLength(0);
+    expect(document.querySelector("svg")!.textContent).not.toContain("Injected");
+    expect(document.querySelector("svg")!.textContent).not.toContain("Zed");
+  });
+
+  it("offers no way to turn diagram syntax into a document", () => {
+    // The structural half of the same invariant: the module exports a way out and
+    // deliberately no way back in.
+    const exported = Object.keys(structuredExchangeModule);
+    expect(exported).toContain("toMermaid");
+    expect(exported.filter((name) => /^(from|parse|read)Mermaid/i.test(name))).toEqual([]);
+  });
+
+  it("hands on exactly the value that was validated", () => {
+    // ApprovedProposalIsExactlyWhatWasValidated. Identity is asserted from the real
+    // validation boundary: the serialized form the presentation validated is the one
+    // still available for handover, with nothing normalised in between.
+    //
+    // Not identity with the bytes the *producer* wrote — those do not survive to this
+    // side of the process, and claiming otherwise would be a promise nothing keeps.
+    const serialized = JSON.stringify({
+      schema: S,
+      kind: "graph",
+      target: "artifact-1",
+      data: {
+        nodes: [
+          { id: "b", label: "Second declared" },
+          { id: "a", ref: "EL-1", label: "First declared", set: { label: "Renamed" } },
+        ],
+        edges: [{ from: "a", to: "b", kind: "calls" }],
+      },
+    });
+    const item = tool({ structured: serialized });
+
+    // Validated, rendered, and still the same string afterwards
+    expect(validStructuredExchange(item.structured)).toBeDefined();
+    renderBody(item);
+    expect(item.structured).toBe(serialized);
+
+    // Including declaration order, which a parse and re-serialise would be free to
+    // keep and a normalising step would not.
+    expect(JSON.parse(item.structured!).data.nodes.map((n: { id: string }) => n.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("saying what a relationship is when the picture cannot", () => {
+  const graph = {
+    schema: S,
+    kind: "graph",
+    data: {
+      nodes: [
+        { id: "a", label: "Battery", kind: "storage" },
+        { id: "b", label: "Inverter", kind: "converter" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "supplies_high_voltage_direct_current" }],
+    },
+  };
+
+  // React synthesises enter/leave from over/out, so a raw `pointerenter` reaches
+  // nothing. Moving over it is what a pointer actually does anyway.
+  const hover = (over: Element) => fireEvent.pointerMove(over, { clientX: 120, clientY: 90 });
+
+  it("gives a thin line a hit area anyone can actually hover", () => {
+    // The drawn line is one or two pixels wide. Without this the tooltip exists and
+    // is unreachable, which is the same as not existing.
+    renderBody(withStructured(graph));
+    const hit = document.querySelector('[data-relationship-role] path[data-edge="hit"]')!;
+
+    expect(Number(hit.getAttribute("stroke-width"))).toBeGreaterThanOrEqual(10);
+    expect(hit.getAttribute("stroke")).toBe("transparent");
+    expect(hit.getAttribute("pointer-events")).toBe("stroke");
+  });
+
+  it("names the relationship, its ends and its type on hover", () => {
+    renderBody(withStructured(graph));
+    hover(document.querySelector("[data-relationship-role]")!);
+
+    const tip = screen.getByTestId("relationship-tooltip");
+    expect(tip.textContent).toContain("Battery");
+    expect(tip.textContent).toContain("Inverter");
+    expect(tip.textContent).toContain("supplies_high_voltage_direct_current");
+  });
+
+  it("places the tooltip against the viewport, not inside the box the diagram scrolls in", () => {
+    // A diagram wider than the column scrolls, and the relationships hardest to
+    // identify are the ones running off its edge — so the thing explaining them must
+    // not be clipped by that same edge.
+    renderBody(withStructured(graph));
+    hover(document.querySelector("[data-relationship-role]")!);
+
+    expect(screen.getByTestId("relationship-tooltip").style.position).toBe("fixed");
+  });
+
+  it("does not let the tooltip catch the pointer it follows", () => {
+    renderBody(withStructured(graph));
+    hover(document.querySelector("[data-relationship-role]")!);
+
+    expect(screen.getByTestId("relationship-tooltip").className).toContain("pointer-events-none");
+  });
+
+  it("puts it away when the pointer leaves", () => {
+    renderBody(withStructured(graph));
+    const group = document.querySelector("[data-relationship-role]")!;
+    hover(group);
+    fireEvent.pointerOut(group, { relatedTarget: document.body });
+
+    expect(screen.queryByTestId("relationship-tooltip")).toBeNull();
+  });
+
+  it("still carries the native title, for anything driven by the keyboard or a reader", () => {
+    renderBody(withStructured(graph));
+    expect(document.querySelector("[data-relationship-role] title")!.textContent).toContain("Battery");
+  });
+});
+
+describe("the enlarged view owns the screen while it is open", () => {
+  const graph = {
+    schema: S,
+    kind: "graph",
+    data: { nodes: [{ id: "a", label: "A", kind: "block" }], edges: [] },
+  };
+
+  it("is mounted on the document body rather than inside the transcript", () => {
+    /**
+     * `position: fixed` and a z-index are only as absolute as the nearest ancestor
+     * that made a stacking context, and this modal lives deep inside the message
+     * list. The composer and the toolbar are other branches with contexts of their
+     * own, and they painted over an overlay that was nominally above them — so the
+     * controls stayed visible and clickable through a dialog that had claimed the
+     * screen.
+     */
+    const { container } = renderBody(withStructured(graph));
+    fireEvent.click(screen.getByText("⤢ enlarge"));
+
+    const modal = screen.getByTestId("structured-enlarged");
+    expect(container.contains(modal)).toBe(false);
+    expect(modal.parentElement).toBe(document.body);
+  });
+
+  it("sits above everything the application draws", () => {
+    renderBody(withStructured(graph));
+    fireEvent.click(screen.getByText("⤢ enlarge"));
+
+    // Higher than the composer (z-20) and the notification layer (z-40)
+    expect(screen.getByTestId("structured-enlarged").className).toContain("z-[100]");
+  });
+
+  it("closes on Escape, so nothing behind it is unreachable", () => {
+    renderBody(withStructured(graph));
+    fireEvent.click(screen.getByText("⤢ enlarge"));
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByTestId("structured-enlarged")).toBeNull();
+  });
+});
+
+describe("a real architecture, at the size real ones come in", () => {
+  /**
+   * Thirty-three elements, fifty-four relationships, fourteen element types and
+   * thirty-four relationship types — a vehicle architecture, not a toy. Everything
+   * here failed at least once at this scale and passed at three nodes.
+   */
+  const KINDS = [
+    "energy_storage", "controller", "thermal", "power_distribution", "power_electronics",
+    "actuator", "mechanical", "interface", "communication", "hmi", "sensor", "safety",
+    "security", "external",
+  ];
+  const nodes = Array.from({ length: 33 }, (_, index) => ({
+    id: `n${index}`,
+    label: `Component number ${index}`,
+    kind: KINDS[index % KINDS.length],
+  }));
+  const edges = Array.from({ length: 54 }, (_, index) => ({
+    from: `n${index % 33}`,
+    to: `n${(index * 7 + 3) % 33}`,
+    kind: `relates_${index % 34}`,
+  }));
+  const big = { schema: S, kind: "graph", data: { nodes, edges } };
+
+  const fills = (scope: "element" | "relationship") =>
+    [...document.querySelectorAll(`[data-legend-entry^="${scope}:"] rect:not([fill="transparent"])`)].map((r) =>
+      r.getAttribute("fill"),
+    );
+
+  it("gives fourteen element types fourteen distinct colours", () => {
+    // Elements and relationships shared one colour table, so a diagram with many of
+    // both exhausted it and drew unrelated types alike: mechanical and security the
+    // same, interface and external the same. They are separate vocabularies on
+    // separate channels and now have separate tables.
+    renderBody(withStructured(big));
+    const distinct = new Set(fills("element"));
+
+    expect(fills("element")).toHaveLength(14);
+    expect(distinct.size).toBe(14);
+  });
+
+  it("says so in the key when a vocabulary outruns the palette", () => {
+    // Thirty-four relationship types cannot all be distinguishable by colour, and a
+    // key that implies they are is worse than one that admits they are not: a reader
+    // trusting colour alone reads two unrelated types as one.
+    renderBody(withStructured(big));
+    const headings = [...document.querySelectorAll('[data-testid="legend-group"]')].map((t) => t.textContent);
+
+    expect(headings.some((h) => /relationships \(\d+ types, colours repeat\)/.test(h!))).toBe(true);
+    expect(headings.some((h) => h === "elements")).toBe(true);
+  });
+
+  it("keeps the key a block, however wide the drawing gets", () => {
+    // Wrapped at the canvas width, a three-thousand-pixel diagram spread its key
+    // across three thousand pixels: entries so far apart that finding one meant
+    // scrolling past the drawing.
+    renderBody(withStructured(big));
+    const entries = [...document.querySelectorAll("[data-legend-entry] text")];
+    const rightmost = Math.max(...entries.map((t) => Number(t.getAttribute("x"))));
+
+    expect(rightmost).toBeLessThan(900);
+  });
+
+  it("draws every element and every relationship, none overlapping", () => {
+    renderBody(withStructured(big));
+    const boxes = [...document.querySelectorAll("[data-element-role] rect")].map((r) => ({
+      x: Number(r.getAttribute("x")),
+      y: Number(r.getAttribute("y")),
+      w: Number(r.getAttribute("width")),
+      h: Number(r.getAttribute("height")),
+    }));
+
+    expect(boxes).toHaveLength(33);
+    expect(document.querySelectorAll("[data-relationship-role]")).toHaveLength(54);
+
+    const overlapping = boxes.flatMap((a, i) =>
+      boxes.slice(i + 1).filter((b) => !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y)),
+    );
+    expect(overlapping).toEqual([]);
+  });
+
+  it("keeps the key inside the canvas it is drawn on", () => {
+    renderBody(withStructured(big));
+    const svg = document.querySelector('svg[role="img"]')!;
+    const [left, , width] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+
+    for (const text of document.querySelectorAll("[data-legend-entry] text")) {
+      const right = Number(text.getAttribute("x")) + text.textContent!.length * 5.6;
+      expect(right, `"${text.textContent}" runs off the canvas`).toBeLessThanOrEqual(left + width);
+    }
+  });
+});
+
+describe("nothing drawn falls outside the canvas it is drawn on", () => {
+  /**
+   * The extent came from the boxes alone, and relationships do not stay inside them:
+   * a loop is drawn deliberately above its box, and the layout engine routes a long
+   * relationship around whatever it spans, which can carry it above the topmost box.
+   * Both were cut off at the top edge — visible on a real architecture, invisible to
+   * every test, because no test measured anything but the boxes.
+   */
+  const viewBoxOf = () => {
+    const svg = document.querySelector('svg[role="img"]')!;
+    const [x, y, w, h] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+    return { left: x, top: y, right: x + w, bottom: y + h };
+  };
+
+  const everyDrawnPoint = () =>
+    [...document.querySelectorAll('[data-relationship-role] path[data-edge="line"]')].flatMap((path) => {
+      const numbers = (path.getAttribute("d")!.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+      return numbers.reduce<{ x: number; y: number }[]>((points, value, index) => {
+        if (index % 2 === 0 && index + 1 < numbers.length) points.push({ x: value, y: numbers[index + 1] });
+        return points;
+      }, []);
+    });
+
+  const assertAllInside = () => {
+    const box = viewBoxOf();
+    for (const point of everyDrawnPoint()) {
+      expect(point.y, `a relationship reaches y=${point.y}, above the canvas top ${box.top}`).toBeGreaterThanOrEqual(box.top);
+      expect(point.y, `a relationship reaches y=${point.y}, below the canvas bottom ${box.bottom}`).toBeLessThanOrEqual(box.bottom);
+      expect(point.x).toBeGreaterThanOrEqual(box.left);
+      expect(point.x).toBeLessThanOrEqual(box.right);
+    }
+  };
+
+  it("makes room above the topmost box for a relationship that loops over it", () => {
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        data: {
+          nodes: [{ id: "a", label: "A" }],
+          edges: [{ from: "a", to: "a", kind: "feeds" }],
+        },
+      }),
+    );
+
+    // The loop is drawn above the box, so the canvas must start above the box too
+    const box = viewBoxOf();
+    const rect = document.querySelector("[data-element-role] rect")!;
+    expect(box.top).toBeLessThan(Number(rect.getAttribute("y")));
+    assertAllInside();
+  });
+
+  it("makes room for several loops stacked on one element", () => {
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        data: {
+          nodes: [{ id: "a", label: "A" }],
+          edges: [
+            { from: "a", to: "a", kind: "one" },
+            { from: "a", to: "a", kind: "two" },
+            { from: "a", to: "a", kind: "three" },
+          ],
+        },
+      }),
+    );
+    assertAllInside();
+  });
+
+  it("makes room for a routed relationship that goes around what it spans", () => {
+    const nodes = Array.from({ length: 12 }, (_, index) => ({ id: `n${index}`, label: `Node ${index}` }));
+    const edges = [
+      ...nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id, kind: "chain" })),
+      // The long ones: routed around the ranks between their ends
+      { from: "n0", to: "n11", kind: "spans" },
+      { from: "n11", to: "n0", kind: "returns" },
+      { from: "n1", to: "n9", kind: "spans" },
+    ];
+    renderBody(withStructured({ schema: S, kind: "graph", data: { nodes, edges } }));
+
+    assertAllInside();
+  });
+
+  it("keeps everything inside after the reader drags a box upwards", () => {
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        data: {
+          nodes: [
+            { id: "a", label: "A" },
+            { id: "b", label: "B" },
+          ],
+          edges: [
+            { from: "a", to: "b", kind: "k" },
+            { from: "a", to: "a", kind: "loop" },
+          ],
+        },
+      }),
+    );
+
+    const node = document.querySelector('[data-draggable="node"]')! as SVGGElement;
+    node.setPointerCapture = () => {};
+    node.releasePointerCapture = () => {};
+    const at = (x: number, y: number) => Object.assign(new MouseEvent("pointerdown", { bubbles: true, clientX: x, clientY: y, button: 0 }), { pointerId: 1 });
+    node.dispatchEvent(at(50, 200));
+    node.dispatchEvent(Object.assign(new MouseEvent("pointermove", { bubbles: true, clientX: 50, clientY: 40 }), { pointerId: 1 }));
+    node.dispatchEvent(Object.assign(new MouseEvent("pointerup", { bubbles: true, clientX: 50, clientY: 40 }), { pointerId: 1 }));
+
+    assertAllInside();
   });
 });

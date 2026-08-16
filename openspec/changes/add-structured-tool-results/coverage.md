@@ -1,7 +1,21 @@
 # Scenario-to-test matrix — add-structured-tool-results
 
-All 55 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
+All 74 `#### Scenario:` entries under `openspec/changes/add-structured-tool-results/specs/`,
 enumerated with `rg '^#### Scenario:' openspec/changes/add-structured-tool-results/specs/`.
+
+Nineteen arrived after the first pass, describing behaviour that was built and then
+specified: element kinds, the two-channel rendering that keeps type from competing
+with change, the key, narrowing the view, relationship geometry that does not lose a
+relationship, the textual equivalent's completeness, mutation needing a target, and a
+validator that runs where a producer is.
+
+**Evidence type** is stated for every row, because "covered" earned three different
+ways is three different claims:
+
+- *test* — an assertion that fails if the behaviour breaks
+- *invariant* — held by construction; what is asserted is the construction, since a
+  test of absent code only proves the code is still absent
+- *out-of-repo* — proven by running the shipped artifact somewhere the repository is not
 
 Test files, abbreviated below:
 
@@ -13,6 +27,8 @@ Test files, abbreviated below:
 - **UX** `ui/src/presentations/structuredExchange.test.ts` — roles, layout, export
 - **UV** `ui/src/presentations/StructuredExchangeView.test.tsx` — registry and rendered view
 - **ST** `server/test/structuredExchangeTool.test.ts` — the tool the agent presents through
+- **CLI** `server/test/structuredExchangeValidatorCli.test.ts` — the shipped validator, run from a temp dir
+- **SK** `server/test/bundledSkill.test.ts` — the bundled skill, through the SDK's own loader
 
 ## `utilities`
 
@@ -43,7 +59,7 @@ Test files, abbreviated below:
 | ReferencesSurviveUnaltered | covered | UV "keeps the document exactly as it was validated, not a re-serialisation of it" |
 | RelationshipPatchDeclaresItsEndpoints | covered | SP "declared whether or not the relationship carries a reference"; SE "a relationship always declares its endpoints" |
 | ReattachmentIsRemovalAndCreation | covered | SP "re-attachment is a removal and a creation" |
-| OmissionDoesNotRemove | **partial** | Nothing generates a removal from an omission, so there is no code path to test. Asserted indirectly by SP "a referenced element declaring nothing else is context". |
+| OmissionDoesNotRemove | covered *(invariant)* | UV "proposes no removal for something a proposal simply does not mention" and "presents exactly the removals declared, and no more". The invariant, stated: this application never holds the authority's model. It sees one document, so it cannot know what is absent from it and could not infer a removal even if the contract allowed one. Removals are declared or they do not exist — there is no inference to disable, and nothing to switch off wrongly. |
 | RemovalIsDeclared | covered | SP "name both a reference and what kind of thing they remove"; UV removals list |
 | OnlyDeclaredChangesChange | covered | SP "a referenced element may declare one field and leave the rest untouched"; UX "treats a reference with a declared field as a change" |
 | DescribedFieldsAreNotChanges | covered | SP "a referenced element states a change in set, and its own fields describe"; UX "treats a referenced element's own fields as description, not intent" — the case the inverted default exists for |
@@ -64,7 +80,7 @@ Test files, abbreviated below:
 | RefusalIdentifiesTheLimitThatBit | covered | SP "a bound refusal reports the limit, the observed value, and which level bit" |
 | OperationalLimitIsStricterThanTheCeiling | covered | SB "past the deployment's limit but within the ceiling is refused, and says so" |
 | AcceptedSizesAreObservable | covered | SB "acceptance reports what the document weighed" |
-| ApprovedProposalIsByteForByteWhatWasValidated | **partial** | UV proves the document is not re-serialised on this side. What cannot be proven here is byte-identity with what the *producer* wrote: the SDK hands the server a parsed object, so the bytes are fixed at the server, not at the producer. See the note below. |
+| ApprovedProposalIsExactlyWhatWasValidated | covered *(test)* | UV "hands on exactly the value that was validated" — identity asserted from the real validation boundary, declaration order included, which a normalising step would not preserve. Renamed from *ByteForByte*: the SDK hands the server a parsed object, so the producer's bytes do not exist on this side and promising identity with them would be a promise nothing keeps. What is guaranteed, and tested, is that nothing between validation and handover normalises, reorders or re-encodes. |
 | ProducerValidatesBeforeEmitting | covered | SC "the command-line interface agrees with the parser" — every valid case, exit zero |
 | ProducerReceivesActionableDiagnostics | covered | SC every invalid case exits 1 with the expected rule; SC "an unreadable input is distinguished from an invalid one" |
 | ApplicationValidatesOnReceipt | covered | UV "selects the structured presentation for a validated envelope" / "ignores an envelope that does not validate" — the client validates independently of anything the producer claims |
@@ -77,7 +93,7 @@ Test files, abbreviated below:
 | ProducerTextRemainsInert | covered | UV "renders markup-like labels as text"; UX "keeps producer text from becoming diagram syntax" |
 | ExportCarriesTheSameStructure | covered | UX "carries exactly the elements and relationships of the data it came from" |
 | ExportIsDeterministic | covered | UX "is deterministic" |
-| DiagramSyntaxIsNeverAnInput | **partial** | No parser of diagram syntax exists, so there is nothing to test. UX "keeps producer text from becoming diagram syntax" checks the adjacent risk: producer text cannot manufacture structure in the export. |
+| DiagramSyntaxIsNeverAnInput | covered *(invariant)* | UV "never reads diagram syntax back, whatever is sitting beside the data" drives a result whose own output is hostile mermaid and asserts the rendering is unchanged by it; UV "offers no way to turn diagram syntax into a document" asserts the module's surface — an export exists and no counterpart import does. The invariant: the export is a one-way door, and no parser of diagram syntax appears anywhere in the path that produces, completes or corrects a document. The hostile-export tests are separate and remain so. |
 | OriginalOutputStaysReachable | covered | UV "keeps the original output available" |
 | AgentPresentsAValidDocument | covered | ST "puts a validated document on the channel the interface reads"; confirmed in the running app |
 | AgentReceivesTheDiagnosticsForARefusal | covered | ST "names the rule and points at the offending value"; confirmed in the running app on an unknown schema version |
@@ -86,8 +102,9 @@ Test files, abbreviated below:
 
 ## Summary
 
-52 covered, 3 partial, 0 uncovered.
+74 covered, 0 partial, 0 uncovered.
 
+<!-- retired note -->
 Each partial is a scenario whose subject has no code path to exercise, not a
 behaviour left untested:
 

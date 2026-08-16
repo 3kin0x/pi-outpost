@@ -53,7 +53,7 @@ export type ChatItem =
        * as metadata the LLM does not see.
        *
        * Kept as the raw serialized form rather than a parsed object: an approved
-       * proposal has to be handed on byte for byte, and a value that has been
+       * proposal has to be handed on exactly as validated, and a value that has been
        * through a parse and a re-serialise is no longer the document that was
        * validated and shown.
        */

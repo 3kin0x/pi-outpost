@@ -501,6 +501,46 @@ Two relationships connecting the same pair of elements SHALL be permitted when t
 - **WHEN** two relationships connect the same pair of elements with different kinds
 - **THEN** both are presented, and neither replaces the other
 
+### Requirement: ElementsMayDeclareAnOpaqueKind
+
+An element MAY declare a kind, carrying the producing tool's own type or stereotype for it. The
+system SHALL treat it as the same opaque string a relationship's kind is: it MAY display it, MAY
+group or distinguish elements by it, and SHALL NOT interpret it, validate it against a fixed
+vocabulary, or alter behaviour based on its value. A patch MAY change it.
+
+The contract SHALL NOT carry presentation. A document SHALL NOT be able to specify a colour, a
+position, or any other appearance, because such a value means nothing to the authority that applies
+the proposal and would compete with the presentation of what is changing.
+
+#### Scenario: ElementKindIsOptionalAndUninterpreted
+- **WHEN** a document declares element kinds drawn from an unfamiliar vocabulary, and other elements declare none
+- **THEN** all of them are accepted, and no kind is rejected as unknown
+
+#### Scenario: ElementKindMayBeChangedByAPatch
+- **WHEN** a proposal references an existing element and declares a change to its kind
+- **THEN** the change is accepted and presented as a change to that element's type
+
+#### Scenario: PresentationIsNeverCarriedByTheDocument
+- **WHEN** a document attempts to declare an appearance for an element or relationship
+- **THEN** it is refused as an undeclared property rather than honoured
+
+### Requirement: MutationRequiresATarget
+
+A declared change SHALL be refused when the envelope names no target. Naming a target is what makes a
+document a proposal, and a change in a document that claims to describe a new artifact asks an
+authority to mutate something the reader was never shown as changing.
+
+Fields whose presence asserts that a document is a proposal SHALL be refused on a kind that cannot be
+proposed, and SHALL be refused on their presence rather than on their contents.
+
+#### Scenario: ChangeWithoutTargetIsRefused
+- **WHEN** an element or relationship declares a change and the envelope names no target
+- **THEN** the document is refused, naming the rule and pointing at the change
+
+#### Scenario: EmptyProposalFieldsAreStillRefusedOnAProjection
+- **WHEN** a projection declares a removals list that is empty
+- **THEN** the document is refused, because declaring the field at all asserts that it is a proposal
+
 ### Requirement: SemanticValidationAfterSchemaValidation
 
 The system SHALL perform deterministic semantic validation after schema validation, verifying that
@@ -604,9 +644,9 @@ How a proposal reaches the authority that applies it, and what that authority re
 outside this contract. This requirement covers only that nothing is lost or changed on this side of
 that boundary.
 
-#### Scenario: ApprovedProposalIsByteForByteWhatWasValidated
+#### Scenario: ApprovedProposalIsExactlyWhatWasValidated
 - **WHEN** a reader approves a proposal and it is recovered for handover
-- **THEN** it is exactly the document that was validated and displayed, unaltered
+- **THEN** it is exactly the value that was validated and displayed, with no normalisation, reordering, or re-encoding applied between validation and handover
 
 ### Requirement: ReferenceValidationAvailableToProducers
 
@@ -616,7 +656,12 @@ the published schema and the same semantic validation the application applies, a
 machine-readable diagnostics. Invalid input SHALL produce a non-zero process status.
 
 The interface and the schema SHALL be usable independently of this application, so that a producer
-built elsewhere can validate without reproducing the contract.
+built elsewhere can validate without reproducing the contract. The interface SHALL be executable
+without this application's source, its package manager, or a checkout of it.
+
+Its process status SHALL distinguish a document that does not conform from input that could not be
+read and from input that is not the expected encoding, because those send a producer to three
+different places.
 
 A successful producer-side validation SHALL NOT exempt the application from validating a received
 document again.
@@ -632,6 +677,14 @@ document again.
 #### Scenario: ApplicationValidatesOnReceipt
 - **WHEN** a document arrives that a producer states it has already validated
 - **THEN** the application validates it again before rendering it
+
+#### Scenario: TheValidatorRunsWhereTheProducerIs
+- **WHEN** the published validation interface is run outside this application, with none of its sources present
+- **THEN** it validates a document and reports its verdict
+
+#### Scenario: RefusalIsDistinguishedFromUnreadableInput
+- **WHEN** the interface is given a document that does not conform, input it cannot read, and input that is not the expected encoding
+- **THEN** each produces a different non-zero process status, and the meaning of each status is documented
 
 ### Requirement: ApprovalRenderingShowsWhatWouldChange
 
@@ -662,14 +715,24 @@ SHALL render columns in declared order and every cell in its corresponding row p
 
 The system SHALL NOT infer elements, relationships, messages, labels, or meaning from diagram syntax
 or from any accompanying text. Layout MAY choose geometry for readability, and geometry SHALL NOT be
-presented as data.
+presented as data. A document whose relationships form cycles SHALL be laid out at a size proportional
+to what it contains, and SHALL NOT be rendered at a scale that makes it illegible.
 
 Producer-supplied text SHALL be rendered as text and never as markup. Every view SHALL expose an
 accessible textual equivalent of what it displays.
 
+The textual equivalent SHALL carry everything the visual rendering carries: every element,
+participant, relationship and message, including any nothing connects to; every declared kind; and
+every addition, change and removal. Where the visual rendering and the textual equivalent name the
+same thing, they SHALL name it the same way.
+
 #### Scenario: GraphPreservesDeclaredRelationships
 - **WHEN** a valid graph is rendered
 - **THEN** exactly the declared elements and directed relationships are displayed
+
+#### Scenario: ACyclicGraphIsStillLegible
+- **WHEN** a graph whose relationships form feedback cycles is rendered
+- **THEN** its extent stays proportionate to the number of elements it declares, and no element is drawn over another
 
 #### Scenario: SequencePreservesDeclaredOrder
 - **WHEN** a valid sequence is rendered
@@ -679,9 +742,79 @@ accessible textual equivalent of what it displays.
 - **WHEN** a valid table is rendered
 - **THEN** columns and each row appear in their declared order
 
+#### Scenario: TheTextualEquivalentOmitsNothingVisual
+- **WHEN** a graph or sequence carrying kinds, changes, removals, and a participant no message reaches is presented
+- **THEN** the textual equivalent names all of them, using the same names the rendering displays
+
 #### Scenario: ProducerTextRemainsInert
 - **WHEN** a label or value contains markup-like text
 - **THEN** it is displayed as text and is neither executed nor interpreted as markup
+
+### Requirement: TypeIsDistinguishableFromChange
+
+Where a rendering distinguishes elements or relationships by their declared kind, it SHALL do so
+through a channel that does not compete with how it shows what is changing. Two distinct kinds
+present in the same rendering SHALL be distinguishable from one another. A rendering SHALL provide a
+key naming every kind it distinguishes, and that key SHALL be part of what an export carries.
+
+#### Scenario: TwoTypesNeverLookAlike
+- **WHEN** a document declares several distinct element or relationship kinds
+- **THEN** no two of them are presented identically
+
+#### Scenario: TypeDoesNotObscureChange
+- **WHEN** a proposal adds an element whose kind is shared with an element included for context
+- **THEN** the addition remains distinguishable from the context element
+
+#### Scenario: TheKeyTravelsWithTheFigure
+- **WHEN** a rendering that distinguishes kinds is exported
+- **THEN** the exported figure carries the key naming those kinds
+
+### Requirement: ReaderMayAdjustAndNarrowTheView
+
+A reader MAY adjust a rendering for legibility — repositioning what it draws, moving around it, and
+narrowing it to selected kinds. Every kind SHALL be shown by default.
+
+An adjustment SHALL be presentation only: it SHALL NOT alter the document, and SHALL NOT be carried
+back to any authority.
+
+While a rendering is narrowed, it SHALL state that it is showing less than the whole document, and
+that statement SHALL be part of what an export carries. For a proposal, the statement SHALL make
+clear that what is hidden remains part of the proposal, and a hidden kind SHALL NOT be marked in a
+way the same rendering uses for a removal.
+
+#### Scenario: EverythingIsShownUntilTheReaderNarrowsIt
+- **WHEN** a rendering that distinguishes kinds is first displayed
+- **THEN** every element and relationship of the document is shown
+
+#### Scenario: NarrowingIsReversibleAndDeclared
+- **WHEN** a reader hides a kind
+- **THEN** the rendering says what it is no longer showing, and offers to show everything again
+
+#### Scenario: ANarrowedProposalStillSaysWhatItProposes
+- **WHEN** a narrowed rendering of a proposal is exported
+- **THEN** the exported figure states how much of the document it shows and that hidden kinds remain part of the proposal
+
+#### Scenario: ElementAndRelationshipVocabulariesAreIndependent
+- **WHEN** an element kind and a relationship kind share the same name and the reader hides one of them
+- **THEN** only the one they hid is hidden
+
+#### Scenario: AdjustmentDoesNotAlterTheDocument
+- **WHEN** a reader repositions or narrows a rendering
+- **THEN** the document recovered for handover is unchanged
+
+### Requirement: EveryDeclaredRelationshipIsPerceptible
+
+Every relationship a validated document declares SHALL be perceptible in the rendering. A
+relationship connecting an element to itself SHALL be drawn with extent. Two relationships connecting
+the same pair of elements SHALL be drawn distinguishably from one another.
+
+#### Scenario: ASelfRelationshipIsVisible
+- **WHEN** a graph declares a relationship from an element to itself
+- **THEN** it is drawn as a shape with extent rather than collapsing to nothing
+
+#### Scenario: ParallelRelationshipsAreDrawnApart
+- **WHEN** two relationships connect the same pair of elements in the same direction
+- **THEN** each is drawn distinguishably from the other
 
 ### Requirement: DerivedDiagramExport
 

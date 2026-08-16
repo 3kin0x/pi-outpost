@@ -54,6 +54,42 @@ For the MCP setup, ensure `openlore mcp` is configured as an MCP server.
 See https://github.com/clay-good/OpenLore for details.
 <!-- END OPENLORE -->
 
+## OpenSpec exploration with OpenLore
+
+OpenSpec and OpenLore are independent tools with complementary responsibilities:
+
+- OpenSpec captures intended behaviour, requirements, scenarios, design decisions,
+  and implementation tasks.
+- OpenLore provides evidence about the existing implementation: entry points,
+  ownership, call paths, dependencies, tests, specifications, and likely impact.
+
+When exploring, proposing, reviewing, or updating an OpenSpec change for existing
+functionality, call `orient()` early, even if no source file has been opened yet.
+Describe both the intended capability and the relevant OpenSpec change when known.
+
+Use the result to:
+
+1. identify existing entry points and responsible modules;
+2. find behaviour or constraints missing from the OpenSpec artifacts;
+3. detect reuse opportunities, conflicts, and overlap with other functionality;
+4. locate relevant tests and existing specifications;
+5. estimate the implementation surface and risks.
+
+Reconcile three sources of truth explicitly:
+
+1. the requested intent;
+2. the OpenSpec artifacts;
+3. the implementation evidence returned by OpenLore.
+
+OpenLore evidence informs the exploration but does not replace requirements or
+silently redefine the intended behaviour. When the sources disagree, report the
+discrepancy and resolve it in the OpenSpec artifacts before implementation.
+
+For a purely greenfield or conceptual exploration, `orient()` may return little
+useful evidence; continue with OpenSpec and state that no relevant implementation
+surface was found. If OpenLore is unavailable, use targeted repository inspection
+and report the fallback.
+
 ## Tooling & CLI Constraints
 - ALWAYS use `rg` (ripgrep) instead of `grep` for code search and file inspection.
 - NEVER run recursive `grep -r` commands. `rg` is faster and respects `.gitignore`.
@@ -63,7 +99,8 @@ See https://github.com/clay-good/OpenLore for details.
 Before calling a feature complete, prove that every applicable OpenSpec scenario
 is covered by testing:
 
-1. Follow the OpenLore workflow above, then enumerate every `#### Scenario:` in
+1. Follow the OpenSpec exploration with OpenLore workflow above, then enumerate
+   every `#### Scenario:` in
    the relevant main and delta specs. Verify the list with
    `rg '^#### Scenario:' openspec/` so scenarios cannot be silently omitted.
 2. Produce an explicit scenario-to-test matrix. Classify every scenario as

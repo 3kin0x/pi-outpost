@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type {
   StructuredElement,
   StructuredGraphData,
@@ -92,6 +93,12 @@ const KIND_TINTS: { fill: string; stroke: string }[] = [
   { fill: "#fdf4ff", stroke: "#c026d3" },
   { fill: "#fefce8", stroke: "#ca8a04" },
   { fill: "#f8fafc", stroke: "#475569" },
+  { fill: "#eef2ff", stroke: "#4f46e5" },
+  { fill: "#fef2f2", stroke: "#b91c1c" },
+  { fill: "#f0fdf4", stroke: "#16a34a" },
+  { fill: "#fdf2f8", stroke: "#db2777" },
+  { fill: "#f5f5f4", stroke: "#78716c" },
+  { fill: "#f0f9ff", stroke: "#0369a1" },
 ];
 
 type Tint = { fill: string; stroke: string };
@@ -120,6 +127,8 @@ function hashOf(kind: string): number {
  * Distinctness wins the trade: stability across documents is a convenience, two
  * things that look alike and are not is a misreading.
  */
+export const KIND_TINT_COUNT = KIND_TINTS.length;
+
 export function assignTints(kinds: string[]): Map<string, Tint> {
   const assigned = new Map<string, Tint>();
   const taken = new Set<number>();
@@ -159,7 +168,22 @@ export function filterKey(of: FilterScope, kind: string): string {
 
 const LEGEND_ROW = 17;
 const LEGEND_GAP = 18;
-const LEGEND_TITLE = 58;
+const LEGEND_TITLE = 92;
+
+/**
+ * How wide the key is allowed to run, whatever the canvas measures.
+ *
+ * Wrapping at the diagram's own width, a thirty-three element architecture three
+ * thousand pixels across laid its key out across all three thousand — entries so far
+ * apart that scanning for one meant scrolling. A key is read as a block, and the
+ * block does not get wider because the drawing did.
+ */
+const LEGEND_MEASURE = 860;
+
+/** The width the key wraps at: its own measure, or the canvas when that is narrower. */
+function legendMeasure(width: number): number {
+  return Math.min(width, LEGEND_MEASURE);
+}
 
 /** One line of the key: what the swatches mean, and the swatches. */
 export type LegendEntry = {
@@ -188,11 +212,12 @@ function entryWidth(label: string): number {
 
 /** Rows a group needs, so the canvas can make room before anything is drawn. */
 function groupRows(group: LegendGroup, width: number): number {
+  const measure = legendMeasure(width);
   let rows = 1;
   let cursor = 0;
   for (const entry of group.entries) {
     const needed = entryWidth(entry.label);
-    if (cursor > 0 && LEGEND_TITLE + cursor + needed > width - 20) {
+    if (cursor > 0 && LEGEND_TITLE + cursor + needed > measure - 20) {
       rows += 1;
       cursor = 0;
     }
@@ -213,7 +238,7 @@ function legendMinimumWidth(groups: LegendGroup[]): number {
   const widest = groups
     .flatMap((group) => group.entries)
     .reduce((wide, entry) => Math.max(wide, entryWidth(entry.label)), 0);
-  return widest === 0 ? 0 : LEGEND_TITLE + widest + 32;
+  return widest === 0 ? 0 : Math.min(LEGEND_TITLE + widest + 32, LEGEND_MEASURE);
 }
 
 /** How tall the whole key will be. */
@@ -250,6 +275,7 @@ function Legend({
   const populated = groups.filter((group) => group.entries.length > 0);
   if (populated.length === 0) return null;
 
+  const measure = legendMeasure(width);
   let row = 0;
 
   return (
@@ -260,7 +286,7 @@ function Legend({
 
         const drawn = group.entries.map((entry) => {
           const needed = entryWidth(entry.label);
-          if (cursor > 0 && LEGEND_TITLE + cursor + needed > width - 20) {
+          if (cursor > 0 && LEGEND_TITLE + cursor + needed > measure - 20) {
             row += 1;
             cursor = 0;
           }
@@ -667,6 +693,23 @@ function edgePath(
   };
 }
 
+/** Every coordinate a generated path passes through. */
+export function pathExtent(d: string): { minX: number; minY: number; maxX: number; maxY: number } | undefined {
+  const numbers = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+  if (numbers.length < 2) return undefined;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let index = 0; index + 1 < numbers.length; index += 2) {
+    minX = Math.min(minX, numbers[index]);
+    maxX = Math.max(maxX, numbers[index]);
+    minY = Math.min(minY, numbers[index + 1]);
+    maxY = Math.max(maxY, numbers[index + 1]);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
 function edgeSummary(data: StructuredGraphData, edge: StructuredGraphData["edges"][number], role: ChangeRole): string {
   const name = (id: string) => {
     const node = data.nodes.find((candidate) => candidate.id === id);
@@ -716,6 +759,17 @@ function GraphView({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragging, setDragging] = useState<string | undefined>(undefined);
   const [panning, setPanning] = useState(false);
+  /**
+   * What the pointer is over, and where to say so.
+   *
+   * A relationship's own label is drawn on it only when there is room, and a long
+   * diagram scrolls — so the two relationships hardest to identify are exactly the
+   * ones whose label was dropped and the ones that run off the edge. The native
+   * `<title>` needs a hit on a one-pixel line and appears wherever the browser likes;
+   * this follows the pointer and is positioned in the viewport, so it is never
+   * clipped by the box the diagram scrolls in.
+   */
+  const [hovered, setHovered] = useState<{ text: string; x: number; y: number } | undefined>(undefined);
   /**
    * Teardown for a gesture still in flight.
    *
@@ -768,29 +822,23 @@ function GraphView({
     return { x, y, cx: x + placed.width / 2, cy: y + placed.height / 2, w: placed.width, h: placed.height };
   };
 
-  // A nudged box can leave the computed extent in any direction, so the canvas
-  // follows it in any direction. Bounded below at zero only, the first drag upwards
-  // or leftwards clipped the box against the edge instead of making room for it.
-  const drawn = layout.nodes.map((node) => boxFor(node.id)!);
-  const left = Math.min(0, ...drawn.map((box) => box.x - 12));
-  const top = Math.min(0, ...drawn.map((box) => box.y - 12));
-  const right = Math.max(layout.width, ...drawn.map((box) => box.x + box.w + 12));
-  const bottom = Math.max(layout.height, ...drawn.map((box) => box.y + box.h + 12));
-  const diagramWidth = right - left;
-  const diagramHeight = bottom - top;
-
-  // One colour table for the whole diagram, so an element type and a relationship
-  // type never contend for the same slot and end up drawn alike.
-  const tints = useMemo(
-    () => assignTints([...kindsPresent(data.nodes), ...kindsPresent(data.edges)]),
-    [data],
-  );
+  /**
+   * A colour table per vocabulary.
+   *
+   * Elements and relationships are independent vocabularies drawn on independent
+   * channels — a fill and a stroke — so contending for the same palette slots only
+   * exhausted it sooner. A real thirty-three element architecture declared fourteen
+   * element types and thirty-four relationship types; sharing one table, four pairs
+   * of unrelated element types came out the same colour.
+   */
+  const elementTints = useMemo(() => assignTints(kindsPresent(data.nodes)), [data.nodes]);
+  const relationshipTints = useMemo(() => assignTints(kindsPresent(data.edges)), [data.edges]);
 
   // The key explains the two channels the picture uses, and only the parts of them
   // this document exercises: no types declared, no type key; not a proposal, no roles.
   const legend = useMemo((): LegendGroup[] => {
     const swatch = (of: FilterScope) => (kind: string) => {
-      const tint = tints.get(kind)!;
+      const tint = (of === "element" ? elementTints : relationshipTints).get(kind)!;
       return {
         label: kind,
         fill: tint.fill,
@@ -800,9 +848,20 @@ function GraphView({
         hidden: hidden.has(filterKey(of, kind)),
       };
     };
+    // Past the palette, colours repeat. Saying so is the difference between a key
+    // that is incomplete and a key that is wrong: a reader who trusts colour alone
+    // would otherwise read two unrelated types as one.
+    const heading = (noun: string, count: number) =>
+      count > KIND_TINT_COUNT ? `${noun} (${count} types, colours repeat)` : noun;
+    const elementKinds = kindsPresent(data.nodes);
+    const relationshipKinds = kindsPresent(data.edges);
     const groups: LegendGroup[] = [
-      { title: "elements", sample: "box", entries: kindsPresent(data.nodes).map(swatch("element")) },
-      { title: "relationships", sample: "line", entries: kindsPresent(data.edges).map(swatch("relationship")) },
+      { title: heading("elements", elementKinds.length), sample: "box", entries: elementKinds.map(swatch("element")) },
+      {
+        title: heading("relationships", relationshipKinds.length),
+        sample: "line",
+        entries: relationshipKinds.map(swatch("relationship")),
+      },
     ];
 
     if (isProposal) {
@@ -822,7 +881,7 @@ function GraphView({
       });
     }
     return groups;
-  }, [data, shown, isProposal, tints, hidden]);
+  }, [data, shown, isProposal, elementTints, relationshipTints, hidden]);
 
   /**
    * Which relationships share a pair of endpoints, and in what order.
@@ -856,13 +915,44 @@ function GraphView({
     return routes;
   }, [layout, shown]);
 
+  /**
+   * Where every relationship goes, worked out before the canvas is sized.
+   *
+   * The extent used to come from the boxes alone, and relationships do not stay
+   * inside them: the layout engine routes a long one around what it spans, which can
+   * carry it above the topmost box, and a loop is drawn deliberately above the box it
+   * belongs to. Both fell outside the viewBox and were simply cut off at the top edge.
+   */
+  const shapes = shown.edges.map((edge) => {
+    const from = boxFor(edge.from);
+    const to = boxFor(edge.to);
+    if (from === undefined || to === undefined) return undefined;
+    const moved = nudges.has(edge.from) || nudges.has(edge.to);
+    return edgePath(from, edge.from === edge.to ? from : to, moved ? undefined : routeOf.get(edge), rankOf.get(edge) ?? 0);
+  });
+
+  // A nudged box can leave the computed extent in any direction, so the canvas
+  // follows it in any direction. Bounded below at zero only, the first drag upwards
+  // or leftwards clipped the box against the edge instead of making room for it.
+  const drawn = layout.nodes.map((node) => boxFor(node.id)!);
+  const routes = shapes.flatMap((shape) => {
+    const extent = shape === undefined ? undefined : pathExtent(shape.d);
+    return extent === undefined ? [] : [extent];
+  });
+  const left = Math.min(0, ...drawn.map((box) => box.x - 12), ...routes.map((route) => route.minX - 12));
+  const top = Math.min(0, ...drawn.map((box) => box.y - 12), ...routes.map((route) => route.minY - 14));
+  const right = Math.max(layout.width, ...drawn.map((box) => box.x + box.w + 12), ...routes.map((route) => route.maxX + 12));
+  const bottom = Math.max(layout.height, ...drawn.map((box) => box.y + box.h + 12), ...routes.map((route) => route.maxY + 12));
+  const diagramWidth = right - left;
+  const diagramHeight = bottom - top;
+
   // Worked out once: the lines need it, and so do the arrowheads.
   const edgePaint = (edge: (typeof data.edges)[number]) => {
     const role = relationshipRole(edge, isProposal);
     // Same rule as the boxes: type carries the colour, role takes the line back the
     // moment it has something to say about it.
     if (role !== "unchanged") return RELATIONSHIP_PAINT[role];
-    return (edge.kind === undefined ? undefined : tints.get(edge.kind)?.stroke) ?? RELATIONSHIP_PAINT[role];
+    return (edge.kind === undefined ? undefined : relationshipTints.get(edge.kind)?.stroke) ?? RELATIONSHIP_PAINT[role];
   };
   const arrowPaints = [...new Set(shown.edges.map(edgePaint))];
 
@@ -986,6 +1076,18 @@ function GraphView({
           reset layout
         </button>
       )}
+      {hovered !== undefined && (
+        <div
+          data-testid="relationship-tooltip"
+          role="tooltip"
+          // Fixed to the viewport, so a diagram scrolling inside a narrow column
+          // cannot clip the one thing explaining what is off its edge.
+          style={{ position: "fixed", left: hovered.x + 14, top: hovered.y + 14, zIndex: 120 }}
+          className="pointer-events-none max-w-sm rounded bg-zinc-900 px-2 py-1 text-xs text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900"
+        >
+          {hovered.text}
+        </div>
+      )}
       <svg
         ref={svgRef}
         role="img"
@@ -1014,22 +1116,38 @@ function GraphView({
           const changes = fieldChanges(edge);
           const described = edge.label ?? edge.kind;
           // A layout route stops matching once the reader has moved either end of it
-          const moved = nudges.has(edge.from) || nudges.has(edge.to);
-          const shape = edgePath(
-            from,
-            edge.from === edge.to ? from : to,
-            moved ? undefined : routeOf.get(edge),
-            rankOf.get(edge) ?? 0,
-          );
+          const shape = shapes[index]!;
           // A label wider than the run it sits on ends up printed under the box it
           // points at, which reads as a clipped word rather than a missing one. Past
           // that point the hover carries it.
           const roomFor = (text: string) => text.length * 5.2 + 8 <= shape.span;
 
           return (
-            <g key={`edge-${index}`} data-relationship-role={role} data-relationship-shape={edge.from === edge.to ? "loop" : "open"}>
+            <g
+              key={`edge-${index}`}
+              data-relationship-role={role}
+              data-relationship-shape={edge.from === edge.to ? "loop" : "open"}
+              onPointerEnter={(event) =>
+                setHovered({ text: edgeSummary(data, edge, role), x: event.clientX, y: event.clientY })
+              }
+              onPointerMove={(event) =>
+                setHovered({ text: edgeSummary(data, edge, role), x: event.clientX, y: event.clientY })
+              }
+              onPointerLeave={() => setHovered(undefined)}
+            >
               <title>{edgeSummary(data, edge, role)}</title>
+              {/* A line is one or two pixels wide and nobody can reliably hover one */}
               <path
+                data-edge="hit"
+                d={shape.d}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={14}
+                pointerEvents="stroke"
+              />
+              <path
+                data-edge="line"
+                pointerEvents="none"
                 d={shape.d}
                 fill="none"
                 stroke={paint}
@@ -1091,7 +1209,7 @@ function GraphView({
                 height={box.h}
                 role={role}
                 label={displayLabel(node)}
-                tint={node.kind === undefined ? undefined : tints.get(node.kind)}
+                tint={node.kind === undefined ? undefined : elementTints.get(node.kind)}
                 changes={fieldChanges(node)}
                 title={elementSummary(node, role)}
               />
@@ -1401,14 +1519,24 @@ function EnlargedView({
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+
+  /**
+   * Rendered into the document body rather than where it sits in the tree.
+   *
+   * `position: fixed` and a z-index are only as absolute as the nearest ancestor
+   * that made a stacking context, and this modal lives deep inside the transcript.
+   * The composer and the toolbar are in other branches with contexts of their own, so
+   * they painted over an overlay that was nominally above them — leaving controls
+   * visible and clickable through a dialog that had claimed the screen.
+   */
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label={`${label}, full size`}
       data-testid="structured-enlarged"
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-black/50 p-6"
+      className="fixed inset-0 z-[100] flex items-center justify-center overflow-auto bg-black/60 p-6"
     >
       <div
         onClick={(event) => event.stopPropagation()}
@@ -1432,7 +1560,8 @@ function EnlargedView({
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    globalThis.document.body,
   );
 }
 
