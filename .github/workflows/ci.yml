@@ -33,6 +33,12 @@ jobs:
       # suites drive a real server in a subprocess: its coverage is not ours to
       # claim, and loading them all made node truncate its own report at 10 MB.
       # Windows runs nothing instrumented, so a coverage tool cannot turn that leg red.
+      #
+      # src/embeddedRuntime.ts is excluded too: it is a thin adapter over the pi SDK's
+      # AgentSession (every method delegates), exercised only by the .mjs suites above.
+      # Its sole caller (src/index.ts) is already excluded, but node's coverage
+      # instruments it non-deterministically when it appears in the transitive import
+      # graph — pulling ~49 uncovered functions into a total the unit suites cannot reach.
       - run: npm run test:coverage --workspace server
         if: matrix.os == 'ubuntu-latest'
         env:
