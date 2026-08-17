@@ -24,6 +24,26 @@
       "type": "string",
       "maxLength": 500
     },
+    "container": {
+      "description": "A named group of elements or participants. Grouping only: relationships connect elements and cross container boundaries freely, and a container carries no relationship of its own.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/localId"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        }
+      }
+    },
     "kind": {
       "description": "The producing tool's type or stereotype for this thing \u2014 'block', 'sensor', 'power', 'thermal'. Free text, because the vocabulary belongs to the domain and not to this contract. Carries meaning, not presentation: a reader may colour by it, and a consumer may map it back to its own type system.",
       "type": "string",
@@ -51,6 +71,9 @@
         },
         "set": {
           "$ref": "#/$defs/elementChange"
+        },
+        "container": {
+          "$ref": "#/$defs/localId"
         }
       },
       "if": {
@@ -185,6 +208,9 @@
         },
         "kind": {
           "$ref": "#/$defs/kind"
+        },
+        "container": {
+          "$ref": "#/$defs/localId"
         }
       }
     },
@@ -257,6 +283,13 @@
               "items": {
                 "$ref": "#/$defs/edge"
               }
+            },
+            "containers": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "$ref": "#/$defs/container"
+              }
             }
           }
         },
@@ -281,6 +314,13 @@
               "maxItems": 1000,
               "items": {
                 "$ref": "#/$defs/message"
+              }
+            },
+            "containers": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "$ref": "#/$defs/container"
               }
             }
           }

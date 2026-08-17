@@ -123,12 +123,57 @@ export type Point = { x: number; y: number };
 export type PlacedEdge = { index: number; points: Point[] };
 
 /** A laid-out graph: boxes in a plane, the routes between them, and the extent. */
-export type GraphLayout = { nodes: PlacedNode[]; edges: PlacedEdge[]; width: number; height: number };
+/**
+ * A container's enclosure, as dagre computed it around its members.
+ *
+ * Geometry only. Membership is declared on the member and stays there; this is
+ * where the box ended up once the layout had placed what it holds.
+ */
+export type PlacedContainer = { id: string; label: string; x: number; y: number; width: number; height: number };
+
+export type GraphLayout = {
+  nodes: PlacedNode[];
+  edges: PlacedEdge[];
+  containers: PlacedContainer[];
+  width: number;
+  height: number;
+};
+
+/**
+ * The enclosure around a set of member boxes: their extent, plus room to breathe
+ * and a strip for the label.
+ *
+ * Exported because it is computed twice — once by the layout, and again by the
+ * view whenever the reader has moved a member. Both must agree on what "inside
+ * the container" means, and a second implementation of that is a second answer.
+ */
+export function encloseMembers(
+  members: readonly { x: number; y: number; width: number; height: number }[],
+): { x: number; y: number; width: number; height: number } | undefined {
+  if (members.length === 0) return undefined;
+  const left = Math.min(...members.map((member) => member.x));
+  const top = Math.min(...members.map((member) => member.y));
+  const right = Math.max(...members.map((member) => member.x + member.width));
+  const bottom = Math.max(...members.map((member) => member.y + member.height));
+  return {
+    x: left - CONTAINER_PAD,
+    y: top - CONTAINER_PAD - CONTAINER_LABEL,
+    width: right - left + CONTAINER_PAD * 2,
+    height: bottom - top + CONTAINER_PAD * 2 + CONTAINER_LABEL,
+  };
+}
 
 /** Spacing between the boxes, in the same units as the sizes handed in. */
 const RANK_GAP = 64;
 const NODE_GAP = 24;
 const MARGIN = 12;
+/** Breathing room inside an enclosure, and the strip its label sits in. */
+const CONTAINER_PAD = 10;
+const CONTAINER_LABEL = 16;
+const CONTAINER_GAP = 16;
+/** What an enclosure holding nothing is drawn as — big enough to read as a container. */
+const EMPTY_CONTAINER_WIDTH = 160;
+const EMPTY_CONTAINER_HEIGHT = 52;
 
 /**
  * A layered layout, delegated to dagre.
@@ -157,11 +202,28 @@ export function layoutGraph(
   data: StructuredGraphData,
   size: (node: StructuredElement) => { width: number; height: number },
 ): GraphLayout {
-  const graph = new dagre.graphlib.Graph({ multigraph: true });
+  // `compound` so a container can be a node that holds other nodes. Dagre then
+  // places the members together and reports the enclosing box it computed, which
+  // is the whole of what a container costs this layout: no second engine, and the
+  // elements and relationships come out placed exactly as they would ungrouped.
+  const graph = new dagre.graphlib.Graph({ compound: true, multigraph: true });
   graph.setGraph({ rankdir: "LR", ranksep: RANK_GAP, nodesep: NODE_GAP, marginx: MARGIN, marginy: MARGIN });
   graph.setDefaultEdgeLabel(() => ({}));
 
   for (const node of data.nodes) graph.setNode(node.id, size(node));
+
+  // A container is laid out only if it holds something. Dagre gives an empty
+  // cluster no extent, so an empty one is placed by hand below — it is declared,
+  // so it is drawn.
+  const declared = data.containers ?? [];
+  const held = new Map<string, string[]>();
+  for (const node of data.nodes) {
+    if (node.container === undefined) continue;
+    if (!declared.some((container) => container.id === node.container)) continue;
+    graph.setNode(node.container, { label: node.container });
+    graph.setParent(node.id, node.container);
+    held.set(node.container, [...(held.get(node.container) ?? []), node.id]);
+  }
   // Named by index so two relationships between the same pair stay two edges;
   // collapsed, the second one would silently stop influencing the layout.
   data.edges.forEach((edge, index) => {
@@ -197,14 +259,73 @@ export function layoutGraph(
     }
   });
 
+  // The enclosures, in declared order, measured from where the members actually
+  // ended up rather than read back from dagre's cluster. The two agree here — but
+  // only here: the reader may drag a box afterwards, and an enclosure that came
+  // from the layout would stay behind while its member walked out of it. Deriving
+  // it from the members means the view can re-derive it the same way at any time.
+  const placedContainers: PlacedContainer[] = [];
+  let emptyAt = nodes.reduce((bottom, node) => Math.max(bottom, node.y + node.height), MARGIN) + CONTAINER_GAP;
+  const placedById = new Map(nodes.map((node) => [node.id, node]));
+  for (const container of declared) {
+    const members = (held.get(container.id) ?? []).flatMap((id) => {
+      const node = placedById.get(id);
+      return node === undefined ? [] : [node];
+    });
+    const box = encloseMembers(members);
+    if (box !== undefined) {
+      placedContainers.push({ id: container.id, label: container.label, ...box });
+    } else {
+      placedContainers.push({
+        id: container.id,
+        label: container.label,
+        x: MARGIN,
+        y: emptyAt,
+        width: EMPTY_CONTAINER_WIDTH,
+        height: EMPTY_CONTAINER_HEIGHT,
+      });
+      emptyAt += EMPTY_CONTAINER_HEIGHT + CONTAINER_GAP;
+    }
+  }
+
+  // An enclosure reaches past the members it holds — padding on every side and a
+  // strip for its label — so the topmost one lands above where dagre started, at a
+  // negative coordinate that the viewport would simply cut off. Shift everything
+  // back into view rather than clipping the box that says what the group is.
+  const drawn = [
+    ...nodes.map((node) => ({ x: node.x, y: node.y, width: node.width, height: node.height })),
+    ...placedContainers,
+  ];
+  const offsetX = Math.min(0, ...drawn.map((item) => item.x)) - MARGIN;
+  const offsetY = Math.min(0, ...drawn.map((item) => item.y)) - MARGIN;
+  if (offsetX < 0 || offsetY < 0) {
+    for (const node of nodes) {
+      node.x -= offsetX;
+      node.y -= offsetY;
+    }
+    for (const container of placedContainers) {
+      container.x -= offsetX;
+      container.y -= offsetY;
+    }
+    for (const edge of edges) {
+      for (const point of edge.points) {
+        point.x -= offsetX;
+        point.y -= offsetY;
+      }
+    }
+  }
+
   // dagre's own graph extent ignores nothing, but a node it failed to place would
-  // fall outside it, so measure what is actually drawn.
-  const extent = nodes.reduce(
-    (box, node) => ({ width: Math.max(box.width, node.x + node.width), height: Math.max(box.height, node.y + node.height) }),
+  // fall outside it, so measure what is actually drawn — enclosures included.
+  const extent = [
+    ...nodes.map((node) => ({ x: node.x, y: node.y, width: node.width, height: node.height })),
+    ...placedContainers,
+  ].reduce(
+    (box, item) => ({ width: Math.max(box.width, item.x + item.width), height: Math.max(box.height, item.y + item.height) }),
     { width: 0, height: 0 },
   );
 
-  return { nodes, edges, width: extent.width + MARGIN, height: extent.height + MARGIN };
+  return { nodes, edges, containers: placedContainers, width: extent.width + MARGIN, height: extent.height + MARGIN };
 }
 
 /**
@@ -226,6 +347,8 @@ export type DescribedThing = {
   kind?: string;
   role: ChangeRole;
   changes: FieldChange[];
+  /** The container it belongs to, by identifier, when it names one. */
+  container?: string;
 };
 
 export type DescribedLink = {
@@ -249,6 +372,8 @@ export type StructureDescription = {
   links: DescribedLink[];
   columns?: string[];
   rows?: (string | number | boolean | null)[][];
+  /** Every declared container, including one no member names. */
+  containers: { id: string; label: string }[];
   removals: { type: string; ref: string }[];
 };
 
@@ -267,6 +392,7 @@ export function describeStructure(
       links: [],
       columns: data.columns,
       rows: data.rows,
+      containers: [],
       removals,
     };
   }
@@ -291,6 +417,7 @@ export function describeStructure(
       kind: thing.kind,
       role: elementRole(thing, isProposal),
       changes: fieldChanges(thing),
+      container: thing.container,
     })),
     links: connections.map((link) => ({
       from: link.from,
@@ -305,6 +432,9 @@ export function describeStructure(
       changes: fieldChanges(link),
       isLoop: link.from === link.to,
     })),
+    containers: (isGraph
+      ? (envelope.data as StructuredGraphData).containers
+      : (envelope.data as StructuredSequenceData).containers) ?? [],
     removals,
   };
 }
@@ -326,7 +456,23 @@ export function toMermaid(envelope: ValidatedStructuredExchange): string | undef
   if (envelope.kind === "graph") {
     const data = envelope.data as StructuredGraphData;
     const lines = ["flowchart TD"];
-    for (const node of data.nodes) lines.push(`  ${safeId(node.id)}["${escapeMermaid(displayLabel(node))}"]`);
+    // Grouped nodes go inside their subgraph, ungrouped ones outside it, and the
+    // relationships are declared after all of them — an edge crosses boundaries, so
+    // it belongs to no group and is never nested in one.
+    const containers = data.containers ?? [];
+    const declared = new Set(containers.map((container) => container.id));
+    const grouped = (id: string) => data.nodes.filter((node) => node.container === id);
+    for (const container of containers) {
+      lines.push(`  subgraph ${safeId(container.id)}["${escapeMermaid(container.label)}"]`);
+      for (const node of grouped(container.id)) {
+        lines.push(`    ${safeId(node.id)}["${escapeMermaid(displayLabel(node))}"]`);
+      }
+      lines.push("  end");
+    }
+    for (const node of data.nodes) {
+      if (node.container !== undefined && declared.has(node.container)) continue;
+      lines.push(`  ${safeId(node.id)}["${escapeMermaid(displayLabel(node))}"]`);
+    }
     for (const edge of data.edges) {
       const label = edge.label ?? edge.kind;
       const arrow = label === undefined ? "-->" : `-- "${escapeMermaid(label)}" -->`;
@@ -337,8 +483,23 @@ export function toMermaid(envelope: ValidatedStructuredExchange): string | undef
   if (envelope.kind === "sequence") {
     const data = envelope.data as StructuredSequenceData;
     const lines = ["sequenceDiagram"];
+    // `box` groups participants the same way the view does, so the export and the
+    // picture say the same thing. Mermaid takes a box's members in the order they
+    // are declared inside it, which is the order the view puts them in.
+    const containers = data.containers ?? [];
+    const declared = new Set(containers.map((container) => container.id));
+    const participantLine = (participant: StructuredElement, indent: string) =>
+      `${indent}participant ${safeId(participant.id)} as "${escapeMermaid(displayLabel(participant))}"`;
+    for (const container of containers) {
+      lines.push(`  box ${escapeMermaid(container.label)}`);
+      for (const participant of data.participants.filter((candidate) => candidate.container === container.id)) {
+        lines.push(participantLine(participant, "    "));
+      }
+      lines.push("  end");
+    }
     for (const participant of data.participants) {
-      lines.push(`  participant ${safeId(participant.id)} as "${escapeMermaid(displayLabel(participant))}"`);
+      if (participant.container !== undefined && declared.has(participant.container)) continue;
+      lines.push(participantLine(participant, "  "));
     }
     for (const message of data.messages) {
       lines.push(`  ${safeId(message.from)}->>${safeId(message.to)}: ${escapeMermaid(message.label ?? "")}`);

@@ -258,7 +258,7 @@ test.describe("diagrams in the widget", () => {
 
     // The card opens expanded, so the enlarge control is already there. Named by
     // its aria-label: the Mermaid diagram above it is captioned "⤢ enlarge" too.
-    await page.getByRole("button", { name: /Show graph view at full size/ }).click();
+    await page.getByRole("button", { name: /Show graph view at full size/ }).first().click();
 
     const overlay = await readOverlay(page, "structured-enlarged");
     expect(overlay).toEqual({
@@ -307,7 +307,7 @@ test.describe("diagrams in the widget", () => {
     await openHost(page, { ...withDiagrams(), theme: "light" });
     await expect(page.getByTitle("connected")).toBeVisible();
 
-    await page.getByRole("button", { name: /Show graph view at full size/ }).click();
+    await page.getByRole("button", { name: /Show graph view at full size/ }).first().click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
     await page.keyboard.press("Escape");
@@ -359,5 +359,113 @@ test.describe("the theme a deployment configured", () => {
     await expect
       .poll(() => page.evaluate(() => (document.querySelector("#widget") as HTMLElement).dataset.theme))
       .toBe("dark");
+  });
+});
+
+/**
+ * Containers, in the widget rather than in jsdom.
+ *
+ * The unit suites can assert the geometry; only the browser can say that the
+ * boxes are actually drawn behind a real layout, at a real size, inside the
+ * shadow root — and that a container's header spans the columns it should after
+ * the view has reordered them.
+ */
+test.describe("containers in a structured exchange", () => {
+  const openTranscript = async (page: Page) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+  };
+
+  test("draws every declared container, including the one nothing joins", async ({ page }) => {
+    await openTranscript(page);
+
+    const drawn = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      return [...shadow.querySelectorAll("[data-container]")].map((g) => g.getAttribute("data-container"));
+    });
+
+    // Graph: three, one of them empty. Sequence: two, after reordering.
+    expect(drawn).toEqual(["electrical", "control", "hydraulic", "electrical", "control"]);
+    await expect(page.getByText("Hydraulic system").first()).toBeVisible();
+  });
+
+  test("lays a graph's members inside their own enclosure", async ({ page }) => {
+    await openTranscript(page);
+
+    const placement = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const svg = [...shadow.querySelectorAll('svg[aria-label^="Graph"]')].find(
+        (candidate) => candidate.querySelector("[data-container]") !== null,
+      )!;
+      const boxOf = (selector: string) => {
+        const rect = svg.querySelector(selector)!.querySelector("rect")!;
+        const read = (name: string) => Number(rect.getAttribute(name));
+        return { x: read("x"), y: read("y"), width: read("width"), height: read("height") };
+      };
+      const within = (inner: ReturnType<typeof boxOf>, outer: ReturnType<typeof boxOf>) =>
+        inner.x >= outer.x &&
+        inner.y >= outer.y &&
+        inner.x + inner.width <= outer.x + outer.width &&
+        inner.y + inner.height <= outer.y + outer.height;
+      const electrical = boxOf('[data-container="electrical"]');
+      return {
+        battery: within(boxOf('[data-element-id="battery"]'), electrical),
+        alternator: within(boxOf('[data-element-id="alternator"]'), electrical),
+        driverIsOutside: !within(boxOf('[data-element-id="driver"]'), electrical),
+      };
+    });
+
+    expect(placement).toEqual({ battery: true, alternator: true, driverIsOutside: true });
+  });
+
+  test("orders sequence columns so each container gets one header", async ({ page }) => {
+    await openTranscript(page);
+
+    const sequence = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const svg = shadow.querySelector('svg[aria-label^="Sequence"]')!;
+      const columns = [...svg.querySelectorAll("[data-element-id]")]
+        .map((g) => ({ id: g.getAttribute("data-element-id"), x: Number(g.querySelector("rect")!.getAttribute("x")) }))
+        .sort((a, b) => a.x - b.x)
+        .map((column) => column.id);
+      const headers = [...svg.querySelectorAll("[data-container]")].map((g) => {
+        const rect = g.querySelector("rect")!;
+        return {
+          id: g.getAttribute("data-container"),
+          x: Number(rect.getAttribute("x")),
+          right: Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")),
+        };
+      });
+      return { columns, headers };
+    });
+
+    // Declared battery(E), ecu(C), alternator(E), dash(C) — drawn regrouped
+    expect(sequence.columns).toEqual(["battery", "alternator", "ecu", "dash"]);
+    expect(sequence.headers.map((header) => header.id)).toEqual(["electrical", "control"]);
+    // The electrical header sits entirely left of the control one: they span
+    // adjacent, non-overlapping runs of columns.
+    expect(sequence.headers[0]!.right).toBeLessThanOrEqual(sequence.headers[1]!.x);
+  });
+
+  test("a diagram with containers still enlarges into the shadow root", async ({ page }) => {
+    await openTranscript(page);
+
+    await page
+      .locator("#widget")
+      .getByRole("button", { name: /Show graph view at full size/ })
+      .nth(1)
+      .click();
+
+    const overlay = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const dialog = shadow.querySelector('[data-testid="structured-enlarged"]');
+      if (!dialog) return null;
+      return {
+        position: getComputedStyle(dialog).position,
+        containers: dialog.querySelectorAll("[data-container]").length,
+      };
+    });
+
+    expect(overlay).toEqual({ position: "fixed", containers: 3 });
   });
 });

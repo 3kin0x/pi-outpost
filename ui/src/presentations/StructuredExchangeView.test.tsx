@@ -2451,3 +2451,307 @@ describe("the key shows what the picture shows", () => {
     });
   }
 });
+
+/**
+ * Containers group what is drawn without changing how it is drawn. The second
+ * half of that sentence is the one worth testing: the promise is that a producer
+ * can add grouping to an existing document and get the same diagram back with
+ * boxes around parts of it, not a redrawn one.
+ */
+describe("containers", () => {
+  const nodes = [
+    { id: "battery", label: "Battery" },
+    { id: "alternator", label: "Alternator" },
+    { id: "ecu", label: "Engine control unit" },
+    { id: "driver", label: "Driver" },
+  ];
+  const edges = [
+    { from: "driver", to: "ecu", kind: "operates" },
+    { from: "ecu", to: "battery", kind: "reads" },
+    { from: "alternator", to: "battery", kind: "charges" },
+  ];
+  const ungrouped = { schema: S, kind: "graph", data: { nodes, edges } };
+  const grouped = {
+    schema: S,
+    kind: "graph",
+    data: {
+      containers: [
+        { id: "electrical", label: "Electrical system" },
+        { id: "hydraulic", label: "Hydraulic system" },
+      ],
+      nodes: nodes.map((node) =>
+        node.id === "battery" || node.id === "alternator" ? { ...node, container: "electrical" } : node,
+      ),
+      edges,
+    },
+  };
+
+  it("draws every declared container, including one no member names", () => {
+    const { container } = renderBody(withStructured(grouped));
+
+    const drawn = [...container.querySelectorAll("[data-container]")].map((g) => g.getAttribute("data-container"));
+    expect(drawn).toEqual(["electrical", "hydraulic"]);
+    expect(screen.getByText("Electrical system")).toBeInTheDocument();
+    expect(screen.getByText("Hydraulic system")).toBeInTheDocument();
+  });
+
+  it("lays every member out inside its own container and no other", () => {
+    const { container } = renderBody(withStructured(grouped));
+
+    const box = (selector: string) => {
+      const rect = container.querySelector(selector)!.querySelector("rect")!;
+      const read = (name: string) => Number(rect.getAttribute(name));
+      return { x: read("x"), y: read("y"), width: read("width"), height: read("height") };
+    };
+    const enclosure = box('[data-container="electrical"]');
+    const contains = (inner: { x: number; y: number; width: number; height: number }) =>
+      inner.x >= enclosure.x &&
+      inner.y >= enclosure.y &&
+      inner.x + inner.width <= enclosure.x + enclosure.width &&
+      inner.y + inner.height <= enclosure.y + enclosure.height;
+
+    expect(contains(box('[data-element-id="battery"]'))).toBe(true);
+    expect(contains(box('[data-element-id="alternator"]'))).toBe(true);
+    // The one outside it must really be outside, or the enclosure means nothing
+    expect(contains(box('[data-element-id="driver"]'))).toBe(false);
+  });
+
+  it("still renders a relationship that crosses a boundary", () => {
+    const { container } = renderBody(withStructured(grouped));
+
+    // ecu is outside the enclosure, battery is inside it
+    expect(container.querySelectorAll("[data-relationship-role]")).toHaveLength(edges.length);
+  });
+
+  it("draws the elements and relationships exactly as it would without the grouping", () => {
+    // The claim in the spec: adding containers adds geometry around a diagram and
+    // takes nothing away from it.
+    const geometry = (document: unknown) => {
+      const { container, unmount } = renderBody(withStructured(document));
+      const boxes = [...container.querySelectorAll("[data-element-id]")].map((g) => ({
+        id: g.getAttribute("data-element-id"),
+        d: [...g.querySelectorAll("rect")].map((r) => r.getAttribute("width") + "x" + r.getAttribute("height")).join(),
+      }));
+      const relationships = container.querySelectorAll("[data-relationship-role]").length;
+      unmount();
+      return { boxes, relationships };
+    };
+
+    expect(geometry(grouped)).toEqual(geometry(ungrouped));
+  });
+});
+
+/**
+ * A sequence keeps its columns. A container is a header over them, and the only
+ * thing it may move is the order of the columns themselves — because a header
+ * can only span columns that touch.
+ */
+describe("sequence containers", () => {
+  const sequence = (over: Record<string, unknown>) => ({
+    schema: S,
+    kind: "sequence",
+    data: {
+      messages: [
+        { from: "battery", to: "ecu", label: "voltage" },
+        { from: "ecu", to: "dash", label: "warning" },
+      ],
+      ...over,
+    },
+  });
+
+  const columns = (container: HTMLElement) =>
+    [...container.querySelectorAll("[data-element-id]")].map((g) => ({
+      id: g.getAttribute("data-element-id"),
+      x: Number(g.querySelector("rect")!.getAttribute("x")),
+    }))
+      .sort((a, b) => a.x - b.x)
+      .map((column) => column.id);
+
+  it("orders interleaved members so each container is drawn with one header", () => {
+    // Declared battery(E), ecu(C), alternator(E), dash(C) — as written, neither
+    // container occupies adjacent columns.
+    const { container } = renderBody(
+      withStructured(
+        sequence({
+          containers: [
+            { id: "electrical", label: "Electrical system" },
+            { id: "control", label: "Control system" },
+          ],
+          participants: [
+            { id: "battery", label: "Battery", container: "electrical" },
+            { id: "ecu", label: "ECU", container: "control" },
+            { id: "alternator", label: "Alternator", container: "electrical" },
+            { id: "dash", label: "Dashboard", container: "control" },
+          ],
+        }),
+      ),
+    );
+
+    expect(columns(container)).toEqual(["battery", "alternator", "ecu", "dash"]);
+    // One band each, not two for a split container
+    const bands = [...container.querySelectorAll("[data-container]")].map((g) => g.getAttribute("data-container"));
+    expect(bands).toEqual(["electrical", "control"]);
+  });
+
+  it("leaves declared column order alone when nothing is grouped", () => {
+    const { container } = renderBody(
+      withStructured(
+        sequence({
+          participants: [
+            { id: "battery", label: "Battery" },
+            { id: "ecu", label: "ECU" },
+            { id: "dash", label: "Dashboard" },
+          ],
+        }),
+      ),
+    );
+
+    expect(columns(container)).toEqual(["battery", "ecu", "dash"]);
+    expect(container.querySelectorAll("[data-container]")).toHaveLength(0);
+  });
+
+  it("keeps an ungrouped participant in its place", () => {
+    const { container } = renderBody(
+      withStructured(
+        sequence({
+          containers: [{ id: "control", label: "Control system" }],
+          participants: [
+            { id: "battery", label: "Battery" },
+            { id: "ecu", label: "ECU", container: "control" },
+            { id: "dash", label: "Dashboard", container: "control" },
+          ],
+        }),
+      ),
+    );
+
+    expect(columns(container)).toEqual(["battery", "ecu", "dash"]);
+  });
+
+  it("still draws one lifeline per participant and every message", () => {
+    const { container } = renderBody(
+      withStructured(
+        sequence({
+          containers: [{ id: "control", label: "Control system" }],
+          participants: [
+            { id: "battery", label: "Battery" },
+            { id: "ecu", label: "ECU", container: "control" },
+            { id: "dash", label: "Dashboard", container: "control" },
+          ],
+        }),
+      ),
+    );
+
+    expect(container.querySelectorAll('line[stroke-dasharray="3 3"]')).toHaveLength(3);
+    expect(container.querySelectorAll("[data-relationship-role]")).toHaveLength(2);
+  });
+});
+
+describe("the textual equivalent carries membership", () => {
+  const grouped = {
+    schema: S,
+    kind: "graph",
+    data: {
+      containers: [
+        { id: "electrical", label: "Electrical system" },
+        { id: "hydraulic", label: "Hydraulic system" },
+      ],
+      nodes: [
+        { id: "battery", label: "Battery", container: "electrical" },
+        { id: "driver", label: "Driver" },
+      ],
+      edges: [{ from: "driver", to: "battery", kind: "operates" }],
+    },
+  };
+
+  it("names every container, its members, and what belongs to none", () => {
+    renderBody(withStructured(grouped));
+    fireEvent.click(screen.getByText(/show text equivalent/));
+
+    const text = screen.getByTestId("structured-text-equivalent").textContent ?? "";
+    // A reader here cannot see the boxes, so an empty one has to be said out loud
+    expect(text).toContain("Electrical system: Battery");
+    expect(text).toContain("Hydraulic system: no members");
+    expect(text).toContain("Battery in Electrical system");
+    // The ungrouped one is named without being put anywhere
+    expect(text).toMatch(/^Driver$/m);
+  });
+});
+
+describe("an enclosure follows the member the reader moves", () => {
+  const grouped = {
+    schema: S,
+    kind: "graph",
+    data: {
+      containers: [{ id: "electrical", label: "Electrical system" }],
+      nodes: [
+        { id: "battery", label: "Battery", container: "electrical" },
+        { id: "alternator", label: "Alternator", container: "electrical" },
+        { id: "driver", label: "Driver" },
+      ],
+      edges: [{ from: "driver", to: "battery", kind: "operates" }],
+    },
+  };
+
+  const rectOf = (container: HTMLElement, selector: string) => {
+    const rect = container.querySelector(selector)!.querySelector("rect")!;
+    const read = (name: string) => Number(rect.getAttribute(name));
+    return { x: read("x"), y: read("y"), width: read("width"), height: read("height") };
+  };
+  const holds = (outer: ReturnType<typeof rectOf>, inner: ReturnType<typeof rectOf>) =>
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height;
+
+  it("grows to keep a dragged member inside it", () => {
+    // Otherwise the box stays where the layout put it while its member walks out,
+    // and the picture says the element belongs somewhere it does not.
+    const { container } = renderBody(withStructured(grouped));
+    const before = rectOf(container, '[data-container="electrical"]');
+
+    dragBox(0, { x: 140, y: 90 });
+
+    const after = rectOf(container, '[data-container="electrical"]');
+    expect(after).not.toEqual(before);
+    expect(holds(after, rectOf(container, '[data-element-id="battery"]'))).toBe(true);
+    expect(holds(after, rectOf(container, '[data-element-id="alternator"]'))).toBe(true);
+  });
+
+  it("does not swallow an element that belongs to no container", () => {
+    const { container } = renderBody(withStructured(grouped));
+
+    dragBox(0, { x: 140, y: 90 });
+
+    // Growing to follow a member must not turn a neighbour into a member
+    const enclosure = rectOf(container, '[data-container="electrical"]');
+    const driver = rectOf(container, '[data-element-id="driver"]');
+    expect(holds(enclosure, driver)).toBe(false);
+  });
+});
+
+describe("a proposal that moves a member", () => {
+  it("presents the move as a change to that element, like any other", () => {
+    renderBody(
+      withStructured({
+        schema: S,
+        kind: "graph",
+        target: "artifact-1",
+        data: {
+          containers: [
+            { id: "electrical", label: "Electrical system" },
+            { id: "control", label: "Control system" },
+          ],
+          nodes: [
+            { id: "sensor", ref: "EL-4", label: "Sensor", container: "electrical", set: { container: "control" } },
+          ],
+          edges: [],
+        },
+      }),
+    );
+    fireEvent.click(screen.getByText(/show text equivalent/));
+
+    const text = screen.getByTestId("structured-text-equivalent").textContent ?? "";
+    expect(text).toContain("(changed)");
+    expect(text).toMatch(/container.*electrical.*control/);
+  });
+});

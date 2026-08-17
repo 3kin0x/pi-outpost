@@ -1,0 +1,28 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "target": "artifact-1",
+  "data": {
+    "containers": [
+      {
+        "id": "electrical",
+        "label": "Electrical system"
+      },
+      {
+        "id": "control",
+        "label": "Control system"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "sensor",
+        "ref": "EL-4",
+        "container": "electrical",
+        "set": {
+          "container": "control"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

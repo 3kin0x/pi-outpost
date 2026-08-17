@@ -1,0 +1,45 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "sequence",
+  "data": {
+    "containers": [
+      {
+        "id": "client",
+        "label": "Client side"
+      },
+      {
+        "id": "backend",
+        "label": "Backend"
+      }
+    ],
+    "participants": [
+      {
+        "id": "browser",
+        "label": "Browser",
+        "container": "client"
+      },
+      {
+        "id": "widget",
+        "label": "Widget",
+        "container": "client"
+      },
+      {
+        "id": "server",
+        "label": "Server",
+        "container": "backend"
+      }
+    ],
+    "messages": [
+      {
+        "from": "browser",
+        "to": "widget",
+        "label": "mount"
+      },
+      {
+        "from": "widget",
+        "to": "server",
+        "label": "connect"
+      }
+    ]
+  }
+}

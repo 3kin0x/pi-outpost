@@ -1,0 +1,216 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "containers": [
+      {
+        "id": "c0",
+        "label": "Container 0"
+      },
+      {
+        "id": "c1",
+        "label": "Container 1"
+      },
+      {
+        "id": "c2",
+        "label": "Container 2"
+      },
+      {
+        "id": "c3",
+        "label": "Container 3"
+      },
+      {
+        "id": "c4",
+        "label": "Container 4"
+      },
+      {
+        "id": "c5",
+        "label": "Container 5"
+      },
+      {
+        "id": "c6",
+        "label": "Container 6"
+      },
+      {
+        "id": "c7",
+        "label": "Container 7"
+      },
+      {
+        "id": "c8",
+        "label": "Container 8"
+      },
+      {
+        "id": "c9",
+        "label": "Container 9"
+      },
+      {
+        "id": "c10",
+        "label": "Container 10"
+      },
+      {
+        "id": "c11",
+        "label": "Container 11"
+      },
+      {
+        "id": "c12",
+        "label": "Container 12"
+      },
+      {
+        "id": "c13",
+        "label": "Container 13"
+      },
+      {
+        "id": "c14",
+        "label": "Container 14"
+      },
+      {
+        "id": "c15",
+        "label": "Container 15"
+      },
+      {
+        "id": "c16",
+        "label": "Container 16"
+      },
+      {
+        "id": "c17",
+        "label": "Container 17"
+      },
+      {
+        "id": "c18",
+        "label": "Container 18"
+      },
+      {
+        "id": "c19",
+        "label": "Container 19"
+      },
+      {
+        "id": "c20",
+        "label": "Container 20"
+      },
+      {
+        "id": "c21",
+        "label": "Container 21"
+      },
+      {
+        "id": "c22",
+        "label": "Container 22"
+      },
+      {
+        "id": "c23",
+        "label": "Container 23"
+      },
+      {
+        "id": "c24",
+        "label": "Container 24"
+      },
+      {
+        "id": "c25",
+        "label": "Container 25"
+      },
+      {
+        "id": "c26",
+        "label": "Container 26"
+      },
+      {
+        "id": "c27",
+        "label": "Container 27"
+      },
+      {
+        "id": "c28",
+        "label": "Container 28"
+      },
+      {
+        "id": "c29",
+        "label": "Container 29"
+      },
+      {
+        "id": "c30",
+        "label": "Container 30"
+      },
+      {
+        "id": "c31",
+        "label": "Container 31"
+      },
+      {
+        "id": "c32",
+        "label": "Container 32"
+      },
+      {
+        "id": "c33",
+        "label": "Container 33"
+      },
+      {
+        "id": "c34",
+        "label": "Container 34"
+      },
+      {
+        "id": "c35",
+        "label": "Container 35"
+      },
+      {
+        "id": "c36",
+        "label": "Container 36"
+      },
+      {
+        "id": "c37",
+        "label": "Container 37"
+      },
+      {
+        "id": "c38",
+        "label": "Container 38"
+      },
+      {
+        "id": "c39",
+        "label": "Container 39"
+      },
+      {
+        "id": "c40",
+        "label": "Container 40"
+      },
+      {
+        "id": "c41",
+        "label": "Container 41"
+      },
+      {
+        "id": "c42",
+        "label": "Container 42"
+      },
+      {
+        "id": "c43",
+        "label": "Container 43"
+      },
+      {
+        "id": "c44",
+        "label": "Container 44"
+      },
+      {
+        "id": "c45",
+        "label": "Container 45"
+      },
+      {
+        "id": "c46",
+        "label": "Container 46"
+      },
+      {
+        "id": "c47",
+        "label": "Container 47"
+      },
+      {
+        "id": "c48",
+        "label": "Container 48"
+      },
+      {
+        "id": "c49",
+        "label": "Container 49"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "only",
+        "label": "Only element",
+        "container": "c0"
+      }
+    ],
+    "edges": []
+  }
+}

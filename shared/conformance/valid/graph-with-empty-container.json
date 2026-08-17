@@ -1,0 +1,24 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "containers": [
+      {
+        "id": "electrical",
+        "label": "Electrical system"
+      },
+      {
+        "id": "hydraulic",
+        "label": "Hydraulic system"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "battery",
+        "label": "Battery",
+        "container": "electrical"
+      }
+    ],
+    "edges": []
+  }
+}

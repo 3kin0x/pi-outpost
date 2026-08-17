@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EnlargedView } from "../components/EnlargedView";
 import type {
+  StructuredContainer,
   StructuredElement,
   StructuredMessage,
   StructuredRemoval,
@@ -14,6 +15,7 @@ import {
   displayLabel,
   elementRole,
   fieldChanges,
+  encloseMembers,
   layoutGraph,
   relationshipRole,
   ROLE_LABEL,
@@ -528,6 +530,7 @@ function Box({
   title,
   anchor = "start",
   hover,
+  elementId,
 }: {
   x: number;
   y: number;
@@ -540,6 +543,8 @@ function Box({
   title: string;
   anchor?: "start" | "middle";
   hover?: ReturnType<ReturnType<typeof useDiagramTooltip>["hover"]>;
+  /** The envelope-scoped identifier, so what is drawn can be tied back to what was declared. */
+  elementId?: string;
 }) {
   const role_paint = ROLE_PAINT[role];
   /**
@@ -565,7 +570,7 @@ function Box({
   const textX = anchor === "middle" ? x + width / 2 : x + 8;
 
   return (
-    <g data-element-role={role} {...hover}>
+    <g data-element-role={role} data-element-id={elementId} {...hover}>
       <title>{title}</title>
       <rect
         x={x}
@@ -964,7 +969,11 @@ function GraphView({
         present.has(edge.from) &&
         present.has(edge.to),
     );
-    return { nodes, edges };
+    // Containers survive the filter. A reader narrowing the view by type is saying
+    // which relationships and elements to show, not which groups exist — and a
+    // container whose members are all filtered out still stands for something the
+    // document declared.
+    return { nodes, edges, containers: data.containers };
   }, [data, hidden]);
 
   const layout = useMemo(() => layoutGraph(shown, sizeOf), [shown, sizeOf]);
@@ -978,6 +987,32 @@ function GraphView({
     const y = placed.y + (nudge?.dy ?? 0);
     return { x, y, cx: x + placed.width / 2, cy: y + placed.height / 2, w: placed.width, h: placed.height };
   };
+
+  /**
+   * The enclosures as drawn, which is not always as laid out.
+   *
+   * A reader may drag a member, and an enclosure taken from the layout would stay
+   * where it was while its member walked out of it — leaving the picture saying
+   * the element belongs somewhere it does not. Re-measured from the boxes as they
+   * actually stand, by the same function the layout used, so the two cannot drift
+   * apart. A container no member names keeps the box the layout gave it: there is
+   * nothing to measure.
+   */
+  const enclosures = useMemo(
+    () =>
+      layout.containers.map((container) => {
+        const members = shown.nodes
+          .filter((node) => node.container === container.id)
+          .flatMap((node) => {
+            const box = boxFor(node.id);
+            return box === undefined ? [] : [{ x: box.x, y: box.y, width: box.w, height: box.h }];
+          });
+        const measured = encloseMembers(members);
+        return measured === undefined ? container : { ...container, ...measured };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- boxFor reads `nudges`, which is in the list
+    [layout.containers, shown, nudges],
+  );
 
   /**
    * A colour table per vocabulary.
@@ -1275,6 +1310,28 @@ function GraphView({
         <rect x={left} y={top} width={width} height={height} fill={PAPER} />
         <ArrowMarkers prefix="se-arrow" paints={arrowPaints} />
 
+        {/* Enclosures first, so they sit behind what they hold. A container groups
+            and does not mediate: it is drawn, and nothing about the elements or the
+            relationships inside it is drawn differently for being grouped. */}
+        {enclosures.map((container) => (
+          <g key={`container-${container.id}`} data-container={container.id}>
+            <rect
+              x={container.x}
+              y={container.y}
+              width={container.width}
+              height={container.height}
+              rx={8}
+              fill="none"
+              stroke={MUTED}
+              strokeOpacity={0.55}
+              strokeDasharray="5 3"
+            />
+            <text x={container.x + 8} y={container.y + 12} fontSize={10} fill={MUTED}>
+              {container.label}
+            </text>
+          </g>
+        ))}
+
         {shown.edges.map((edge, index) => {
           const from = boxFor(edge.from);
           const to = boxFor(edge.to);
@@ -1390,6 +1447,7 @@ function GraphView({
                 changes={fieldChanges(node)}
                 title={elementSummary(node, role)}
                 hover={hover(elementSummary(node, role))}
+                elementId={node.id}
               />
             </g>
           );
@@ -1428,6 +1486,8 @@ function GraphView({
 /* ── Sequence ───────────────────────────────────────────────────────────────── */
 
 const MESSAGE_GAP = 40;
+/** The strip a container header sits in, above the participant boxes. */
+const CONTAINER_BAND = 22;
 const SELF_LOOP = 26;
 
 /**
@@ -1439,9 +1499,64 @@ const SELF_LOOP = 26;
  * view should be the good one and the export the convenience.
  */
 function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isProposal: boolean }) {
+  /**
+   * The columns, ordered so a container's members are adjacent.
+   *
+   * A header can only span columns that touch, so a document declaring
+   * `battery, ecu, alternator, dash` cannot be drawn with one header per
+   * container as written. Rather than break a container into several headers,
+   * the view moves the columns — and moves them by a rule a producer can predict
+   * rather than by whatever the layout finds convenient: walking the declared
+   * order, the first member of a container met brings the rest of that container
+   * with it, in their own declared order, and a participant belonging to nothing
+   * keeps its place.
+   *
+   * The cost is real: declared order means something in a sequence. This departs
+   * from it as little as grouping allows, and only when containers are declared
+   * at all.
+   */
+  const ordered = useMemo(() => {
+    const containers = data.containers ?? [];
+    if (containers.length === 0) return data.participants;
+    const declared = new Set(containers.map((container) => container.id));
+    const placed = new Set<string>();
+    const columns: StructuredElement[] = [];
+    for (const participant of data.participants) {
+      if (placed.has(participant.id)) continue;
+      const group = participant.container;
+      if (group === undefined || !declared.has(group)) {
+        columns.push(participant);
+        placed.add(participant.id);
+        continue;
+      }
+      for (const member of data.participants) {
+        if (member.container !== group || placed.has(member.id)) continue;
+        columns.push(member);
+        placed.add(member.id);
+      }
+    }
+    return columns;
+  }, [data.participants, data.containers]);
+
+  /** Runs of adjacent columns sharing a container — what a header may span. */
+  const bands = useMemo(() => {
+    const containers = data.containers ?? [];
+    const runs: { container: StructuredContainer; from: number; to: number }[] = [];
+    ordered.forEach((participant, index) => {
+      const container = containers.find((candidate) => candidate.id === participant.container);
+      if (container === undefined) return;
+      const last = runs.at(-1);
+      if (last !== undefined && last.container.id === container.id && last.to === index - 1) last.to = index;
+      else runs.push({ container, from: index, to: index });
+    });
+    return runs;
+  }, [ordered, data.containers]);
+
+  const bandHeight = (data.containers ?? []).length > 0 ? CONTAINER_BAND : 0;
+
   const columnOf = useMemo(
-    () => new Map(data.participants.map((participant, index) => [participant.id, index])),
-    [data.participants],
+    () => new Map(ordered.map((participant, index) => [participant.id, index])),
+    [ordered],
   );
   const lifelineX = useMemo(
     () =>
@@ -1475,7 +1590,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
   );
   const x = (id: string) => (columnOf.get(id) ?? 0) * lifelineX + lifelineX / 2;
   const diagramWidth = Math.max(data.participants.length * lifelineX, 240);
-  const diagramHeight = headerHeight + (data.messages.length + 1) * MESSAGE_GAP;
+  const diagramHeight = bandHeight + headerHeight + (data.messages.length + 1) * MESSAGE_GAP;
 
   // Participants are elements and carry a type like any other; a message does not,
   // because its label is what it is.
@@ -1534,11 +1649,37 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
       <rect x={0} y={0} width={width} height={height} fill={PAPER} />
       <ArrowMarkers prefix="se-msg" paints={ROLES.map((role) => RELATIONSHIP_PAINT[role])} />
 
-      {data.participants.map((participant) => (
+      {/* One header per container, spanning exactly its own columns. Everything
+          below it — a column and a lifeline per participant, messages in declared
+          order — is drawn as it was before containers existed. */}
+      {bands.map((band) => {
+        const left = band.from * lifelineX + (lifelineX - boxW) / 2;
+        const right = band.to * lifelineX + (lifelineX + boxW) / 2;
+        return (
+          <g key={`band-${band.container.id}-${band.from}`} data-container={band.container.id}>
+            <rect
+              x={left}
+              y={2}
+              width={right - left}
+              height={CONTAINER_BAND - 6}
+              rx={5}
+              fill="none"
+              stroke={MUTED}
+              strokeOpacity={0.55}
+              strokeDasharray="5 3"
+            />
+            <text x={(left + right) / 2} y={CONTAINER_BAND - 9} fontSize={10} textAnchor="middle" fill={MUTED}>
+              {band.container.label}
+            </text>
+          </g>
+        );
+      })}
+
+      {ordered.map((participant) => (
         <line
           key={`life-${participant.id}`}
           x1={x(participant.id)}
-          y1={headerHeight}
+          y1={bandHeight + headerHeight}
           x2={x(participant.id)}
           y2={diagramHeight - 6}
           stroke="#d4d4d8"
@@ -1547,13 +1688,13 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
         />
       ))}
 
-      {data.participants.map((participant) => {
+      {ordered.map((participant) => {
         const role = elementRole(participant, isProposal);
         return (
           <Box
             key={participant.id}
             x={x(participant.id) - boxW / 2}
-            y={4}
+            y={bandHeight + 4}
             width={boxW}
             height={headerHeight - 8}
             role={role}
@@ -1563,6 +1704,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
             title={elementSummary(participant, role)}
             hover={hover(elementSummary(participant, role))}
             anchor="middle"
+            elementId={participant.id}
           />
         );
       })}
@@ -1571,7 +1713,7 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
         const role = relationshipRole(message, isProposal);
         const summary = messageSummary(data, message, index, role);
         const paint = RELATIONSHIP_PAINT[role];
-        const y = headerHeight + (index + 1) * MESSAGE_GAP;
+        const y = bandHeight + headerHeight + (index + 1) * MESSAGE_GAP;
         const fromX = x(message.from);
         const toX = x(message.to);
         const isSelf = message.from === message.to;
@@ -1714,14 +1856,34 @@ function textualEquivalent(envelope: ValidatedStructuredExchange, isProposal: bo
   } else {
     // Named and counted, so a reader who cannot see the picture knows how much of it
     // there is — and so a thing nothing connects to is still in the account.
-    lines.push(`${described.things.length} ${described.thingNoun}s, ${described.links.length} ${described.linkNoun}s`);
+    lines.push(
+      [
+        `${described.things.length} ${described.thingNoun}s`,
+        `${described.links.length} ${described.linkNoun}s`,
+        ...(described.containers.length > 0 ? [`${described.containers.length} containers`] : []),
+      ].join(", "),
+    );
     lines.push("");
 
+    // Named before the things that belong to them, and named even when empty: a
+    // reader on the words is reading them *because* they cannot see the boxes, so
+    // a container the picture draws and the words omit is, for them, not there.
+    if (described.containers.length > 0) {
+      for (const container of described.containers) {
+        const members = described.things.filter((thing) => thing.container === container.id);
+        lines.push(`${container.label}: ${members.length === 0 ? "no members" : members.map((m) => m.label).join(", ")}`);
+      }
+      lines.push("");
+    }
+
+    const containerLabel = new Map(described.containers.map((container) => [container.id, container.label]));
     for (const thing of described.things) {
+      const within = thing.container === undefined ? undefined : containerLabel.get(thing.container);
       lines.push(
         [
           thing.label,
           thing.kind === undefined ? "" : ` [${thing.kind}]`,
+          within === undefined ? "" : ` in ${within}`,
           thing.role === "unchanged" ? "" : ` (${ROLE_LABEL[thing.role]})`,
           thing.changes.length === 0 ? "" : ` — ${thing.changes.map(changeText).join(", ")}`,
         ].join(""),
