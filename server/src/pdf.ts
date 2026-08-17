@@ -372,6 +372,72 @@ export function pdfjsAssetDirs(): { standardFontDataUrl?: string; cMapUrl?: stri
   }
 }
 
+/**
+ * The slice of `DOMMatrix` that headless text extraction uses.
+ *
+ * pdf.js builds one per glyph when it compiles a Type3 char proc whose body is
+ * an image mask, and `getTextContent()` reaches that code: a Type3 font's char
+ * procs are parsed when the font loads, before any text comes back. Its Node
+ * build also constructs one at module scope, so a missing global fails the
+ * `import` itself rather than the page.
+ *
+ * Only a scale followed by a translate is ever asked for, and nothing here
+ * renders, so the six components and those two operations are the whole
+ * requirement. Semantics are `DOMMatrix`'s: both post-multiply, and `scaleSelf`
+ * with one argument scales both axes.
+ */
+export class FallbackDOMMatrix {
+  a = 1;
+  b = 0;
+  c = 0;
+  d = 1;
+  e = 0;
+  f = 0;
+
+  scaleSelf(scaleX = 1, scaleY = scaleX): this {
+    this.a *= scaleX;
+    this.b *= scaleX;
+    this.c *= scaleY;
+    this.d *= scaleY;
+    return this;
+  }
+
+  translateSelf(tx = 0, ty = 0): this {
+    this.e += this.a * tx + this.c * ty;
+    this.f += this.b * tx + this.d * ty;
+    return this;
+  }
+}
+
+/**
+ * Give pdf.js the `DOMMatrix` it expects to find on the global object.
+ *
+ * pdf.js polyfills it from `@napi-rs/canvas`, an optional native package that is
+ * absent from the single-file build and from any install that skipped optional
+ * dependencies. Where it is missing, upstream only warns — and then every
+ * extraction of a document carrying a Type3 font dies with `DOMMatrix is not
+ * defined`, returning no text at all rather than degraded text.
+ *
+ * The real implementation is preferred when it is installed, so rendering
+ * elsewhere in the process keeps a complete matrix; the fallback covers the case
+ * upstream leaves broken. Exported for the tests.
+ */
+export function ensureDomMatrix(): void {
+  const globals = globalThis as { DOMMatrix?: unknown };
+  if (globals.DOMMatrix) return;
+  try {
+    const require = createRequire(import.meta.url);
+    const canvas = require("@napi-rs/canvas") as { DOMMatrix?: unknown };
+    if (canvas.DOMMatrix) {
+      globals.DOMMatrix = canvas.DOMMatrix;
+      return;
+    }
+  } catch {
+    // No native canvas here — the fallback below is what text extraction needs.
+  }
+  globals.DOMMatrix = FallbackDOMMatrix;
+}
+
 interface PdfJsTextItem {
   str?: string;
   width?: number;
@@ -398,6 +464,8 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
 }
 
 async function openDocument(bytes: Uint8Array, timeoutMs: number): Promise<{ doc: PdfJsDocument; destroy: () => Promise<void> }> {
+  // Before the import: pdf.js reads `DOMMatrix` while the module evaluates.
+  ensureDomMatrix();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const task = pdfjs.getDocument({
     // A copy, because pdf.js transfers the buffer to its worker and detaches it.
