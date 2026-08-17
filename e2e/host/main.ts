@@ -32,11 +32,16 @@ const serverUrl = params.get("server") ?? undefined;
 // A host that already authenticates its user supplies the token itself, which
 // is what makes the browser preflight every request the widget sends.
 const token = params.get("token") ?? undefined;
+// Optional on purpose. A host that names a theme overrides the server's
+// branding.defaultTheme, so leaving it out is the only way to exercise the
+// branding path — and that path is a real one: it is how a deployment sets the
+// theme for hosts that do not care to.
+const theme = (params.get("theme") ?? undefined) as Theme | undefined;
 
 const handle: MountHandle = mount(container, {
   ...(serverUrl === undefined ? {} : { serverUrl }),
   ...(token === undefined ? {} : { token }),
-  theme: "light",
+  ...(theme === undefined ? {} : { theme }),
 });
 
 window.__embed = {

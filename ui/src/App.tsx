@@ -297,9 +297,10 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     if (e.dataTransfer.files.length > 0) void attachFiles(Array.from(e.dataTransfer.files));
   }
   const { theme, toggle: toggleTheme, setTheme } = useTheme(
-    initialTheme ?? state.branding.defaultTheme ?? "system",
+    state.branding.defaultTheme ?? "system",
     state.branding.allowThemeToggle !== false,
     accentTarget,
+    initialTheme,
   );
   useImperativeHandle(ref, () => ({ setTheme }), [setTheme]);
   const mainRef = useRef<HTMLElement>(null);

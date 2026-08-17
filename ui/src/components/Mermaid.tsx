@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useThemeContext } from "../theme/ThemeContext";
 import { CopyButton } from "./CopyButton";
+import { EnlargedView } from "./EnlargedView";
 
 type MermaidTheme = "dark" | "default";
 
@@ -24,6 +25,21 @@ async function loadMermaid(theme: MermaidTheme) {
   return module;
 }
 
+/**
+ * The diagram's own width, read from its viewBox.
+ *
+ * Needed because mermaid writes `width="100%"` and a `max-width` on the SVG: it
+ * has no intrinsic size, it fills whatever it is put in. Dropped into the
+ * overlay's shrink-to-fit box that comes out *smaller* than the chat column —
+ * enlarge that shrinks. Giving the box the diagram's real width makes the SVG
+ * fill exactly that, and the modal scrolls when it does not fit.
+ */
+export function naturalWidth(svg: string): number | undefined {
+  const viewBox = /viewBox="\s*[\d.-]+[\s,]+[\d.-]+[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(svg);
+  const width = viewBox ? Number(viewBox[1]) : Number.NaN;
+  return Number.isFinite(width) && width > 0 ? width : undefined;
+}
+
 export function Mermaid({ code }: { code: string }) {
   const id = useId().replace(/[^a-zA-Z0-9]/g, "");
   const theme = useThemeContext();
@@ -31,6 +47,10 @@ export function Mermaid({ code }: { code: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
+  const [enlarged, setEnlarged] = useState(false);
+  // The block, not the diagram: it stays mounted whichever face is showing, so
+  // the overlay can always tell which tree it belongs to.
+  const blockRef = useRef<HTMLDivElement>(null);
   const codeRef = useRef(code);
   codeRef.current = code;
 
@@ -58,7 +78,10 @@ export function Mermaid({ code }: { code: string }) {
 
   if (svg) {
     return (
-      <div className="group relative my-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <div
+        ref={blockRef}
+        className="group relative my-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900"
+      >
         <div className="absolute left-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
@@ -69,7 +92,23 @@ export function Mermaid({ code }: { code: string }) {
             {showCode ? "⚏ diagram" : "⌗ code"}
           </button>
         </div>
-        <div className="absolute right-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+          {/* Same reason the structured-exchange view has one: a wide diagram in a
+              narrow column arrives as a sliver, and scrolling it sideways is not
+              reading it. */}
+          {!showCode && (
+            <button
+              type="button"
+              onClick={() => setEnlarged(true)}
+              // Named, not just captioned: the structured-exchange view has an
+              // enlarge control of its own, and a page carrying both would
+              // otherwise offer two buttons called the same thing.
+              aria-label="Show diagram at full size"
+              className="rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+            >
+              ⤢ enlarge
+            </button>
+          )}
           <CopyButton text={code} />
         </div>
         {showCode ? (
@@ -81,6 +120,20 @@ export function Mermaid({ code }: { code: string }) {
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         )}
+        <EnlargedView
+          label="diagram"
+          testId="mermaid-enlarged"
+          open={enlarged}
+          onClose={() => setEnlarged(false)}
+          anchorRef={blockRef}
+        >
+          <div
+            style={{ width: naturalWidth(svg) }}
+            className="[&_svg]:!h-auto [&_svg]:!max-w-none [&_svg]:!w-full"
+            // eslint-disable-next-line react/no-danger — the same SVG, at its own size
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        </EnlargedView>
       </div>
     );
   }

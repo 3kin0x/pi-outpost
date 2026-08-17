@@ -38,6 +38,17 @@ widget.unmount(); // tear down the React tree
 
 `mount(container, options?)` returns `{ unmount(), setTheme(theme) }`. The container itself stays in the DOM after `unmount()`, with an empty shadow root.
 
+### Which theme wins
+
+Strongest first:
+
+1. `setTheme()`, a `{ type: "pi-outpost:set-theme", theme }` message, or the reader using the widget's own toggle — whatever was chosen while it was on screen;
+2. the `theme` you pass to `mount()`. Naming it means you get it: a reader who once used the toggle on this origin does not overrule the page that embeds the widget;
+3. a theme this browser remembered from an earlier visit;
+4. the server's `branding.defaultTheme`, itself falling back to `"system"`.
+
+So pass `theme` when your page has a look the widget has to match, and leave it out when the deployment's own `branding.defaultTheme` should decide.
+
 ## Server-rendered apps
 
 Importing the package is safe anywhere, but `mount()` needs a real DOM: it attaches a shadow root to the element you give it. In Next.js, Remix or Astro, call it from an effect (client-side only):
