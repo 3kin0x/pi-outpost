@@ -21,6 +21,7 @@ import {
   FallbackDOMMatrix,
   lineCells,
   linesToMarkdownTable,
+  loadPdfjs,
   parsePageRange,
   pdfjsAssetDirs,
   PdfError,
@@ -46,8 +47,14 @@ async function failureOf(bytes: Uint8Array, options = {}): Promise<PdfError> {
 }
 
 describe("extractPdf", () => {
-  test("allows a cold PDF.js start on supported Windows runners", () => {
+  test("gives one document half a minute of parsing, and the parser's own load none of it", async () => {
     assert.equal(DEFAULT_TIMEOUT_MS, 30_000);
+
+    // Loading pdf.js is a fixed process cost — on a cold Windows runner, tens of
+    // seconds of it — so it is paid once, outside any document's deadline. That
+    // is why the same promise comes back every time.
+    assert.equal(loadPdfjs(), loadPdfjs());
+    assert.equal(await loadPdfjs(), await loadPdfjs());
   });
 
   test("returns page-attributed text", async () => {

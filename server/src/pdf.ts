@@ -71,6 +71,8 @@ export const DEFAULT_MAX_CHARS = 40_000;
  * failure this option exists to remove.
  */
 export const ABSOLUTE_MAX_CHARS = 400_000;
+
+/** What one document may spend being parsed. Loading pdf.js is not charged to it. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
 /* ── Geometry ───────────────────────────────────────────────────────────────── */
@@ -473,10 +475,32 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
+/**
+ * The parser, loaded at most once per process.
+ *
+ * Held here so no document's deadline pays for it. Loading pdf.js is a fixed
+ * process cost — megabytes of module through the loader, and a native canvas
+ * package behind it — and on a cold Windows runner it can run to tens of
+ * seconds, which the first extraction was spending out of the budget meant to
+ * bound the document. A failed load is not cached: it is a broken install or a
+ * missing file, and the next call should be free to see it fail again.
+ */
+let parser: Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> | undefined;
+
+export function loadPdfjs(): Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> {
+  parser ??= (async () => {
+    // Before the import: pdf.js reads `DOMMatrix` while the module evaluates.
+    ensureDomMatrix();
+    return import("pdfjs-dist/legacy/build/pdf.mjs");
+  })().catch((error: unknown) => {
+    parser = undefined;
+    throw error;
+  });
+  return parser;
+}
+
 async function openDocument(bytes: Uint8Array, timeoutMs: number): Promise<{ doc: PdfJsDocument; destroy: () => Promise<void> }> {
-  // Before the import: pdf.js reads `DOMMatrix` while the module evaluates.
-  ensureDomMatrix();
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjs = await loadPdfjs();
   const task = pdfjs.getDocument({
     // A copy, because pdf.js transfers the buffer to its worker and detaches it.
     // Without this the caller's array is emptied behind their back, and a second
@@ -548,6 +572,10 @@ export async function extractPdf(bytes: Uint8Array, options: PdfExtractOptions =
   const maxPages = options.maxPages ?? (full ? Number.POSITIVE_INFINITY : DEFAULT_MAX_PAGES);
   const maxChars = options.maxChars ?? (full ? ABSOLUTE_MAX_CHARS : DEFAULT_MAX_CHARS);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  // The clock starts once the parser is in hand: the budget bounds this
+  // document, not the one-time cost of loading pdf.js.
+  await loadPdfjs();
   const started = Date.now();
 
   const { doc, destroy } = await openDocument(bytes, timeoutMs);
