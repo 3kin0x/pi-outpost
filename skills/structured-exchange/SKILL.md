@@ -71,6 +71,42 @@ Each carries its own `data`:
 A message declares a `label` and no `kind` — the label *is* what is being sent.
 Message order is the order you write them in; nothing sorts them for you.
 
+## Grouping: containers
+
+A graph or a sequence may declare **containers** — subsystems, layers, teams,
+whatever the domain groups things into — and each element or participant may say
+which one it belongs to.
+
+```jsonc
+"data": {
+  "containers": [{ "id": "electrical", "label": "Electrical system" }],
+  "nodes": [{ "id": "battery", "label": "Battery", "container": "electrical" },
+            { "id": "driver",  "label": "Driver" }],          // in no container
+  "edges": [{ "from": "driver", "to": "battery", "kind": "operates" }]
+}
+```
+
+Four things to know:
+
+- **Membership goes on the member**, never as a list of members on the container.
+  An element belongs to one container or to none.
+- **Relationships ignore grouping entirely.** They connect elements, they cross
+  container boundaries freely, and an endpoint is never a container id. Naming a
+  container as `from` or `to` is refused.
+- **Containers do not nest.** A member names a container, never a chain of them.
+- **A container nobody joins is fine.** Declare the group first and fill it later
+  if that is what you mean; it is drawn as an empty box.
+
+Naming a container the document does not declare is refused rather than quietly
+ungrouped — an element shown outside a group it belongs to would misstate the
+system you are describing.
+
+In a sequence, the view puts a container's columns next to each other so its
+header spans them. If you interleave two containers, the columns are reordered:
+the first member of a container met brings the rest of that container with it,
+and anything belonging to no container keeps its place. Declare participants in
+the order you want them read.
+
 ## Two identities, never confused
 
 Every element carries an `id`, and may carry a `ref`.
@@ -196,6 +232,10 @@ is refused rather than resolved — decide which you meant.
 **A relationship always declares `from` and `to`**, even when it carries a `ref`. Its
 endpoints are its identity, not something you patch. To re-attach a relationship,
 remove it and declare a new one.
+
+**Moving something between containers is an ordinary change**: `"set": { "container":
+"electrical" }` on an element that carries a `ref`, like any other field you change.
+Containers themselves are not patched — they are declared afresh in every document.
 
 ## What the reader sees, and what the model sees
 

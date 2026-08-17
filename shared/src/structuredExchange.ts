@@ -45,7 +45,35 @@ export interface StructuredElement {
   ref?: string;
   label?: string;
   kind?: string;
-  set?: { label?: string; kind?: string };
+  /**
+   * The container this element belongs to, by its envelope-scoped identifier.
+   *
+   * Membership lives here rather than as a list on the container: an element
+   * belongs to one group or to none, which this makes true by construction, and
+   * moving it between groups is then an ordinary `set` like any other change.
+   */
+  container?: string;
+  set?: { label?: string; kind?: string; container?: string };
+}
+
+/**
+ * A named group of elements or participants.
+ *
+ * Grouping only. Relationships connect elements and cross container boundaries
+ * freely; a container has no endpoints of its own, and removing every container
+ * from a document leaves the same elements connected the same way.
+ *
+ * Declared once per envelope and named by its members. It carries no `ref` and
+ * no `set`: a container is view structure the producer restates each time, not
+ * an artifact the receiving authority holds and a proposal patches.
+ *
+ * Containers do not nest in version 1 — a member names a container, never a
+ * chain of them.
+ */
+export interface StructuredContainer {
+  id: string;
+  label: string;
+  kind?: string;
 }
 
 /**
@@ -83,11 +111,13 @@ export interface StructuredMessage {
 export interface StructuredGraphData {
   nodes: StructuredElement[];
   edges: StructuredEdge[];
+  containers?: StructuredContainer[];
 }
 
 export interface StructuredSequenceData {
   participants: StructuredElement[];
   messages: StructuredMessage[];
+  containers?: StructuredContainer[];
 }
 
 export type StructuredTableCell = string | number | boolean | null;

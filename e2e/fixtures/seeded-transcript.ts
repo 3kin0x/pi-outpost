@@ -60,6 +60,60 @@ const ENVELOPE = {
   },
 };
 
+/**
+ * The same system, grouped. Containers on a graph, and on a sequence whose
+ * members are deliberately interleaved — declared battery(E), ecu(C),
+ * alternator(E), dash(C) — so the browser can check that the view orders the
+ * columns rather than splitting a container across two headers.
+ */
+const GRAPH_WITH_CONTAINERS = {
+  schema: "urn:structured-exchange:1",
+  kind: "graph",
+  data: {
+    containers: [
+      { id: "electrical", label: "Electrical system" },
+      { id: "control", label: "Control system" },
+      { id: "hydraulic", label: "Hydraulic system" },
+    ],
+    nodes: [
+      { id: "battery", label: "Battery", container: "electrical" },
+      { id: "alternator", label: "Alternator", container: "electrical" },
+      { id: "ecu", label: "Engine control unit", container: "control" },
+      { id: "dash", label: "Dashboard", container: "control" },
+      { id: "driver", label: "Driver" },
+    ],
+    edges: [
+      { from: "driver", to: "ecu", kind: "operates" },
+      { from: "ecu", to: "battery", kind: "reads" },
+      { from: "alternator", to: "battery", kind: "charges" },
+      { from: "ecu", to: "dash", kind: "signals" },
+    ],
+  },
+};
+
+const SEQUENCE_WITH_CONTAINERS = {
+  schema: "urn:structured-exchange:1",
+  kind: "sequence",
+  data: {
+    containers: [
+      { id: "electrical", label: "Electrical system" },
+      { id: "control", label: "Control system" },
+    ],
+    participants: [
+      { id: "battery", label: "Battery", container: "electrical" },
+      { id: "ecu", label: "Engine control unit", container: "control" },
+      { id: "alternator", label: "Alternator", container: "electrical" },
+      { id: "dash", label: "Dashboard", container: "control" },
+    ],
+    messages: [
+      { from: "ecu", to: "battery", label: "read voltage" },
+      { from: "ecu", to: "alternator", label: "excite" },
+      { from: "alternator", to: "battery", label: "charge" },
+      { from: "ecu", to: "dash", label: "warning light" },
+    ],
+  },
+};
+
 export const SEEDED_MESSAGES = [
   { role: "user", content: "Draw me the architecture." },
   { role: "assistant", content: [{ type: "text", text: SEEDED_MERMAID }] },
@@ -74,5 +128,27 @@ export const SEEDED_MESSAGES = [
     content: "graph with 9 nodes",
     // The only channel the server forwards a structured exchange from.
     details: ENVELOPE,
+  },
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-2", name: "structured_exchange", arguments: { kind: "graph" } }],
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call-2",
+    toolName: "structured_exchange",
+    content: "graph with 5 elements in 3 containers",
+    details: GRAPH_WITH_CONTAINERS,
+  },
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-3", name: "structured_exchange", arguments: { kind: "sequence" } }],
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call-3",
+    toolName: "structured_exchange",
+    content: "sequence whose containers interleave as declared",
+    details: SEQUENCE_WITH_CONTAINERS,
   },
 ];

@@ -35,6 +35,21 @@
     },
     {
       "file": "valid/graph-at-the-kind-ceiling.json"
+    },
+    {
+      "file": "valid/graph-with-containers.json"
+    },
+    {
+      "file": "valid/sequence-with-containers.json"
+    },
+    {
+      "file": "valid/graph-with-empty-container.json"
+    },
+    {
+      "file": "valid/graph-proposal-moves-a-member.json"
+    },
+    {
+      "file": "valid/graph-containers-at-the-ceiling.json"
     }
   ],
   "invalid": [
@@ -129,6 +144,22 @@
     {
       "file": "invalid/too-many-relationship-kinds.json",
       "expectedRule": "too-many-kinds"
+    },
+    {
+      "file": "invalid/container-unknown-membership.json",
+      "expectedRule": "unresolved-container"
+    },
+    {
+      "file": "invalid/container-duplicate-id.json",
+      "expectedRule": "duplicate-container-identifier"
+    },
+    {
+      "file": "invalid/container-as-endpoint.json",
+      "expectedRule": "unresolved-endpoint"
+    },
+    {
+      "file": "invalid/containers-over-the-ceiling.json",
+      "expectedRule": "schema/maxItems"
     }
   ]
 }

@@ -15,6 +15,7 @@
 import {
   PROPOSABLE_KINDS,
   STRUCTURED_EXCHANGE_CEILINGS,
+  type StructuredContainer,
   type StructuredElement,
   type StructuredExchangeEnvelope,
   type StructuredGraphData,
@@ -66,6 +67,13 @@ function elementsOf(envelope: StructuredExchangeEnvelope): StructuredElement[] {
 function relationshipsOf(envelope: StructuredExchangeEnvelope): { from: string; to: string; ref?: string; set?: object }[] {
   if (envelope.kind === "graph") return (envelope.data as StructuredGraphData).edges;
   if (envelope.kind === "sequence") return (envelope.data as StructuredSequenceData).messages;
+  return [];
+}
+
+/** The containers of a graph or a sequence. Absent everywhere else. */
+function containersOf(envelope: StructuredExchangeEnvelope): StructuredContainer[] {
+  if (envelope.kind === "graph") return (envelope.data as StructuredGraphData).containers ?? [];
+  if (envelope.kind === "sequence") return (envelope.data as StructuredSequenceData).containers ?? [];
   return [];
 }
 
@@ -140,6 +148,37 @@ export function validateStructuredExchangeSemantics(envelope: StructuredExchange
         path: `${elementsAt}/${index}/id`,
         message: `identifier "${element.id}" is already declared at ${elementsAt}/${first}`,
       });
+    }
+  });
+
+  // Container identifiers are unique too, and for the same reason: a membership
+  // naming a duplicated container names two groups at once, and choosing one of
+  // them is the guess this stage exists to refuse.
+  const seenContainers = new Map<string, number>();
+  containersOf(envelope).forEach((container, index) => {
+    const first = seenContainers.get(container.id);
+    if (first === undefined) seenContainers.set(container.id, index);
+    else {
+      issues.push({
+        rule: "duplicate-container-identifier",
+        path: `/data/containers/${index}/id`,
+        message: `container "${container.id}" is already declared at /data/containers/${first}`,
+      });
+    }
+  });
+
+  // Every membership names a container this envelope declares. Dropping an
+  // unresolved one instead would render the element ungrouped, which states
+  // something about the system that the document does not.
+  elements.forEach((element, index) => {
+    for (const [field, named] of [["container", element.container], ["set/container", element.set?.container]] as const) {
+      if (named !== undefined && !seenContainers.has(named)) {
+        issues.push({
+          rule: "unresolved-container",
+          path: `${elementsAt}/${index}/${field}`,
+          message: `"${named}" is not a container declared in /data/containers`,
+        });
+      }
     }
   });
 

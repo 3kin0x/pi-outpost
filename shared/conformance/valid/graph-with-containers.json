@@ -1,0 +1,55 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "containers": [
+      {
+        "id": "electrical",
+        "label": "Electrical system"
+      },
+      {
+        "id": "control",
+        "label": "Control system",
+        "kind": "subsystem"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "battery",
+        "label": "Battery",
+        "container": "electrical"
+      },
+      {
+        "id": "alternator",
+        "label": "Alternator",
+        "container": "electrical"
+      },
+      {
+        "id": "ecu",
+        "label": "Engine control unit",
+        "container": "control"
+      },
+      {
+        "id": "driver",
+        "label": "Driver"
+      }
+    ],
+    "edges": [
+      {
+        "from": "ecu",
+        "to": "battery",
+        "kind": "reads"
+      },
+      {
+        "from": "alternator",
+        "to": "battery",
+        "kind": "charges"
+      },
+      {
+        "from": "driver",
+        "to": "ecu",
+        "kind": "operates"
+      }
+    ]
+  }
+}

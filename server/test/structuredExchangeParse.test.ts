@@ -254,3 +254,98 @@ describe("structured-exchange two-stage validation", () => {
     });
   });
 });
+
+/**
+ * Containers group elements. They are declared once and named by their members,
+ * which is what makes membership single-valued and a move an ordinary change —
+ * and what gives this stage two new things to check.
+ */
+describe("containers", () => {
+  const grouped = (over: Record<string, unknown> = {}) => ({
+    schema: S,
+    kind: "graph" as const,
+    data: {
+      containers: [{ id: "electrical", label: "Electrical system" }],
+      nodes: [node("a", { container: "electrical" }), node("b")],
+      edges: [{ from: "a", to: "b", kind: "composition" }],
+      ...over,
+    },
+  });
+
+  test("accepts a document that groups some of its elements and not others", () => {
+    const verdict = parse(grouped());
+
+    assert.equal(verdict.valid, true);
+    if (!verdict.valid) return;
+    const data = verdict.envelope.data as { containers?: unknown[]; nodes: { container?: string }[] };
+    assert.equal(data.containers?.length, 1);
+    assert.equal(data.nodes[0].container, "electrical");
+    assert.equal(data.nodes[1].container, undefined);
+  });
+
+  test("accepts a container no member names", () => {
+    const verdict = parse(
+      grouped({
+        containers: [
+          { id: "electrical", label: "Electrical system" },
+          { id: "hydraulic", label: "Hydraulic system" },
+        ],
+      }),
+    );
+
+    assert.equal(verdict.valid, true, "a group declared before it is filled is a coherent intention");
+  });
+
+  test("refuses a membership naming a container the envelope does not declare", () => {
+    // Rendering it ungrouped instead would state something about the system that
+    // the document does not.
+    assert.deepEqual(rules(grouped({ nodes: [node("a", { container: "hydraulic" })], edges: [] })), [
+      "unresolved-container",
+    ]);
+  });
+
+  test("refuses two containers sharing an identifier", () => {
+    assert.deepEqual(
+      rules(
+        grouped({
+          containers: [
+            { id: "electrical", label: "Electrical system" },
+            { id: "electrical", label: "Electrical system again" },
+          ],
+        }),
+      ),
+      ["duplicate-container-identifier"],
+    );
+  });
+
+  test("refuses a container identifier used as a relationship endpoint", () => {
+    // A container is not an element: it groups, and it connects to nothing.
+    assert.deepEqual(
+      rules(grouped({ edges: [{ from: "a", to: "electrical", kind: "feeds" }] })),
+      ["unresolved-endpoint"],
+    );
+  });
+
+  test("refuses a proposal that moves a member into a container it does not declare", () => {
+    assert.deepEqual(
+      rules({
+        schema: S,
+        kind: "graph" as const,
+        target: "artifact-1",
+        data: {
+          containers: [{ id: "electrical", label: "Electrical system" }],
+          nodes: [{ id: "a", ref: "EL-1", container: "electrical", set: { container: "hydraulic" } }],
+          edges: [],
+        },
+      }),
+      ["unresolved-container"],
+    );
+  });
+
+  test("yields no structured result at all when a membership is unresolved", () => {
+    const verdict = parse(grouped({ nodes: [node("a", { container: "hydraulic" })], edges: [] }));
+
+    assert.equal(verdict.valid, false);
+    assert.equal("envelope" in verdict, false, "a refused document produces no partial structure");
+  });
+});
