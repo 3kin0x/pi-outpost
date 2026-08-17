@@ -7,17 +7,21 @@
  * geometry has to be the input under our control.
  */
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
+import { promisify } from "node:util";
 import {
   buildLines,
   DEFAULT_TIMEOUT_MS,
   detectTableBlocks,
   extractPdf,
+  FallbackDOMMatrix,
   lineCells,
   linesToMarkdownTable,
+  loadPdfjs,
   parsePageRange,
   pdfjsAssetDirs,
   PdfError,
@@ -25,6 +29,7 @@ import {
 } from "../src/pdf.ts";
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+const execFile = promisify(execFileCallback);
 
 async function fixture(name: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(path.join(FIXTURES, `${name}.pdf`)));
@@ -42,8 +47,14 @@ async function failureOf(bytes: Uint8Array, options = {}): Promise<PdfError> {
 }
 
 describe("extractPdf", () => {
-  test("allows a cold PDF.js start on supported Windows runners", () => {
+  test("gives one document half a minute of parsing, and the parser's own load none of it", async () => {
     assert.equal(DEFAULT_TIMEOUT_MS, 30_000);
+
+    // Loading pdf.js is a fixed process cost — on a cold Windows runner, tens of
+    // seconds of it — so it is paid once, outside any document's deadline. That
+    // is why the same promise comes back every time.
+    assert.equal(loadPdfjs(), loadPdfjs());
+    assert.equal(await loadPdfjs(), await loadPdfjs());
   });
 
   test("returns page-attributed text", async () => {
@@ -228,6 +239,72 @@ describe("extractPdf caps", () => {
 
     assert.deepEqual(result.pages, [2, 3]);
     assert.equal(result.nextPage, 4);
+  });
+});
+
+describe("extraction without a native canvas", () => {
+  test("reads a page drawn with a Type3 font", async () => {
+    // The one place text extraction builds a matrix per glyph, rather than once
+    // when pdf.js loads.
+    const result = await extractPdf(await fixture("pdf-type3"));
+
+    assert.match(result.markdown, /aaa/);
+  });
+
+  test("extracts where `@napi-rs/canvas` cannot be resolved", async () => {
+    // Its own process: pdf.js takes `DOMMatrix` from the global object, this one
+    // already has a real one, and the regression only exists where there is none.
+    const { stdout } = await execFile(
+      process.execPath,
+      [
+        "--require",
+        path.join(FIXTURES, "no-native-canvas.cjs"),
+        "--import",
+        "tsx/esm",
+        path.join(FIXTURES, "extract-without-canvas.mjs"),
+        "pdf-text",
+        "pdf-type3",
+      ],
+      { cwd: path.dirname(FIXTURES) },
+    );
+    const { results, domMatrix } = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
+
+    // Without the fallback both of these are `DOMMatrix is not defined`: pdf.js
+    // builds one as it loads, so the plain document never gets as far as a page.
+    assert.equal(results["pdf-text"].ok, true, `plain text failed: ${results["pdf-text"].message}`);
+    assert.match(results["pdf-text"].markdown, /Revenue grew in every region this quarter\./);
+    assert.equal(results["pdf-type3"].ok, true, `Type3 failed: ${results["pdf-type3"].message}`);
+    assert.match(results["pdf-type3"].markdown, /aaa/);
+    assert.equal(domMatrix, "FallbackDOMMatrix", "the fallback should be what carried the extraction");
+  });
+});
+
+describe("FallbackDOMMatrix", () => {
+  /** `+ 0` folds a signed zero, which arithmetic here cannot tell apart anyway. */
+  const components = (m: FallbackDOMMatrix) => [m.a, m.b, m.c, m.d, m.e, m.f].map((n) => n + 0);
+
+  test("scales and translates the way pdf.js's Type3 compiler expects", () => {
+    // The exact composition pdf.js applies per glyph, for an 8x16 mask: the glyph
+    // box is mapped into the unit square with the y axis flipped.
+    const m = new FallbackDOMMatrix().scaleSelf(1 / 8, -1 / 16).translateSelf(0, -16);
+
+    assert.deepEqual(components(m), [0.125, 0, 0, -0.0625, 0, 1]);
+    // Corners of the mask land on corners of the unit square, top-left first.
+    assert.deepEqual([m.a * 0 + m.c * 0 + m.e, m.b * 0 + m.d * 0 + m.f], [0, 1]);
+    assert.deepEqual([m.a * 8 + m.c * 16 + m.e, m.b * 8 + m.d * 16 + m.f], [1, 0]);
+  });
+
+  test("translates through the current scale, and scales both axes from one argument", () => {
+    assert.deepEqual(components(new FallbackDOMMatrix().scaleSelf(0.25, 0.5).translateSelf(3, -2)), [
+      0.25, 0, 0, 0.5, 0.75, -1,
+    ]);
+    assert.deepEqual(components(new FallbackDOMMatrix().scaleSelf(2)), [2, 0, 0, 2, 0, 0]);
+  });
+
+  test("refuses to stand in for a matrix built from a value", () => {
+    // A rendering path would pass one. Answering with an identity matrix there
+    // is crooked output; failing is a bug report.
+    assert.throws(() => new FallbackDOMMatrix([1, 0, 0, 1, 0, 0]), /text extraction only/);
   });
 });
 

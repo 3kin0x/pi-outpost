@@ -71,6 +71,8 @@ export const DEFAULT_MAX_CHARS = 40_000;
  * failure this option exists to remove.
  */
 export const ABSOLUTE_MAX_CHARS = 400_000;
+
+/** What one document may spend being parsed. Loading pdf.js is not charged to it. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
 /* ── Geometry ───────────────────────────────────────────────────────────────── */
@@ -372,6 +374,82 @@ export function pdfjsAssetDirs(): { standardFontDataUrl?: string; cMapUrl?: stri
   }
 }
 
+/**
+ * The slice of `DOMMatrix` that headless text extraction uses.
+ *
+ * pdf.js constructs one at module scope, so without the global no document is
+ * readable at all: the `import` throws before any page is touched. It builds one
+ * more per glyph when it compiles a Type3 char proc whose body is an image mask,
+ * which `getTextContent()` reaches because a Type3 font's char procs are parsed
+ * when the font loads.
+ *
+ * Only a scale followed by a translate is ever asked for, and nothing here
+ * renders, so the six components and those two operations are the whole
+ * requirement. Semantics are `DOMMatrix`'s: both post-multiply, and `scaleSelf`
+ * with one argument scales both axes.
+ *
+ * Anything beyond that throws rather than answering wrongly. Should rendering
+ * ever be added here, an unimplemented method is a loud failure, where a matrix
+ * that quietly ignored its initial value would be crooked output.
+ */
+export class FallbackDOMMatrix {
+  a = 1;
+  b = 0;
+  c = 0;
+  d = 1;
+  e = 0;
+  f = 0;
+
+  constructor(init?: unknown) {
+    if (init !== undefined) {
+      throw new Error("FallbackDOMMatrix covers text extraction only, which builds no matrix from a value");
+    }
+  }
+
+  scaleSelf(scaleX = 1, scaleY = scaleX): this {
+    this.a *= scaleX;
+    this.b *= scaleX;
+    this.c *= scaleY;
+    this.d *= scaleY;
+    return this;
+  }
+
+  translateSelf(tx = 0, ty = 0): this {
+    this.e += this.a * tx + this.c * ty;
+    this.f += this.b * tx + this.d * ty;
+    return this;
+  }
+}
+
+/**
+ * Give pdf.js the `DOMMatrix` it expects to find on the global object.
+ *
+ * pdf.js polyfills it from `@napi-rs/canvas`, an optional native package that is
+ * absent from the single-file build and from any install that skipped optional
+ * dependencies. Where it is missing, upstream only warns — and then every
+ * extraction, of every document, dies with `DOMMatrix is not defined`, returning
+ * no text at all rather than degraded text.
+ *
+ * The real implementation is preferred when it is installed, so rendering
+ * elsewhere in the process keeps a complete matrix; the fallback covers the case
+ * upstream leaves broken. Exported for the tests.
+ */
+export function ensureDomMatrix(): void {
+  const globals = globalThis as { DOMMatrix?: unknown };
+  if (globals.DOMMatrix) return;
+  try {
+    const require = createRequire(import.meta.url);
+    const canvas = require("@napi-rs/canvas") as { DOMMatrix?: unknown };
+    if (canvas.DOMMatrix) {
+      globals.DOMMatrix = canvas.DOMMatrix;
+      return;
+    }
+  } catch {
+    // No native canvas here — the fallback below is what text extraction needs.
+  }
+  globals.DOMMatrix = FallbackDOMMatrix;
+}
+
 interface PdfJsTextItem {
   str?: string;
   width?: number;
@@ -397,8 +475,32 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
+/**
+ * The parser, loaded at most once per process.
+ *
+ * Held here so no document's deadline pays for it. Loading pdf.js is a fixed
+ * process cost — megabytes of module through the loader, and a native canvas
+ * package behind it — and on a cold Windows runner it can run to tens of
+ * seconds, which the first extraction was spending out of the budget meant to
+ * bound the document. A failed load is not cached: it is a broken install or a
+ * missing file, and the next call should be free to see it fail again.
+ */
+let parser: Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> | undefined;
+
+export function loadPdfjs(): Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> {
+  parser ??= (async () => {
+    // Before the import: pdf.js reads `DOMMatrix` while the module evaluates.
+    ensureDomMatrix();
+    return import("pdfjs-dist/legacy/build/pdf.mjs");
+  })().catch((error: unknown) => {
+    parser = undefined;
+    throw error;
+  });
+  return parser;
+}
+
 async function openDocument(bytes: Uint8Array, timeoutMs: number): Promise<{ doc: PdfJsDocument; destroy: () => Promise<void> }> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjs = await loadPdfjs();
   const task = pdfjs.getDocument({
     // A copy, because pdf.js transfers the buffer to its worker and detaches it.
     // Without this the caller's array is emptied behind their back, and a second
@@ -470,6 +572,10 @@ export async function extractPdf(bytes: Uint8Array, options: PdfExtractOptions =
   const maxPages = options.maxPages ?? (full ? Number.POSITIVE_INFINITY : DEFAULT_MAX_PAGES);
   const maxChars = options.maxChars ?? (full ? ABSOLUTE_MAX_CHARS : DEFAULT_MAX_CHARS);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  // The clock starts once the parser is in hand: the budget bounds this
+  // document, not the one-time cost of loading pdf.js.
+  await loadPdfjs();
   const started = Date.now();
 
   const { doc, destroy } = await openDocument(bytes, timeoutMs);

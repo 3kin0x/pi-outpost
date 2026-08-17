@@ -140,6 +140,33 @@ const encryptedDoc = buildPdf([contentStream([{ text: "secret", x: 72, y: 700 }]
   ],
 });
 
+/**
+ * A page drawn with a Type3 font whose glyph is an inline image mask.
+ *
+ * pdf.js compiles that mask into a path when the font loads, and that compiler
+ * is the one place text extraction touches `DOMMatrix`. The mask has to carry
+ * real edges: a single opaque pixel short-circuits before the matrix is built,
+ * and the crash this fixture guards against never fires.
+ */
+const type3Doc = (() => {
+  const mask = String.fromCharCode(0xff, 0x81, 0x81, 0xbd, 0xbd, 0x81, 0x81, 0xff);
+  const charProc =
+    `8 0 0 0 8 8 d1\nq 8 0 0 8 0 0 cm\n` +
+    `BI /IM true /W 8 /H 8 /BPC 1 /D [1 0] ID ${mask}\nEI\nQ\n`;
+  return buildPdf([contentStream([{ text: "aaa", x: 72, y: 700, size: 24 }])], {
+    objectsExtra: [
+      [
+        3,
+        `<< /Type /Font /Subtype /Type3 /FontBBox [0 0 8 8] /FontMatrix [0.125 0 0 0.125 0 0] ` +
+          `/CharProcs 20 0 R /Encoding << /Type /Encoding /Differences [97 /square] >> ` +
+          `/FirstChar 97 /LastChar 97 /Widths [8] /Resources << >> >>`,
+      ],
+      [20, `<< /square 21 0 R >>`],
+      [21, `<< /Length ${charProc.length} >>\nstream\n${charProc}\nendstream`],
+    ],
+  });
+})();
+
 /** Cut mid-object: a file that begins like a PDF and is not one. */
 const corruptDoc = Buffer.concat([textDoc.subarray(0, 220), Buffer.from("\n%%broken\n", "latin1")]);
 
@@ -150,6 +177,7 @@ const fixtures = {
   "pdf-scan.pdf": scanDoc,
   "pdf-mixed-scan.pdf": mixedScanDoc,
   "pdf-long.pdf": longDoc,
+  "pdf-type3.pdf": type3Doc,
   "pdf-encrypted.pdf": encryptedDoc,
   "pdf-corrupt.pdf": corruptDoc,
 };
