@@ -39,3 +39,4 @@ interactive-test/workspace/
 interactive-test/.pi-agent/
 interactive-test/*.log
 .omo/run-continuation/
+RELEASE_NOTES.md
