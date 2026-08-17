@@ -375,16 +375,20 @@ export function pdfjsAssetDirs(): { standardFontDataUrl?: string; cMapUrl?: stri
 /**
  * The slice of `DOMMatrix` that headless text extraction uses.
  *
- * pdf.js builds one per glyph when it compiles a Type3 char proc whose body is
- * an image mask, and `getTextContent()` reaches that code: a Type3 font's char
- * procs are parsed when the font loads, before any text comes back. Its Node
- * build also constructs one at module scope, so a missing global fails the
- * `import` itself rather than the page.
+ * pdf.js constructs one at module scope, so without the global no document is
+ * readable at all: the `import` throws before any page is touched. It builds one
+ * more per glyph when it compiles a Type3 char proc whose body is an image mask,
+ * which `getTextContent()` reaches because a Type3 font's char procs are parsed
+ * when the font loads.
  *
  * Only a scale followed by a translate is ever asked for, and nothing here
  * renders, so the six components and those two operations are the whole
  * requirement. Semantics are `DOMMatrix`'s: both post-multiply, and `scaleSelf`
  * with one argument scales both axes.
+ *
+ * Anything beyond that throws rather than answering wrongly. Should rendering
+ * ever be added here, an unimplemented method is a loud failure, where a matrix
+ * that quietly ignored its initial value would be crooked output.
  */
 export class FallbackDOMMatrix {
   a = 1;
@@ -393,6 +397,12 @@ export class FallbackDOMMatrix {
   d = 1;
   e = 0;
   f = 0;
+
+  constructor(init?: unknown) {
+    if (init !== undefined) {
+      throw new Error("FallbackDOMMatrix covers text extraction only, which builds no matrix from a value");
+    }
+  }
 
   scaleSelf(scaleX = 1, scaleY = scaleX): this {
     this.a *= scaleX;
@@ -415,8 +425,8 @@ export class FallbackDOMMatrix {
  * pdf.js polyfills it from `@napi-rs/canvas`, an optional native package that is
  * absent from the single-file build and from any install that skipped optional
  * dependencies. Where it is missing, upstream only warns — and then every
- * extraction of a document carrying a Type3 font dies with `DOMMatrix is not
- * defined`, returning no text at all rather than degraded text.
+ * extraction, of every document, dies with `DOMMatrix is not defined`, returning
+ * no text at all rather than degraded text.
  *
  * The real implementation is preferred when it is installed, so rendering
  * elsewhere in the process keeps a complete matrix; the fallback covers the case

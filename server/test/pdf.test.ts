@@ -235,8 +235,10 @@ describe("extractPdf caps", () => {
   });
 });
 
-describe("Type3 fonts", () => {
+describe("extraction without a native canvas", () => {
   test("reads a page drawn with a Type3 font", async () => {
+    // The one place text extraction builds a matrix per glyph, rather than once
+    // when pdf.js loads.
     const result = await extractPdf(await fixture("pdf-type3"));
 
     assert.match(result.markdown, /aaa/);
@@ -252,16 +254,21 @@ describe("Type3 fonts", () => {
         path.join(FIXTURES, "no-native-canvas.cjs"),
         "--import",
         "tsx/esm",
-        path.join(FIXTURES, "extract-type3-pdf.mjs"),
+        path.join(FIXTURES, "extract-without-canvas.mjs"),
+        "pdf-text",
+        "pdf-type3",
       ],
       { cwd: path.dirname(FIXTURES) },
     );
-    const outcome = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
+    const { results, domMatrix } = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
 
-    // Without the fallback this is `DOMMatrix is not defined` and no text at all.
-    assert.equal(outcome.ok, true, `extraction failed: ${outcome.message}`);
-    assert.match(outcome.markdown, /aaa/);
-    assert.equal(outcome.domMatrix, "FallbackDOMMatrix", "the fallback should be what carried the extraction");
+    // Without the fallback both of these are `DOMMatrix is not defined`: pdf.js
+    // builds one as it loads, so the plain document never gets as far as a page.
+    assert.equal(results["pdf-text"].ok, true, `plain text failed: ${results["pdf-text"].message}`);
+    assert.match(results["pdf-text"].markdown, /Revenue grew in every region this quarter\./);
+    assert.equal(results["pdf-type3"].ok, true, `Type3 failed: ${results["pdf-type3"].message}`);
+    assert.match(results["pdf-type3"].markdown, /aaa/);
+    assert.equal(domMatrix, "FallbackDOMMatrix", "the fallback should be what carried the extraction");
   });
 });
 
@@ -285,6 +292,12 @@ describe("FallbackDOMMatrix", () => {
       0.25, 0, 0, 0.5, 0.75, -1,
     ]);
     assert.deepEqual(components(new FallbackDOMMatrix().scaleSelf(2)), [2, 0, 0, 2, 0, 0]);
+  });
+
+  test("refuses to stand in for a matrix built from a value", () => {
+    // A rendering path would pass one. Answering with an identity matrix there
+    // is crooked output; failing is a bug report.
+    assert.throws(() => new FallbackDOMMatrix([1, 0, 0, 1, 0, 0]), /text extraction only/);
   });
 });
 
