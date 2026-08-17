@@ -1001,7 +1001,7 @@ function GraphView({
   const enclosures = useMemo(
     () =>
       layout.containers.map((container) => {
-        const members = (shown.containers === undefined ? [] : shown.nodes)
+        const members = shown.nodes
           .filter((node) => node.container === container.id)
           .flatMap((node) => {
             const box = boxFor(node.id);
