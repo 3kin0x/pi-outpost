@@ -5,20 +5,35 @@ import { loadStoredTheme, resolveSystemTheme, storeTheme } from "./theme";
 /**
  * Resolves and applies the effective light/dark theme.
  *
- * Precedence: an explicit local pick (toggle button, persisted) or a message
- * from a host page (`{ type: "pi-outpost:set-theme", theme }` — for
- * embedding, independent of whether the toggle is enabled) wins over
- * `defaultTheme` from server config, which itself falls back to "system".
+ * Precedence, strongest first:
+ *
+ * 1. a message from a host page (`{ type: "pi-outpost:set-theme", theme }`) or
+ *    the host calling `setTheme()`, and the toggle button — whatever was chosen
+ *    while this widget was on screen;
+ * 2. `hostTheme` — the theme the embedding application named when it mounted
+ *    (`mount(el, { theme })`). An instruction the host repeats on every mount
+ *    outranks anything this browser happens to have remembered: a widget that
+ *    came up dark because someone once clicked ☾, in a page that asked for
+ *    light, is a widget the host cannot control at all;
+ * 3. a stored local pick from a previous visit;
+ * 4. `defaultTheme` from server config, itself falling back to "system".
  *
  * `rootElement` is where `data-theme` is applied — `document.documentElement`
  * for the standalone app, or the widget's own container element when mounted
  * inside a Shadow DOM (see `embed/src/mount.tsx`), so `dark:` styling stays
  * scoped to the widget instead of leaking onto the host page's `<html>`.
  */
-export function useTheme(defaultTheme: Theme, allowToggle: boolean, rootElement: HTMLElement = document.documentElement) {
+export function useTheme(
+  defaultTheme: Theme,
+  allowToggle: boolean,
+  rootElement: HTMLElement = document.documentElement,
+  hostTheme?: Theme,
+) {
   const stored = allowToggle ? loadStoredTheme() : null;
-  const [preference, setPreference] = useState<Theme>(stored ?? defaultTheme);
-  const hasOverride = useRef(stored !== null);
+  const [preference, setPreference] = useState<Theme>(hostTheme ?? stored ?? defaultTheme);
+  // Both a host's theme and a stored pick settle the question, so neither is
+  // displaced when branding arrives.
+  const hasOverride = useRef(hostTheme !== undefined || stored !== null);
 
   // Once branding loads (or changes) with no local/host override yet, adopt it.
   useEffect(() => {

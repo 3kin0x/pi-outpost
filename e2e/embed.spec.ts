@@ -10,14 +10,22 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /** The host page with the backend it should talk to. */
-async function openHost(page: Page): Promise<void> {
+async function openHost(page: Page, options: { server?: string; theme?: string } = {}): Promise<void> {
   const url = new URL(process.env.PI_E2E_HOST_URL!);
-  url.searchParams.set("server", process.env.PI_E2E_SERVER_URL!);
+  url.searchParams.set("server", options.server ?? process.env.PI_E2E_SERVER_URL!);
+  if (options.theme !== undefined) url.searchParams.set("theme", options.theme);
   await page.goto(url.toString());
 }
 
+/** The backend whose session already holds a Mermaid diagram and a structured exchange. */
+function withDiagrams(): { server: string } {
+  return { server: process.env.PI_E2E_DIAGRAMS_URL! };
+}
+
 test.beforeEach(async ({ page }) => {
-  await openHost(page);
+  // A named theme, so these tests do not read differently on a runner whose OS
+  // prefers dark. The tests that are *about* where the theme comes from say so.
+  await openHost(page, { theme: "light" });
 });
 
 test("mounts inside a shadow root and connects across origins", async ({ page }) => {
@@ -118,7 +126,7 @@ test("mounting reports no console error", async ({ page }) => {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
-  await openHost(page);
+  await openHost(page, { theme: "light" });
   await expect(page.getByTitle("connected")).toBeVisible();
 
   expect(errors).toEqual([]);
@@ -160,7 +168,7 @@ test.describe("BrandingArrivesBeforeTheSession", () => {
       requestAnimationFrame(sample);
     });
 
-    await openHost(page);
+    await openHost(page, { theme: "light" });
     await expect(page.getByRole("banner").getByText("embed smoke")).toBeVisible();
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
 
@@ -210,4 +218,146 @@ test("a workspace file is readable from the host page's origin", async ({ page }
 
   expect(status.ok).toBe(true);
   expect(status.text).toContain("guarded workspace");
+});
+
+/**
+ * Diagrams inside the widget.
+ *
+ * The suite could only ever assert the empty state before this: no transcript,
+ * so no diagram, so no overlay, so nothing ever opened one inside a Shadow DOM.
+ * The enlarge overlay portalled itself to `document.body`, which is the wrong
+ * side of the shadow boundary — the widget's stylesheet is adopted by the shadow
+ * root, and a node outside it is styled by nothing at all. Measured in the
+ * browser, that overlay came out `position: static`, `z-index: auto`,
+ * transparent, and stacked below the widget with half of it off-screen.
+ */
+test.describe("diagrams in the widget", () => {
+  /** Reads the overlay wherever it ended up, and says which tree that was. */
+  const readOverlay = (page: Page, testId: string) =>
+    page.evaluate((id) => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const inShadow = shadow.querySelector(`[data-testid="${id}"]`);
+      const overlay = inShadow ?? document.querySelector(`[data-testid="${id}"]`);
+      if (!overlay) return null;
+      const style = getComputedStyle(overlay);
+      const box = overlay.getBoundingClientRect();
+      const widget = document.querySelector("#widget")!.getBoundingClientRect();
+      return {
+        tree: inShadow ? "shadow" : "document",
+        position: style.position,
+        zIndex: style.zIndex,
+        transparent: style.backgroundColor === "rgba(0, 0, 0, 0)",
+        // Covering the viewport is the whole job; below the widget is the bug.
+        coversViewport: box.top <= widget.top && box.height >= innerHeight - 1,
+      };
+    }, testId);
+
+  test("the structured exchange enlarges over the widget, not under it", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    // The card opens expanded, so the enlarge control is already there. Named by
+    // its aria-label: the Mermaid diagram above it is captioned "⤢ enlarge" too.
+    await page.getByRole("button", { name: /Show graph view at full size/ }).click();
+
+    const overlay = await readOverlay(page, "structured-enlarged");
+    expect(overlay).toEqual({
+      // Portalled into the shadow root: the outermost point that is still styled
+      tree: "shadow",
+      position: "fixed",
+      zIndex: "100",
+      transparent: false,
+      coversViewport: true,
+    });
+  });
+
+  test("a Mermaid diagram can be enlarged too", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    // Rendering is debounced, and the control only exists once there is an SVG
+    const diagram = page.locator("#widget").locator("svg[id^='mermaid-']").first();
+    await expect(diagram).toBeVisible();
+
+    const inlineWidth = (await diagram.boundingBox())!.width;
+
+    await page.getByRole("button", { name: /Show diagram at full size/ }).click();
+
+    await expect(page.getByRole("dialog", { name: /diagram, full size/i })).toBeVisible();
+    expect(await readOverlay(page, "mermaid-enlarged")).toEqual({
+      tree: "shadow",
+      position: "fixed",
+      zIndex: "100",
+      transparent: false,
+      coversViewport: true,
+    });
+
+    // Bigger, which is the entire point. Mermaid writes width="100%" and no
+    // intrinsic size, so an overlay that shrink-wraps its content renders the
+    // diagram *smaller* than the chat column it was supposed to escape.
+    const enlargedWidth = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const overlay = shadow.querySelector('[data-testid="mermaid-enlarged"]')!;
+      return overlay.querySelector("svg")!.getBoundingClientRect().width;
+    });
+    expect(enlargedWidth).toBeGreaterThanOrEqual(inlineWidth);
+  });
+
+  test("Escape closes an overlay opened inside the widget", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    await page.getByRole("button", { name: /Show graph view at full size/ }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+});
+
+/**
+ * Where the theme comes from when the host does not set it on every mount.
+ *
+ * Both cases below were unreachable while the host page named a theme in its
+ * own source: `branding.defaultTheme` was never consulted, and a stored pick
+ * could quietly outrank the host's option with nothing to catch it.
+ */
+test.describe("the theme a deployment configured", () => {
+  test("a host that names no theme gets the server's branding.defaultTheme", async ({ page }) => {
+    await openHost(page, withDiagrams());
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => (document.querySelector("#widget") as HTMLElement).dataset.theme))
+      .toBe("light");
+  });
+
+  test("the theme the host asked for at mount beats one this browser remembered", async ({ page }) => {
+    // A visitor who once clicked ☾ on this origin. Before, that single click
+    // outranked `mount(el, { theme: "light" })` for good: the host could not
+    // give its widget the theme its own page was designed around.
+    await openHost(page, withDiagrams());
+    await page.evaluate(() => localStorage.setItem("pi-outpost:theme", "dark"));
+
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => (document.querySelector("#widget") as HTMLElement).dataset.theme))
+      .toBe("light");
+    // Still remembered, so the reader's own pick survives a host that says nothing
+    expect(await page.evaluate(() => localStorage.getItem("pi-outpost:theme"))).toBe("dark");
+  });
+
+  test("a stored pick still wins over branding when the host names nothing", async ({ page }) => {
+    await openHost(page, withDiagrams());
+    await page.evaluate(() => localStorage.setItem("pi-outpost:theme", "dark"));
+
+    await openHost(page, withDiagrams());
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    await expect
+      .poll(() => page.evaluate(() => (document.querySelector("#widget") as HTMLElement).dataset.theme))
+      .toBe("dark");
+  });
 });

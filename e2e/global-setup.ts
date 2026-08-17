@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SEEDED_MESSAGES } from "./fixtures/seeded-transcript";
 // The same harness the server's own integration tests use: a real server, in its
 // own process group, against a throwaway workspace, with PI_OFFLINE set so the
 // SDK's model runtime never reaches the network.
@@ -9,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { makeWorkspace, startServer } from "../server/test/harness.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.join(HERE, "..");
 const HOST_DIST = path.join(HERE, "dist-host");
 
 const TYPES: Record<string, string> = {
@@ -85,6 +87,58 @@ function onlyOneFakeProvider(): Record<string, string | undefined> {
 }
 
 /**
+ * Newest mtime under `dir` among the files a build actually consumes.
+ *
+ * Extensions, not everything: notes and fixtures sit next to source, and a
+ * gate that rebuilds the world because a README was edited is a gate people
+ * learn to work around.
+ */
+async function newestChange(dir: string): Promise<number> {
+  const skip = new Set(["node_modules", "dist", "dist-host", "coverage", ".turbo"]);
+  const built = /\.(ts|tsx|js|jsx|mjs|cjs|css|html|json)$/;
+  let newest = 0;
+  const walk = async (at: string): Promise<void> => {
+    const entries = await readdir(at, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || skip.has(entry.name)) continue;
+      const full = path.join(at, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (built.test(entry.name)) newest = Math.max(newest, (await stat(full)).mtimeMs);
+    }
+  };
+  await walk(dir);
+  return newest;
+}
+
+/**
+ * Refuses to run a browser suite against a build older than its own source.
+ *
+ * Existence was the only check, and existence is not the question: a stale
+ * bundle serves yesterday's behaviour perfectly happily. A fix can then be
+ * written, the suite run, and every assertion pass or fail against code that is
+ * not the code under test — which is exactly what happened while an overlay fix
+ * sat unbuilt and the widget kept showing the bug it had already lost.
+ *
+ * Reads mtimes, so it assumes the build ran in the same checkout as the sources
+ * it is compared against — true of this repo's CI, which builds and runs the
+ * browser job together. Restoring `web/dist`, `embed/dist` or `dist-host` from a
+ * cache across jobs would hand this function timestamps older than a fresh
+ * checkout's, and it would refuse a build that is in fact current.
+ */
+async function assertFresh(artifact: string, sources: readonly string[], command: string): Promise<void> {
+  const built = (await stat(artifact)).mtimeMs;
+  for (const source of sources) {
+    const changed = await newestChange(path.join(REPO, source));
+    if (changed > built) {
+      throw new Error(
+        `${path.relative(REPO, artifact)} is older than ${source} — run \`${command}\` first ` +
+          `(built ${new Date(built).toISOString()}, ${source} changed ${new Date(changed).toISOString()})`,
+      );
+    }
+  }
+}
+
+/**
  * Boots what both specs need and hands the URLs to the workers through the
  * environment. Returning a function registers it as the teardown.
  */
@@ -92,14 +146,19 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // Both specs read a built artifact rather than source. Saying which one is
   // missing beats the cascade of 404s and blank pages that follows otherwise.
   const required = [
-    [path.join(HERE, "..", "web/dist/index.html"), "npm run build --workspace web"],
-    [path.join(HERE, "..", "embed/dist/pi-outpost-embed.js"), "npm run build --workspace @pi-outpost/embed"],
-    [path.join(HOST_DIST, "index.html"), "npm run build:e2e-host"],
+    [path.join(REPO, "web/dist/index.html"), "npm run build --workspace web", ["web/src", "ui/src", "shared/src"]],
+    [
+      path.join(REPO, "embed/dist/pi-outpost-embed.js"),
+      "npm run build --workspace @pi-outpost/embed",
+      ["embed/src", "ui/src", "web/src", "shared/src"],
+    ],
+    [path.join(HOST_DIST, "index.html"), "npm run build:e2e-host", ["e2e/host", "embed/dist"]],
   ] as const;
-  for (const [file, command] of required) {
+  for (const [file, command, sources] of required) {
     await access(file).catch(() => {
-      throw new Error(`missing ${path.relative(path.join(HERE, ".."), file)} — run \`${command}\` first`);
+      throw new Error(`missing ${path.relative(REPO, file)} — run \`${command}\` first`);
     });
+    await assertFresh(file, sources, command);
   }
 
   const host = await serveHostPage();
@@ -130,12 +189,43 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: onlyOneFakeProvider() },
   );
 
+  // A third server, whose session already holds the diagrams. Its own server
+  // because the transcript comes from a scripted RPC child rather than the
+  // embedded runtime, and because it is the one configured to open light —
+  // `branding.defaultTheme` is untestable on a server whose host page names a
+  // theme of its own.
+  const diagramRoot = await makeWorkspace({ "readme.md": "# diagrams\n" });
+  const fakeConfig = path.join(diagramRoot, "fake-rpc.json");
+  await writeFile(
+    fakeConfig,
+    JSON.stringify({ messages: SEEDED_MESSAGES, state: { sessionId: "diagrams-1" } }),
+  );
+  const diagrams = await startServer(
+    diagramRoot,
+    {
+      server: { allowedOrigins: [host.url] },
+      branding: { title: "diagram smoke", defaultTheme: "light" },
+      agentRuntime: {
+        mode: "rpc",
+        executable: process.execPath,
+        args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")],
+        startupTimeoutMs: 20_000,
+      },
+      // RPC refuses to pair with a sandbox it cannot enforce on a child that
+      // builds its own tools; the harness sandboxes by default.
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: fakeConfig } },
+  );
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_GUARDED_URL = guarded.base;
+  process.env.PI_E2E_DIAGRAMS_URL = diagrams.base;
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await diagrams.stop();
     await guarded.stop();
     await server.stop();
     await host.close();

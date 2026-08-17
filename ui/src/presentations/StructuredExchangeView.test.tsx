@@ -167,6 +167,21 @@ describe("what stays reachable", () => {
     expect(screen.getByTestId("structured-raw-output")).toHaveTextContent("the original output");
   });
 
+  it("shows the envelope the view is drawn from, which the raw output is not", () => {
+    // The card showed the rendering, the derived syntax, the text equivalent and
+    // the tool's own output — everything except the document all of those come
+    // from. Asked why a node reads as added rather than context, that is the one
+    // artifact that answers, and it never reaches the model to be asked about.
+    renderBody(withStructured(proposal));
+    fireEvent.click(screen.getByText(/show envelope/));
+
+    const shown = screen.getByTestId("structured-envelope").textContent ?? "";
+    expect(JSON.parse(shown)).toEqual(proposal);
+    // Indented rather than as it arrived on one line: this is for reading
+    expect(shown).toContain("\n  ");
+    expect(screen.queryByTestId("structured-raw-output")).not.toBeInTheDocument();
+  });
+
   it("offers a textual equivalent of what the view displays", () => {
     renderBody(withStructured(proposal));
     fireEvent.click(screen.getByText(/show text equivalent/));

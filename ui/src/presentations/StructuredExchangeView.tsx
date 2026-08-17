@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EnlargedView } from "../components/EnlargedView";
 import type {
   StructuredElement,
   StructuredMessage,
@@ -1674,85 +1674,22 @@ function TableView({ data }: { data: StructuredTableData }) {
   );
 }
 
-/* ── Enlarged view ──────────────────────────────────────────────────────────── */
-
 /**
- * The diagram at its own size, out of the chat column.
+ * The envelope as text, indented so it can be read.
  *
- * Its natural size, not the window's: enlarging exists to undo a narrow column,
- * not to magnify a four-box diagram. Escape and the backdrop both close it — an
- * overlay you cannot dismiss without hunting for a control is worse than none.
+ * Taken from the string that arrived rather than from the validated object: what
+ * a reader is checking here is what the producer actually sent. Indentation is
+ * the only thing changed — `JSON.stringify` keeps key order, so nothing moves.
  */
-function EnlargedView({
-  label,
-  open,
-  onClose,
-  children,
-  actions,
-  containerRef,
-}: {
-  label: string;
-  open: boolean;
-  onClose: () => void;
-  children: ReactNode;
-  /** Export controls, so a diagram adjusted at full size can be taken away from here. */
-  actions?: ReactNode;
-  containerRef?: React.RefObject<HTMLDivElement | null>;
-}) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  /**
-   * Rendered into the document body rather than where it sits in the tree.
-   *
-   * `position: fixed` and a z-index are only as absolute as the nearest ancestor
-   * that made a stacking context, and this modal lives deep inside the transcript.
-   * The composer and the toolbar are in other branches with contexts of their own, so
-   * they painted over an overlay that was nominally above them — leaving controls
-   * visible and clickable through a dialog that had claimed the screen.
-   */
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`${label}, full size`}
-      data-testid="structured-enlarged"
-      onClick={onClose}
-      className="fixed inset-0 z-[100] flex items-center justify-center overflow-auto bg-black/60 p-6"
-    >
-      <div
-        onClick={(event) => event.stopPropagation()}
-        className="max-h-full w-auto max-w-[95vw] overflow-auto rounded-lg bg-white p-4 shadow-xl dark:bg-zinc-900"
-      >
-        <div className="mb-2 flex items-center justify-between gap-4">
-          <span className="text-xs text-zinc-500">{label}</span>
-          <div className="flex items-center gap-3">
-            {actions}
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="rounded px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-        <div ref={containerRef} className="[&_svg]:!max-w-none">
-          {children}
-        </div>
-      </div>
-    </div>,
-    globalThis.document.body,
-  );
+function envelopeSource(structured: string | undefined, envelope: ValidatedStructuredExchange): string {
+  if (structured === undefined) return JSON.stringify(envelope, null, 2);
+  try {
+    return JSON.stringify(JSON.parse(structured), null, 2);
+  } catch {
+    // Unreachable by way of the validator, which parsed it first. Shown as it
+    // came rather than swallowed, on the chance the two ever disagree.
+    return structured;
+  }
 }
 
 /* ── Textual equivalent ─────────────────────────────────────────────────────── */
@@ -1877,6 +1814,7 @@ function StructuredExchangeBody({ item }: PresentationProps) {
   const [showText, setShowText] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
+  const [showEnvelope, setShowEnvelope] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const diagramRef = useRef<HTMLDivElement>(null);
   const enlargedRef = useRef<HTMLDivElement>(null);
@@ -2017,6 +1955,9 @@ function StructuredExchangeBody({ item }: PresentationProps) {
         open={enlarged}
         onClose={() => setEnlarged(false)}
         containerRef={enlargedRef}
+        // The inline diagram stays mounted while the overlay is open, so it is
+        // what tells the overlay which tree it has to be rendered into.
+        anchorRef={diagramRef}
         actions={
           envelope.kind !== "table" && (
             <>
@@ -2094,6 +2035,9 @@ function StructuredExchangeBody({ item }: PresentationProps) {
             {showExport ? "hide" : "show"} derived diagram syntax
           </button>
         )}
+        <button type="button" className="text-zinc-500 underline" onClick={() => setShowEnvelope((open) => !open)}>
+          {showEnvelope ? "hide" : "show"} envelope
+        </button>
         <button type="button" className="text-zinc-500 underline" onClick={() => setShowRaw((open) => !open)}>
           {showRaw ? "hide" : "show"} original output
         </button>
@@ -2116,6 +2060,23 @@ function StructuredExchangeBody({ item }: PresentationProps) {
           </p>
           <pre data-testid="structured-derived-export" className="overflow-x-auto rounded bg-zinc-100 p-2 text-xs dark:bg-zinc-800">
             {mermaid}
+          </pre>
+        </div>
+      )}
+      {showEnvelope && (
+        <div>
+          {/* Everything else on this card is downstream of this document: the
+              rendering, the derived syntax, the text equivalent. When a producer
+              is wrong — a node marked added that should read as context — the
+              envelope is the only artifact that says why, and it was the one
+              thing the card did not show. Not the raw output either: that is
+              what the tool wrote for the model, and the envelope never reaches
+              the model at all. */}
+          <p className="mb-1 text-[11px] text-zinc-500">
+            The validated document this view is drawn from. It is not sent to the model.
+          </p>
+          <pre data-testid="structured-envelope" className="max-h-80 overflow-auto rounded bg-zinc-100 p-2 text-xs dark:bg-zinc-800">
+            {envelopeSource(item.structured, envelope)}
           </pre>
         </div>
       )}

@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
-import { Mermaid } from "./Mermaid";
+import { Mermaid, naturalWidth } from "./Mermaid";
 
 const renderDiagram = vi.hoisted(() => vi.fn());
 const initialize = vi.hoisted(() => vi.fn());
@@ -112,5 +112,27 @@ describe("Mermaid", () => {
     await settle();
     // The debounce timer was cleared with the component: nothing was ever asked for
     expect(renderDiagram).not.toHaveBeenCalled();
+  });
+});
+
+describe("naturalWidth", () => {
+  // Real mermaid output, both shapes: it writes a viewBox with a negative
+  // origin, and `width="100%"` with no intrinsic size of its own.
+  it("reads the width past a negative, fractional origin", () => {
+    expect(naturalWidth('<svg viewBox="-8 -8 96 36" width="100%">')).toBe(96);
+    expect(naturalWidth('<svg viewBox="-50 -10 450 176" width="100%">')).toBe(450);
+    expect(naturalWidth('<svg viewBox="-0.5 -12.25 1304.8 135">')).toBe(1304.8);
+  });
+
+  it("takes the outer diagram's box, not a marker's", () => {
+    // Markers carry viewBoxes of their own, and they live inside <defs>, which
+    // can only follow the opening tag — so the first match is the diagram's.
+    const svg = '<svg viewBox="0 0 800 200"><defs><marker viewBox="0 0 10 10"/></defs></svg>';
+    expect(naturalWidth(svg)).toBe(800);
+  });
+
+  it("says nothing rather than guessing when there is no usable box", () => {
+    expect(naturalWidth("<svg>")).toBeUndefined();
+    expect(naturalWidth('<svg viewBox="0 0 0 0">')).toBeUndefined();
   });
 });
