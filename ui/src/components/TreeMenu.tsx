@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TreeNode } from "@pi-outpost/shared";
 import { Rail } from "./graph/Rail";
 import { branchColor, ROW_H, type RailRow } from "./graph/lanes";
+import { useClickOutside } from "../util/clickOutside";
 
 interface TreeMenuProps {
   tree: TreeNode[] | null;
@@ -9,18 +10,6 @@ interface TreeMenuProps {
   onListTree: () => void;
   onNavigate: (entryId: string) => void;
   onFork: (entryId: string) => void;
-}
-
-function useClickOutside(onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    function handler(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-  return ref;
 }
 
 /**

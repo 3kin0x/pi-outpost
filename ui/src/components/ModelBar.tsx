@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ContextUsage, ModelChoice, ThinkingLevel } from "@pi-outpost/shared";
 import { THINKING_LEVELS } from "@pi-outpost/shared";
 import { formatCost, formatTokens, type SessionUsage } from "../util/sessionUsage";
+import { eventHitsNode } from "../util/clickOutside";
 
 interface ModelBarProps {
   model: string;
@@ -154,7 +155,7 @@ function ThinkingControl({
   useEffect(() => {
     if (!open) return;
     function onMouseDown(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+      if (ref.current && !eventHitsNode(event, ref.current)) setOpen(false);
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") setOpen(false);

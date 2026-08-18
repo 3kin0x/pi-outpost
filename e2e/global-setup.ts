@@ -165,6 +165,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   const root = await makeWorkspace({
     "readme.md": "# workspace\n\nA file the browser is allowed to see.\n",
+    // A prompt template, so `/` has something to autocomplete. Discovered from
+    // the workspace's own .pi/prompts, the same way a real project's are.
+    ".pi/prompts/greet.md": "---\ndescription: say hello\n---\n\nSay hello.\n",
   });
   const server = await startServer(
     root,
@@ -172,6 +175,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       // The host page is a different origin, which is the whole point of the widget.
       server: { allowedOrigins: [host.url] },
       branding: { title: "embed smoke" },
+      // The harness disables template discovery; this server wants it, so `/`
+      // has a command to complete.
+      noPromptTemplates: false,
     },
     { env: onlyOneFakeProvider() },
   );

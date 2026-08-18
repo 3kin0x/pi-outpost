@@ -469,3 +469,64 @@ test.describe("containers in a structured exchange", () => {
     expect(overlay).toEqual({ position: "fixed", containers: 3 });
   });
 });
+
+/**
+ * Autocomplete, driven the way a reader drives it.
+ *
+ * The composer's menus are dismissed by a pointer press outside them, and inside
+ * a shadow root a `document`-level listener is handed the widget's host element
+ * instead of whatever was really pressed — so "outside" used to mean everywhere,
+ * and the press that chose a suggestion closed the list instead of taking it.
+ */
+test.describe("composer autocomplete inside the widget", () => {
+  test("Tab takes the highlighted file into the message", async ({ page }) => {
+    const box = page.getByRole("textbox", { name: /message pi/i });
+    await box.click();
+    await box.pressSequentially("look at @read");
+    await expect(page.getByRole("button", { name: "readme.md" })).toBeVisible();
+
+    await box.press("Tab");
+    await expect(box).toHaveValue("look at @readme.md ");
+    await expect(page.getByRole("button", { name: "readme.md" })).toHaveCount(0);
+  });
+
+  test("clicking a suggestion takes it too", async ({ page }) => {
+    const box = page.getByRole("textbox", { name: /message pi/i });
+    await box.click();
+    await box.pressSequentially("look at @read");
+    await page.getByRole("button", { name: "readme.md" }).click();
+    await expect(box).toHaveValue("look at @readme.md ");
+  });
+
+  test("Tab takes the highlighted command into the message", async ({ page }) => {
+    const box = page.getByRole("textbox", { name: /message pi/i });
+    await box.click();
+    await box.pressSequentially("/gre");
+    await expect(page.getByRole("button", { name: /\/greet/ })).toBeVisible();
+
+    await box.press("Tab");
+    await expect(box).toHaveValue("/greet ");
+  });
+
+  test("clicking back into the message leaves the list open", async ({ page }) => {
+    const box = page.getByRole("textbox", { name: /message pi/i });
+    await box.click();
+    await box.pressSequentially("look at @read");
+    await expect(page.getByRole("button", { name: "readme.md" })).toBeVisible();
+
+    // Retargeting made this press read as "outside", so putting the caret back
+    // where you were typing dismissed the very list you were typing towards.
+    await box.click();
+    await expect(page.getByRole("button", { name: "readme.md" })).toBeVisible();
+  });
+
+  test("the caret stays in the message after a pick", async ({ page }) => {
+    const box = page.getByRole("textbox", { name: /message pi/i });
+    await box.click();
+    await box.pressSequentially("@read");
+    await expect(page.getByRole("button", { name: "readme.md" })).toBeVisible();
+    await box.press("Tab");
+    await box.pressSequentially("please");
+    await expect(box).toHaveValue("@readme.md please");
+  });
+});

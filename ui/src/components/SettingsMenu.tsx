@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useClickOutside } from "../util/clickOutside";
 
 interface SandboxConfig {
   root: string;
@@ -13,18 +14,6 @@ interface SettingsMenuProps {
   sandbox: SandboxConfig | null;
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
   onUpdateConfig: (sandbox: SandboxConfig) => void;
-}
-
-function useClickOutside(onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    function handler(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-  return ref;
 }
 
 export function SettingsMenu({ extensionPaths, sandbox, versions, onUpdateConfig }: SettingsMenuProps) {
