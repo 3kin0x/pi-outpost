@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode } from "@pi-outpost/shared";
 import type { GitStatusState, SessionSearch } from "../useAgent";
 import { stripAnsi } from "../util/ansi";
+import { useClickOutside } from "../util/clickOutside";
 import { GitMenu } from "./GitMenu";
 import { SettingsMenu } from "./SettingsMenu";
 import { TreeMenu } from "./TreeMenu";
@@ -44,18 +45,6 @@ interface HeaderProps {
   onForkSession: (entryId: string) => void;
   onFetchGitLog: () => void;
   onShowCommit: (sha: string) => void;
-}
-
-function useClickOutside(onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    function handler(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-  return ref;
 }
 
 const SESSION_SEARCH_DEBOUNCE_MS = 200;

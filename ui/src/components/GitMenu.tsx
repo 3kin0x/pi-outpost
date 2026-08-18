@@ -1,24 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { GitLogEntry } from "@pi-outpost/shared";
 import type { GitStatusState } from "../useAgent";
+import { useClickOutside } from "../util/clickOutside";
 
 interface GitMenuProps {
   status: GitStatusState | null;
   log: GitLogEntry[] | null;
   onFetchLog: () => void;
   onShowCommit: (sha: string) => void;
-}
-
-function useClickOutside(onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    function handler(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-  return ref;
 }
 
 function relativeDate(iso: string): string {

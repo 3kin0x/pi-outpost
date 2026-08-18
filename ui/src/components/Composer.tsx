@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandInfo, FileSearchEntry, WireImage } from "@pi-outpost/shared";
 import { composePrompt, mentionedPaths, type Attachment } from "../attachments";
 import type { FileSearch } from "../useAgent";
+import { eventHitsNode } from "../util/clickOutside";
 
 /** A guard on DOM size, not a limit on what a reader may find. The list scrolls. */
 const MAX_COMMAND_SUGGESTIONS = 100;
@@ -176,8 +177,7 @@ export function Composer({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent | TouchEvent) => {
-      const target = event.target as Node | null;
-      if (target && rootRef.current?.contains(target)) return;
+      if (eventHitsNode(event, rootRef.current)) return;
       setDismissed(true);
     };
     document.addEventListener("mousedown", onPointerDown);
