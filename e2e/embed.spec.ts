@@ -392,6 +392,79 @@ test.describe("diagrams in the widget", () => {
     expect(painted.cellText).toContain("REQ-001");
   });
 
+  /**
+   * Column sizing, which only a browser can answer: jsdom has no layout, so the
+   * width a column actually ends up with is not a thing a unit test can see.
+   */
+  test("a reader can size a column, and the rules run both ways", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    const rules = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const cell = [...shadow.querySelectorAll("td")].find((element) => element.textContent?.includes("REQ-001"))!;
+      const style = getComputedStyle(cell);
+      return { left: style.borderLeftWidth, bottom: style.borderBottomWidth };
+    });
+    // A row rule alone leaves seven columns of prose running together
+    expect(rules.left).not.toBe("0px");
+    expect(rules.bottom).not.toBe("0px");
+
+    // Grabbed deep in the table, not at the header: a column boundary is a line
+    // the whole height of it, and that is where a reader reading row ten reaches.
+    const grip = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const table = [...shadow.querySelectorAll("table")].find((element) => element.textContent?.includes("REQ-001"))!;
+      const row = [...table.querySelectorAll("tbody tr")].at(-1)!;
+      row.scrollIntoView({ block: "center" });
+      const handle = row.querySelectorAll("td")[1]!.querySelector('[aria-hidden="true"]')!;
+      const box = handle.getBoundingClientRect();
+      return {
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+        before: Math.round(table.querySelectorAll("th")[1]!.getBoundingClientRect().width),
+      };
+    });
+
+    await page.mouse.move(grip.x, grip.y);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + 150, grip.y, { steps: 10 });
+    await page.mouse.up();
+
+    const after = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const table = [...shadow.querySelectorAll("table")].find((element) => element.textContent?.includes("REQ-001"))!;
+      return Math.round(table.querySelectorAll("th")[1]!.getBoundingClientRect().width);
+    });
+
+    // The whole drag, not the first few pixels of it: pointer capture on the
+    // divider died on the first re-render and a 150-pixel gesture arrived as 30.
+    expect(after - grip.before).toBeGreaterThanOrEqual(140);
+  });
+
+  test("a table reaches the widget at all, rows and cell kinds intact", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    const table = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const tables = [...shadow.querySelectorAll("table")];
+      const requirements = tables.find((element) => element.textContent?.includes("REQ-001"));
+      if (!requirements) return null;
+      const lastRow = [...requirements.querySelectorAll("tbody tr")].at(-1)!;
+      return {
+        columns: [...requirements.querySelectorAll("thead th")].map((cell) => cell.textContent),
+        rows: requirements.querySelectorAll("tbody tr").length,
+        // string, number, boolean and null all reach a cell; none may be dropped
+        lastRow: [...lastRow.querySelectorAll("td")].map((cell) => cell.textContent),
+      };
+    });
+
+    expect(table).not.toBeNull();
+    expect(table!.columns).toEqual(["ID", "Requirement", "Status", "Safety"]);
+    expect(table!.rows).toBe(4);
+    expect(table!.lastRow[0]).toBe("REQ-004");
+    expect(table!.lastRow[3]).toBe("\u2014"); // null reads as an em dash, not as "null"
   });
 });
 

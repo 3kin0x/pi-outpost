@@ -1787,15 +1787,128 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
 
 /* ── Table ──────────────────────────────────────────────────────────────────── */
 
+/** Narrow enough to be a column still, wide enough to grab again. */
+const MIN_COLUMN_WIDTH = 48;
+
+/** One nudge of a divider held by the keyboard rather than the mouse. */
+const COLUMN_STEP = 16;
+
+/**
+ * A table, with rules on both axes and columns the reader can size.
+ *
+ * A requirements table is the case that made this necessary: an identifier
+ * column squeezed until `REQ-001` broke across two lines, beside a column of
+ * prose given a third of the width. Nothing about the document says how wide
+ * anything should be, and no heuristic here would know either — the reader can
+ * see what they are reading, so the reader gets the handles.
+ *
+ * Sizing is presentation only (see `ReaderMayAdjustAndNarrowTheView`): it is
+ * held in this component, never written back into the envelope, and a fresh
+ * rendering starts from the browser's own layout again.
+ *
+ * Which is also why widths start unset. `auto` layout reads content better than
+ * any measurement taken before the content is there, so the first drag freezes
+ * what the browser worked out and only then switches to `fixed` — from that
+ * point the columns hold their size and the wrapper scrolls.
+ */
 function TableView({ data }: { data: StructuredTableData }) {
+  const [widths, setWidths] = useState<number[] | null>(null);
+  const headRef = useRef<HTMLTableRowElement>(null);
+
+  /** What the browser is currently giving each column, before we take over. */
+  const measured = useCallback((): number[] => {
+    const cells = [...(headRef.current?.querySelectorAll("th") ?? [])];
+    return cells.map((cell) => Math.max(MIN_COLUMN_WIDTH, Math.round(cell.getBoundingClientRect().width)));
+  }, []);
+
+  const resize = useCallback(
+    (index: number, to: (current: number) => number) =>
+      setWidths((previous) => {
+        const base = previous ?? measured();
+        const next = [...base];
+        next[index] = Math.max(MIN_COLUMN_WIDTH, Math.round(to(base[index] ?? MIN_COLUMN_WIDTH)));
+        return next;
+      }),
+    [measured],
+  );
+
+  function startDrag(event: React.PointerEvent<HTMLDivElement>, index: number) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidths = widths ?? measured();
+    setWidths(startWidths);
+
+    /**
+     * The gesture is followed on the window, not on the divider.
+     *
+     * Pointer capture is the obvious answer and it does not survive this: the
+     * first movement sets state, the header re-renders, and a capture whose
+     * element React has replaced is simply gone — a 150-pixel drag arrived as
+     * thirty. The window is still there whatever the header does, and it is also
+     * what lets the pointer leave the table mid-drag without dropping it.
+     */
+    const onMove = (move: PointerEvent) => {
+      const from = startWidths[index] ?? MIN_COLUMN_WIDTH;
+      resize(index, () => from + (move.clientX - startX));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
+  const total = widths?.reduce((sum, width) => sum + width, 0);
+
+  /**
+   * The grabbable edge of a column, repeated down every row of it.
+   *
+   * A column boundary is a line the whole height of the table, and that is where
+   * a reader reaches for it — at the row they are reading, not by travelling
+   * back up to the header. Only the header's is focusable: one keyboard target
+   * per column is a control, ninety-eight of them is a tab trap.
+   */
+  const divider = (index: number, column: string, keyboard: boolean) => (
+    <div
+      role={keyboard ? "separator" : "presentation"}
+      aria-orientation={keyboard ? "vertical" : undefined}
+      aria-label={keyboard ? `Resize column ${column}` : undefined}
+      aria-hidden={keyboard ? undefined : true}
+      tabIndex={keyboard ? 0 : undefined}
+      onPointerDown={(event) => startDrag(event, index)}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const step = event.key === "ArrowRight" ? COLUMN_STEP : -COLUMN_STEP;
+        resize(index, (current) => current + step);
+      }}
+      className="absolute -right-px top-0 h-full w-1.5 cursor-col-resize touch-none hover:bg-zinc-400 focus:bg-zinc-400 focus:outline-none dark:hover:bg-zinc-500 dark:focus:bg-zinc-500"
+    />
+  );
+
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-xs">
+      <table
+        className={`border-collapse text-xs ${widths ? "" : "w-full"}`}
+        style={total === undefined ? undefined : { tableLayout: "fixed", width: total }}
+      >
+        <colgroup>
+          {data.columns.map((_, index) => (
+            <col key={index} style={widths ? { width: widths[index] } : undefined} />
+          ))}
+        </colgroup>
         <thead>
-          <tr>
+          <tr ref={headRef}>
             {data.columns.map((column, index) => (
-              <th key={index} className="border-b border-zinc-300 px-2 py-1 text-left font-medium dark:border-zinc-700">
-                {column}
+              <th
+                key={index}
+                className="relative border border-zinc-300 px-2 py-1 text-left font-medium dark:border-zinc-700"
+              >
+                <span className="block truncate">{column}</span>
+                {divider(index, column, true)}
               </th>
             ))}
           </tr>
@@ -1804,8 +1917,12 @@ function TableView({ data }: { data: StructuredTableData }) {
           {data.rows.map((row, rowIndex) => (
             <tr key={rowIndex}>
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="border-b border-zinc-200 px-2 py-1 dark:border-zinc-800">
+                <td
+                  key={cellIndex}
+                  className="relative border border-zinc-200 px-2 py-1 align-top break-words dark:border-zinc-800"
+                >
                   {cell === null ? <span className="opacity-40">—</span> : String(cell)}
+                  {divider(cellIndex, data.columns[cellIndex] ?? "", false)}
                 </td>
               ))}
             </tr>

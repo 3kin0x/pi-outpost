@@ -266,6 +266,60 @@ describe("declared order and declared kinds survive", () => {
     expect(container.querySelector('[data-message-index="0"] line')).toBeNull();
   });
 
+  it("gives every column a divider the reader can take hold of", () => {
+    const table = { schema: S, kind: "table", data: { columns: ["ID", "Requirement"], rows: [["REQ-1", "text"]] } };
+    const { container } = renderBody(withStructured(table));
+
+    // Named, so the divider is reachable without a mouse and says which column
+    // it belongs to. A requirements table is where an unnamed handle is useless:
+    // there are seven of them and they look alike.
+    expect(screen.getByLabelText("Resize column ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Resize column Requirement")).toBeInTheDocument();
+
+    // Untouched, the browser's own layout decides: no width is imposed
+    const cols = [...container.querySelectorAll("col")];
+    expect(cols).toHaveLength(2);
+    expect(cols.every((col) => col.style.width === "")).toBe(true);
+    expect(container.querySelector("table")!.style.tableLayout).toBe("");
+  });
+
+  it("widens and narrows a column from the keyboard, and stops at a column still being one", () => {
+    const table = { schema: S, kind: "table", data: { columns: ["ID", "Requirement"], rows: [["REQ-1", "text"]] } };
+    const { container } = renderBody(withStructured(table));
+    const divider = screen.getByLabelText("Resize column ID");
+    const widthOf = (index: number) => container.querySelectorAll("col")[index]!.style.width;
+
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    const widened = parseFloat(widthOf(0));
+    expect(widened).toBeGreaterThan(0);
+    // Sizing the first column must not resize the second one out from under it
+    const neighbour = widthOf(1);
+
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    expect(parseFloat(widthOf(0))).toBeGreaterThan(widened);
+    expect(widthOf(1)).toBe(neighbour);
+
+    // Down to the floor and no further: a column dragged to nothing cannot be
+    // grabbed again, and the reader has no way back.
+    for (let press = 0; press < 20; press += 1) fireEvent.keyDown(divider, { key: "ArrowLeft" });
+    expect(parseFloat(widthOf(0))).toBe(48);
+
+    // Once sized, the widths are what lays the table out
+    expect(container.querySelector("table")!.style.tableLayout).toBe("fixed");
+  });
+
+  it("keeps a reader's column sizing out of the document", () => {
+    const table = { schema: S, kind: "table", data: { columns: ["ID"], rows: [["REQ-1"]] } };
+    const item = withStructured(table);
+    const before = item.structured;
+    renderBody(item);
+
+    fireEvent.keyDown(screen.getByLabelText("Resize column ID"), { key: "ArrowRight" });
+
+    // Presentation only, per ReaderMayAdjustAndNarrowTheView
+    expect(item.structured).toBe(before);
+  });
+
   it("renders table columns and rows in their declared order", () => {
     const table = {
       schema: S,
