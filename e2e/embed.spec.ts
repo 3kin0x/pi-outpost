@@ -105,6 +105,43 @@ test("setTheme switches the widget without touching the host", async ({ page }) 
   expect((await readTheme()).hostBackground).toBe(light.hostBackground);
 });
 
+/**
+ * Borders, which Tailwind v4 draws through a registered custom property.
+ *
+ * `@property` registers on the document or not at all: inside a shadow tree, and
+ * inside an adopted stylesheet in particular, the rule is parsed and ignored.
+ * `.border` is `border-style: var(--tw-border-style); border-width: 1px`, so with
+ * the property unregistered that `var()` resolves to nothing, `border-style` is
+ * invalid at computed-value time, and every border in the widget silently
+ * vanishes — cards, menus, composer, tables alike. Width and colour still arrive,
+ * which is why it reads as a flat design rather than as a bug.
+ */
+test("the widget's borders are drawn, not silently dropped", async ({ page }) => {
+  await expect(page.getByTitle("connected")).toBeVisible();
+
+  const drawn = await page.evaluate(() => {
+    const shadow = document.querySelector("#widget")!.shadowRoot!;
+    const bordered = shadow.querySelector('[title="Settings"]')!;
+    const style = getComputedStyle(bordered);
+    return {
+      borderStyle: style.borderStyle,
+      borderWidth: style.borderWidth,
+      // The registration lives on the document, the one thing that must cross
+      // the shadow boundary — and it is Tailwind's own namespace, not the host's.
+      registered: document.getElementById("pi-outpost-custom-properties") !== null,
+      registrationsAreTailwindsOwn: (document.getElementById("pi-outpost-custom-properties")?.textContent ?? "")
+        .split("@property")
+        .slice(1)
+        .every((rule) => rule.trimStart().startsWith("--tw-")),
+    };
+  });
+
+  expect(drawn.borderStyle).toBe("solid");
+  expect(drawn.borderWidth).not.toBe("0px");
+  expect(drawn.registered).toBe(true);
+  expect(drawn.registrationsAreTailwindsOwn).toBe(true);
+});
+
 test("unmount empties the shadow root and leaves the container", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: /message pi/i })).toBeVisible();
 
@@ -312,6 +349,8 @@ test.describe("diagrams in the widget", () => {
 
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+
   });
 });
 
