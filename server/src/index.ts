@@ -48,6 +48,8 @@ import { TOOLS_ENV_VAR, type PiOutpostToolsSettings } from "./piOutpostTools.ts"
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
+import { BuildExeError, buildExecutable } from "./buildExe.ts";
+import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
 import { loadConfig, NoConfigError } from "./config.ts";
 import {
   CredentialError,
@@ -151,6 +153,24 @@ if (cli.command === "init") {
     console.log(`[pi] wrote ${written}\n[pi] edit it, then run: pi-outpost`);
     process.exit(0);
   } catch (error) {
+    complain(error);
+    process.exit(1);
+  }
+}
+
+// Before the configuration is loaded, deliberately: building an executable has
+// nothing to do with how a server would be configured, and refusing to build one
+// because no config file exists would be an obstacle invented for its own sake.
+if (cli.command === "build-exe") {
+  try {
+    const built = buildExecutable({ out: cli.buildExe.out, force: cli.buildExe.force, cwd: LAUNCH_DIR });
+    console.log(`[pi] wrote ${built.path} (${built.method})\n[pi] run it: ${built.path}`);
+    process.exit(0);
+  } catch (error) {
+    if (error instanceof BuildExeError) {
+      console.error(`[pi] ${error.message}`);
+      process.exit(1);
+    }
     complain(error);
     process.exit(1);
   }
@@ -609,6 +629,32 @@ if (EMBEDDED_WEB && Object.keys(EMBEDDED_WEB).length > 0) {
 
 await app.listen({ port: PORT, host: HOST });
 console.log(`[server] http://${HOST}:${PORT}/`);
+
+/**
+ * Land the operator in the interface they just started.
+ *
+ * The address comes from what was bound, not from what was asked for: `port: 0`
+ * means the operating system chose, and the configured value is then a number
+ * nobody is listening on. Opening here rather than earlier is the whole point —
+ * a browser sent before `listen` resolves shows a connection error, and the
+ * operator concludes the thing is broken.
+ */
+{
+  const bound = app.server.address();
+  const url = typeof bound === "object" && bound !== null ? browsableUrl(bound) : `http://${HOST}:${PORT}/`;
+  // A server with no interface of its own has nothing to open: in development the
+  // UI comes from Vite on another port, and a tab on this one shows a 404. It is
+  // also what a backend for an embedded widget looks like, which is the other case
+  // where a browser is the wrong answer.
+  const servesTheInterface = (EMBEDDED_WEB && Object.keys(EMBEDDED_WEB).length > 0) || WEB_DIST !== undefined;
+  if (servesTheInterface && shouldOpenBrowser({ explicit: cli.open, configured: config.openBrowser })) {
+    // Not awaited for its outcome beyond a line of output: a browser that will not
+    // start is not a reason for a server to stop.
+    void openBrowser(url).then((opened) => {
+      if (!opened) console.log(`[server] could not open a browser — open ${url} yourself`);
+    });
+  }
+}
 
 // --- Agent session runtime ---------------------------------------------------
 

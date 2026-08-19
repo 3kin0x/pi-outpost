@@ -8,33 +8,55 @@ inlined at build time into the bundle.
 
 > **Requires Node ≥ 26** (for `--build-sea` + `mainFormat: "module"` support).
 
-## Quick start (from npm)
+## The two ways to get one
 
-The fastest way to get a standalone `.exe` is from the published npm package:
+**Download it.** Every release carries an executable per platform, under
+[Releases](https://github.com/laurentftech/pi-outpost/releases): `pi-outpost-<version>-macos-arm64`,
+`-macos-x64`, `-linux-x64`, `-windows-x64.exe`. Nothing installed, nothing built.
 
-```powershell
-# 1. Install pi-outpost anywhere with Node.js
+They are **not signed for distribution**. macOS Gatekeeper and Windows SmartScreen
+both warn on a downloaded unsigned binary; on macOS you clear it with
+`xattr -d com.apple.quarantine ./pi-outpost` or the Open-anyway button in System
+Settings. Real signing means a certificate and notarisation, and is not done here.
+
+**Build it from the package you have:**
+
+```bash
 npm install pi-outpost
-
-# 2. Create a SEA config file
-# (on Windows the output must end in .exe)
-# NOTE: -Encoding utf8NoBOM — plain utf8 adds a BOM that breaks Node's JSON parse
-@'
-{ "main": "node_modules/pi-outpost/dist/pi-outpost.sea.mjs",
-  "output": "pi-outpost.exe",
-  "mainFormat": "module" }
-'@ | Out-File -Encoding utf8NoBOM sea-config.json
-
-# 3. Build the executable (Node ≥ 26 only)
-node --build-sea sea-config.json
-
-# 4. Run it (the web UI is already inside the .exe — nothing else to copy)
-.\pi-outpost.exe --version
+npx pi-outpost build-exe          # → ./pi-outpost (./pi-outpost.exe on Windows)
 ```
 
-The published npm package ships two bundles:
-- `pi-outpost.mjs` (≈ 2 MB) — npm dependencies external, for `npx` / `npm start`.
-- `pi-outpost.sea.mjs` (≈ 21 MB) — all dependencies **and the web UI** inlined, for `--build-sea`.
+That is the whole procedure. The command writes the SEA config itself — including
+the module format and an encoding without a byte order mark, the two details that
+used to make this fail unreadably — builds, signs the result where the platform
+requires it, and prints the path.
+
+```
+--out <path>   where to write it (default: ./pi-outpost, ./pi-outpost.exe on Windows)
+--force        replace an existing file at that path
+```
+
+On **Node ≥ 26** it uses `node --build-sea`. On anything older it falls back to
+injecting the shipped `sea-prep.blob` into a copy of your `node` binary with
+`postject`, and says so — the two artifacts are not identical, and when one of them
+misbehaves the first question is which one you have.
+
+On macOS the result is signed ad-hoc (`codesign --sign -`). That is what makes a
+modified binary *launch* at all: without it the kernel kills it, naming neither the
+signature nor the remedy. It is not a distribution signature.
+
+## Starting it
+
+Running the executable starts the server and opens the interface in your default
+browser, at the address it actually bound — including when the configuration asked
+for port `0` and the operating system chose. Launching it from a file manager works
+the same way, which is the point: there is no terminal there for an address to be
+printed to.
+
+No browser is opened where none can be shown — no desktop session, a container, a
+remote shell, a CI runner. `--open` and `--no-open` decide it explicitly, and
+`"openBrowser": false` in the configuration pins it for a deployment. A browser that
+fails to open never stops the server: the address is printed either way.
 
 ## Build from source
 
@@ -90,7 +112,10 @@ npx postject pi-outpost.exe NODE_SEA_BLOB node_modules/pi-outpost/dist/sea-prep.
 signtool sign /fd SHA256 pi-outpost.exe   # re-sign after injection
 ```
 
-> This is the legacy workflow. Prefer `--build-sea` (above) — no external tools needed.
+> `pi-outpost build-exe` does this for you, including the `--macho-segment-name
+> NODE_SEA` that macOS needs and the ad-hoc signature without which the result is
+> killed at launch. Reach for the manual form only when you are debugging the
+> command itself.
 
 ## Skills are not inside the executable
 

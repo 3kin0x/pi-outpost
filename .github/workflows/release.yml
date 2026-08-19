@@ -6,9 +6,20 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # The executables are the half of this pipeline that cannot be judged from a
+  # laptop: they are per-platform by nature, and a runtime whose single-executable
+  # support is broken builds them happily and crashes on the first invocation. This
+  # runs the matrix from any branch, without publishing anything.
+  workflow_dispatch:
+    inputs:
+      executables_only:
+        description: "Build the executables and stop (no npm publish)"
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  # The executables are uploaded to the release this tag created.
+  contents: write
   # The OIDC token GitHub mints for this workflow. npm's trusted publisher for both
   # packages names this repo and this file, so the token *is* the credential: no
   # NPM_TOKEN, nothing to steal from the repo's secrets, and provenance is attested
@@ -16,7 +27,69 @@ permissions:
   id-token: write
 
 jobs:
+  # One executable per platform, built on that platform: a single-file executable
+  # carries a runtime, and a runtime is not cross-buildable. They gate the publish
+  # rather than following it — a version on npm whose release page has nothing to
+  # download is worse than a release that stopped.
+  executables:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-13
+            arch: x64
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: windows-latest
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          # 26 and not the version the rest of the pipeline uses: --build-sea is
+          # what produces an executable, and it landed in 26.
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      # The executable inlines the built web UI, so the UI has to exist first
+      - run: npm run build
+
+      - name: Build the executable
+        shell: bash
+        run: |
+          version=$(node -p "require('./cli/package.json').version")
+          os=$(node -p "process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux'")
+          name="pi-outpost-$version-$os-${{ matrix.arch }}"
+          [ "$os" = "windows" ] && name="$name.exe"
+          node --import tsx/esm server/src/index.ts build-exe --out "$name" --force
+          echo "ARTIFACT=$name" >> "$GITHUB_ENV"
+
+      # build-exe already refuses to report success for an executable that does not
+      # run — it invokes the result before printing a path. This asserts the other
+      # half: that what runs is *this* version, not a stale bundle picked up by
+      # accident.
+      - name: It reports the version being released
+        shell: bash
+        run: |
+          printed=$("./$ARTIFACT" --version)
+          expected=$(node -p "require('./cli/package.json').version")
+          if [ "$printed" != "$expected" ]; then
+            echo "::error::the executable reports $printed, the tag says $expected"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ env.ARTIFACT }}
+          if-no-files-found: error
+
   publish:
+    needs: executables
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -100,3 +173,19 @@ jobs:
             npm publish --workspace "$pkg"
           done
 
+  # Attached after publish, from the artifacts the matrix already proved runnable.
+  attach:
+    needs: [executables, publish]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: executables
+          merge-multiple: true
+      - name: Attach the executables to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" executables/* --clobber --repo "$GITHUB_REPOSITORY"

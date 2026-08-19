@@ -74,6 +74,10 @@ export async function startServer(root, config = {}, options = {}) {
     noSkills: true,
     noPromptTemplates: true,
     webContext: false,
+    // A test starts a real server, and a real server opens a browser. Sixty of them
+    // opened sixty tabs on the developer's desktop the first time this shipped — the
+    // suite is a deployment that must never open one, and says so.
+    openBrowser: false,
     ...config,
     server: { host: "127.0.0.1", ...config.server, port },
   };

@@ -297,6 +297,15 @@ export interface AppConfig {
    * catalog only adds metadata for models the SDK already knows about.
    */
   offline: boolean;
+  /**
+   * Whether starting the server opens the interface in a browser.
+   *
+   * Left undefined by default rather than set: the decision then rests on whether a
+   * browser can be shown at all (see openBrowser.ts), which is right on a desktop
+   * and right on a headless host without either being configured. Set it to pin the
+   * answer for a deployment — a kiosk that must open, a service that must not.
+   */
+  openBrowser?: boolean;
   port: number;
   host: string;
   /** Extra exact Origins allowed on the WebSocket (for embedding in another app). */
@@ -653,6 +662,7 @@ export function loadConfig(
   config.appendSystemPrompt = optionalStringArray(raw, "appendSystemPrompt") ?? [];
   config.webContext = optionalBoolean(raw, "webContext", true);
   config.offline = optionalBoolean(raw, "offline", false);
+  if (raw.openBrowser !== undefined) config.openBrowser = optionalBoolean(raw, "openBrowser", true);
 
   if (raw.server !== undefined) {
     const server = asObject(raw.server, "server");

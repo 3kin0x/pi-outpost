@@ -12,7 +12,7 @@ const emptyFlags = () => ({
   port: undefined,
   host: undefined,
 });
-import { parseCli, runInit, CliError } from "../src/cli.ts";
+import { parseCli, runInit, CliError, helpText } from "../src/cli.ts";
 
 // ---------------------------------------------------------------------------
 // parseCli
@@ -233,5 +233,38 @@ describe("runInit", () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("build-exe and the browser flags", () => {
+  test("the subcommand is recognised with its own options", () => {
+    const parsed = parseCli(["build-exe", "--out", "./dist/pi", "--force"]);
+    assert.equal(parsed.command, "build-exe");
+    assert.equal(parsed.buildExe.out, "./dist/pi");
+    assert.equal(parsed.buildExe.force, true);
+  });
+
+  test("help lists it", () => {
+    const help = helpText();
+    assert.match(help, /build-exe/);
+    assert.match(help, /--out <path>/);
+    assert.match(help, /--no-open/);
+  });
+
+  test("a flag belonging to another command is an error, not silence", () => {
+    // Silently starting a server because --out was ignored is the worse outcome
+    assert.throws(() => parseCli(["--out", "./pi"]), CliError);
+    assert.throws(() => parseCli(["build-exe", "--provider", "anthropic"]), CliError);
+    assert.throws(() => parseCli(["build-exe", "--global"]), CliError);
+  });
+
+  test("the two browser flags cannot both be given", () => {
+    assert.throws(() => parseCli(["--open", "--no-open"]), CliError);
+  });
+
+  test("neither flag leaves the decision to configuration", () => {
+    assert.equal(parseCli([]).open, undefined);
+    assert.equal(parseCli(["--open"]).open, true);
+    assert.equal(parseCli(["--no-open"]).open, false);
   });
 });

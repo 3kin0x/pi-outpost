@@ -52,6 +52,7 @@ Usage
   pi-outpost config [options]    print the configuration that would be used, and where it came from
   pi-outpost login --provider <name>
                                  store an API key for a provider in <agentDir>/auth.json
+  pi-outpost build-exe [options] build a standalone executable from this installation
 
 Options
   --config <path>    configuration file to use
@@ -61,6 +62,8 @@ Options
   --port <n>         port to listen on (default: 3141)
   --host <addr>      address to bind (default: 127.0.0.1)
   --offline          never fetch remote model catalogs (air-gapped hosts)
+  --open             open the interface in your browser once the server is listening
+  --no-open          do not (the default wherever no desktop session exists)
   -h, --help         show this help
   -v, --version      show the version
 
@@ -70,6 +73,14 @@ init options
 
 login options
   --provider <name>  provider to store a key for (e.g. anthropic, openai, mistral)
+
+build-exe options
+  --out <path>       where to write it (default: ./pi-outpost, ./pi-outpost.exe on Windows)
+  --force            replace an existing file at that path
+
+The executable carries the server and the web UI and needs nothing installed to run.
+Released builds are attached to https://github.com/laurentftech/pi-outpost/releases —
+this command is for building one from the version you have.
 
 The key itself has no flag, for the same reason the auth token has none: argv is
 world-readable. It is prompted for on a terminal, or read from stdin when piped:
@@ -137,14 +148,17 @@ Agent runtime
 export class CliError extends Error {}
 
 export interface ParsedCli {
-  command: "serve" | "init" | "config" | "login" | "help" | "version";
+  command: "serve" | "init" | "config" | "login" | "build-exe" | "help" | "version";
   flags: CliOptions;
   init: { global: boolean; force: boolean };
   login: { provider?: string };
+  buildExe: { out?: string; force: boolean };
+  /** undefined when neither --open nor --no-open was given, so config still decides. */
+  open?: boolean;
 }
 
-type Command = "init" | "config" | "login";
-const COMMANDS: readonly string[] = ["init", "config", "login"] satisfies Command[];
+type Command = "init" | "config" | "login" | "build-exe";
+const COMMANDS: readonly string[] = ["init", "config", "login", "build-exe"] satisfies Command[];
 
 function integerFlag(value: string | undefined, name: string): number | undefined {
   if (value === undefined) return undefined;
@@ -172,6 +186,9 @@ export function parseCli(argv: string[]): ParsedCli {
         global: { type: "boolean", default: false },
         force: { type: "boolean", default: false },
         provider: { type: "string" },
+        out: { type: "string" },
+        open: { type: "boolean", default: false },
+        "no-open": { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
       },
@@ -191,6 +208,22 @@ export function parseCli(argv: string[]): ParsedCli {
   }
   const command = positional as Command | undefined;
 
+  // A flag that belongs to another command is an error, not something to ignore:
+  // `pi-outpost --out ./x` silently starting a server is a worse outcome than being
+  // told the flag has an owner.
+  if (values.out !== undefined && command !== "build-exe") {
+    throw new CliError('"--out" belongs to "pi-outpost build-exe" — see "pi-outpost --help"');
+  }
+  if (values.provider !== undefined && command !== "login") {
+    throw new CliError('"--provider" belongs to "pi-outpost login" — see "pi-outpost --help"');
+  }
+  if (values.global && command !== "init") {
+    throw new CliError('"--global" belongs to "pi-outpost init" — see "pi-outpost --help"');
+  }
+  if (values.open && values["no-open"]) {
+    throw new CliError('"--open" and "--no-open" contradict each other — see "pi-outpost --help"');
+  }
+
   const flags: CliOptions = {
     config: values.config,
     profile: values.profile,
@@ -208,6 +241,9 @@ export function parseCli(argv: string[]): ParsedCli {
     flags,
     init: { global: values.global, force: values.force },
     login: { provider: values.provider },
+    buildExe: { out: values.out, force: values.force },
+    // Left undefined unless asked for, so configuration still has its say.
+    ...(values.open ? { open: true } : values["no-open"] ? { open: false } : {}),
   };
 }
 
