@@ -1,0 +1,18 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "id",
+      "requirement"
+    ],
+    "rows": [
+      {
+        "role": "added",
+        "cells": [
+          "only-one"
+        ]
+      }
+    ]
+  }
+}

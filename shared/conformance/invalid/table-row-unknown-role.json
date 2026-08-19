@@ -1,0 +1,17 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      {
+        "role": "deleted",
+        "cells": [
+          "REQ-001"
+        ]
+      }
+    ]
+  }
+}

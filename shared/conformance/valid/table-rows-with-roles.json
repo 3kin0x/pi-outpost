@@ -1,0 +1,45 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "id",
+      "requirement",
+      "status"
+    ],
+    "rows": [
+      {
+        "role": "added",
+        "cells": [
+          "REQ-005",
+          "The system shall log every actuation.",
+          "draft"
+        ]
+      },
+      {
+        "role": "changed",
+        "cells": [
+          "REQ-002",
+          "The dashboard shall signal a fault within 200 ms.",
+          "in review"
+        ]
+      },
+      {
+        "role": "context",
+        "cells": [
+          "REQ-001",
+          "The braking system shall stop the vehicle.",
+          "approved"
+        ]
+      },
+      {
+        "role": "removed",
+        "cells": [
+          "REQ-003",
+          "The ECU shall read battery voltage at 10 Hz.",
+          "withdrawn"
+        ]
+      }
+    ]
+  }
+}

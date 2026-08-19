@@ -80,7 +80,9 @@ describe("structured-exchange schema", () => {
       ["label", schema.$defs.label.maxLength],
       ["kind", schema.$defs.kind.maxLength],
       ["columnName", tableVariant.properties.columns.items.maxLength],
-      ["cell", tableVariant.properties.rows.items.items.maxLength],
+      // A row is either a bare array of cells or an object carrying them, so the
+      // cell bound lives in the definition both forms point at.
+      ["cell", schema.$defs.cells.items.maxLength],
     ];
 
     for (const [name, declared] of strings) {
@@ -183,6 +185,70 @@ describe("structured-exchange schema", () => {
     test("only graph and sequence may be proposed", () => {
       assert.deepEqual([...PROPOSABLE_KINDS], ["graph", "sequence"]);
       assert.deepEqual(schema.properties.kind.enum, ["graph", "sequence", "table"]);
+    });
+
+    /**
+     * Roles report; they do not propose. A table stays unapplicable whatever its
+     * rows declare, and the older row form has to keep working for the life of
+     * version 1 — a producer written before roles existed sends bare arrays.
+     */
+    describe("a table's rows may report a change without becoming a proposal", () => {
+      const table = (rows: unknown[], over: Record<string, unknown> = {}) => ({
+        schema: STRUCTURED_EXCHANGE_SCHEMA_V1,
+        kind: "table",
+        data: { columns: ["id", "requirement"], rows },
+        ...over,
+      });
+
+      test("both row forms are accepted, mixed in one table", () => {
+        assert.equal(
+          Check(
+            schema,
+            table([
+              ["REQ-1", "a bare row"],
+              { cells: ["REQ-2", "a row that declares nothing"] },
+              { role: "added", cells: ["REQ-3", "a row that declares a role"] },
+            ]),
+          ),
+          true,
+        );
+      });
+
+      test("every declared role is a role the renderer knows", () => {
+        for (const role of ["added", "changed", "context", "removed"]) {
+          assert.equal(Check(schema, table([{ role, cells: ["REQ-1", "x"] }])), true, role);
+        }
+        assert.equal(Check(schema, table([{ role: "deleted", cells: ["REQ-1", "x"] }])), false);
+      });
+
+      test("a row object without cells is not a row", () => {
+        assert.equal(Check(schema, table([{ role: "added" }])), false);
+      });
+
+      test("either form must align to the declared columns", () => {
+        const short = validateStructuredExchangeSemantics(
+          table([{ role: "added", cells: ["only-one"] }]) as never,
+        );
+        assert.deepEqual(
+          short.map((issue) => [issue.rule, issue.path, issue.observed, issue.limit]),
+          [["row-column-mismatch", "/data/rows/0", 1, 2]],
+        );
+        // The bare form reports the same way, so a producer reads one message
+        const bare = validateStructuredExchangeSemantics(table([["only-one"]]) as never);
+        assert.deepEqual(
+          bare.map((issue) => [issue.rule, issue.path, issue.observed, issue.limit]),
+          [["row-column-mismatch", "/data/rows/0", 1, 2]],
+        );
+      });
+
+      test("a table carrying roles still cannot be proposed", () => {
+        const proposal = table([{ role: "added", cells: ["REQ-1", "x"] }], { target: "requirements.md" });
+        assert.equal(Check(schema, proposal), true, "the shape is fine; the semantics are not");
+        assert.deepEqual(
+          validateStructuredExchangeSemantics(proposal as never).map((issue) => issue.rule),
+          ["kind-not-proposable"],
+        );
+      });
     });
 
     test("the data variants are mutually exclusive, so oneOf can tell them apart", () => {

@@ -1,0 +1,29 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "id",
+      "requirement"
+    ],
+    "rows": [
+      {
+        "role": "added",
+        "cells": [
+          "REQ-005",
+          "A new one."
+        ]
+      },
+      {
+        "cells": [
+          "REQ-001",
+          "A row that declares no role."
+        ]
+      },
+      [
+        "REQ-002",
+        "A row still written as a bare array."
+      ]
+    ]
+  }
+}
