@@ -75,6 +75,16 @@ jobs:
   # running in parallel keeps it off the critical path.
   browser:
     runs-on: ubuntu-latest
+    # Chromium and the twenty-odd system libraries it needs are already in this
+    # image. Installing them per run took eleven minutes against a job whose real
+    # work — checkout, install, build, the suite — takes about one, and it did it
+    # on every pull request.
+    #
+    # The tag pins the Playwright version, so it has to move with the dependency:
+    # a browser older or newer than the client that drives it fails at launch, and
+    # fails confusingly. The step below refuses the job when the two drift apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -82,10 +92,17 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: The image must carry the Playwright this repo installs
+        run: |
+          image=$(grep -om1 'mcr.microsoft.com/playwright:v[0-9.]*' .github/workflows/ci.yml | sed 's/.*:v//')
+          installed=$(node -p "require('@playwright/test/package.json').version")
+          if [ "$image" != "$installed" ]; then
+            echo "::error::container image is Playwright $image, package.json installs $installed — bump the image tag"
+            exit 1
+          fi
+          echo "Playwright $installed, browsers from the image at $PLAYWRIGHT_BROWSERS_PATH"
       # web/dist is what the server serves, embed/dist is what the host page imports
       - run: npm run build
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
         env:
           CI: true
