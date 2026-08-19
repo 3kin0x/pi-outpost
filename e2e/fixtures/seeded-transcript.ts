@@ -114,6 +114,28 @@ const SEQUENCE_WITH_CONTAINERS = {
   },
 };
 
+/**
+ * A table, and the one kind that is HTML text rather than a picture.
+ *
+ * SVG text carries an explicit `fill` and inherits nothing, so a diagram cannot
+ * show what the overlay inherits from. A requirement in prose can, which is how
+ * an overlay portalled past the app's own root — and inheriting the host page's
+ * `* { color: red }` — stayed invisible until someone enlarged a table.
+ */
+const REQUIREMENTS_TABLE = {
+  schema: "urn:structured-exchange:1",
+  kind: "table",
+  data: {
+    columns: ["ID", "Requirement", "Status", "Safety"],
+    rows: [
+      ["REQ-001", "The braking system shall bring the vehicle to a full stop within 40 m on dry asphalt.", "approved", true],
+      ["REQ-002", "The dashboard shall signal a fault within 200 ms of detection.", "in review", true],
+      ["REQ-003", "The system shall log every actuation with a monotonic timestamp.", "approved", false],
+      ["REQ-004", "The ECU shall read battery voltage at 10 Hz.", "draft", null],
+    ],
+  },
+};
+
 export const SEEDED_MESSAGES = [
   { role: "user", content: "Draw me the architecture." },
   { role: "assistant", content: [{ type: "text", text: SEEDED_MERMAID }] },
@@ -150,5 +172,16 @@ export const SEEDED_MESSAGES = [
     toolName: "structured_exchange",
     content: "sequence whose containers interleave as declared",
     details: SEQUENCE_WITH_CONTAINERS,
+  },
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-4", name: "structured_exchange", arguments: { kind: "table" } }],
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call-4",
+    toolName: "structured_exchange",
+    content: "requirements table with 4 rows",
+    details: REQUIREMENTS_TABLE,
   },
 ];

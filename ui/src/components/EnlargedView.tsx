@@ -16,8 +16,21 @@ import { createPortal } from "react-dom";
  * the document body is on the wrong side of that boundary: a node portalled
  * there gets no styling at all. Measured in the widget, the overlay came out
  * `position: static`, `z-index: auto`, transparent, and stacked *below* the
- * widget — half of it off-screen. The shadow root is the outermost point that is
- * still styled, so that is as far out as the portal goes.
+ * widget — half of it off-screen.
+ *
+ * Far enough out, then, but no further: the app's own root element, not the
+ * shadow root above it. Inherited properties cross a shadow boundary — they are
+ * not blocked, only overridden by whatever the tree declares for itself — and
+ * what the app declares, it declares on that root. An overlay portalled past it
+ * is a sibling, so it inherits from the *host element* instead, and a host page
+ * that paints `* { color: red }` paints the widget's dialog red. Diagrams hid
+ * this for a while: SVG text carries an explicit `fill` and inherits nothing. A
+ * table is HTML text, and came out red on every cell.
+ *
+ * The root element is found by climbing rather than by id, so it is whatever the
+ * app was actually mounted into. It creates no containing block, so `fixed`
+ * still resolves against the viewport, and it is still above every stacking
+ * context inside the app — which is what the portal was for.
  *
  * `anchor` is any element inside the app; the tree it belongs to decides.
  * Answering `undefined` for an anchor that is not mounted matters: the caller
@@ -25,9 +38,11 @@ import { createPortal } from "react-dom";
  * falling back is the bug.
  */
 export function overlayHost(anchor: Element | null | undefined): Element | DocumentFragment | undefined {
-  const root = anchor?.getRootNode();
-  if (root === undefined) return undefined;
-  return root instanceof ShadowRoot ? root : globalThis.document.body;
+  if (anchor === null || anchor === undefined) return undefined;
+  if (!(anchor.getRootNode() instanceof ShadowRoot)) return globalThis.document.body;
+  let element: Element = anchor;
+  while (element.parentElement !== null) element = element.parentElement;
+  return element;
 }
 
 /**
