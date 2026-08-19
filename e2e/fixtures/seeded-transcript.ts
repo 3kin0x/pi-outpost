@@ -115,6 +115,74 @@ const SEQUENCE_WITH_CONTAINERS = {
 };
 
 /**
+ * An architecture whose elements declare what kind of thing they are.
+ *
+ * The other graphs here type their relationships and leave their elements bare,
+ * so the elements' half of the key was always empty and the colour-by-type
+ * vocabulary — the one thing that separates a domain from its neighbours in a
+ * picture — never appeared in a running widget at all.
+ *
+ * Five element types and four relationship types, which is what makes the two
+ * vocabularies visibly independent: `reads` is a relationship type and `store` an
+ * element type, and a reader hiding one must not lose the other.
+ */
+const TYPED_GRAPH = {
+  schema: "urn:structured-exchange:1",
+  kind: "graph",
+  data: {
+    nodes: [
+      { id: "portal", label: "Customer portal", kind: "ui" },
+      { id: "orders", label: "Order service", kind: "service" },
+      { id: "billing", label: "Billing service", kind: "service" },
+      { id: "catalogue", label: "Catalogue service", kind: "service" },
+      { id: "ledger", label: "Ledger", kind: "store" },
+      { id: "orderdb", label: "Order store", kind: "store" },
+      { id: "events", label: "Order events", kind: "queue" },
+      { id: "psp", label: "Payment provider", kind: "external" },
+      { id: "post", label: "Carrier API", kind: "external" },
+    ],
+    edges: [
+      { from: "portal", to: "orders", kind: "calls" },
+      { from: "portal", to: "catalogue", kind: "calls" },
+      { from: "orders", to: "orderdb", kind: "writes" },
+      { from: "orders", to: "events", kind: "publishes" },
+      { from: "billing", to: "events", kind: "reads" },
+      { from: "billing", to: "ledger", kind: "writes" },
+      { from: "billing", to: "psp", kind: "calls" },
+      { from: "orders", to: "post", kind: "calls" },
+      { from: "catalogue", to: "orderdb", kind: "reads" },
+    ],
+  },
+};
+
+/**
+ * A proposal over that architecture, with the types kept.
+ *
+ * Type and change travel on separate channels — colour for the type, emphasis for
+ * the change — and the only way to see whether they compete is a document that
+ * declares both: an added service of a type that is already present, a changed
+ * store, a context element that changes nothing, and a removal.
+ */
+const TYPED_PROPOSAL = {
+  schema: "urn:structured-exchange:1",
+  kind: "graph",
+  target: "architecture.md",
+  removals: [{ type: "relationship", ref: "REL-catalogue-orderdb", label: "Catalogue reads the order store" }],
+  data: {
+    nodes: [
+      { id: "search", label: "Search service", kind: "service" },
+      { id: "catalogue", ref: "EL-catalogue", label: "Catalogue service", kind: "service" },
+      { id: "orderdb", ref: "EL-orderdb", label: "Order store", kind: "store", set: { label: "Order store (sharded)" } },
+      { id: "index", label: "Search index", kind: "store" },
+    ],
+    edges: [
+      { from: "search", to: "index", kind: "writes" },
+      { from: "catalogue", to: "search", kind: "calls" },
+    ],
+  },
+};
+
+/**
  * A table, and the one kind that is HTML text rather than a picture.
  *
  * SVG text carries an explicit `fill` and inherits nothing, so a diagram cannot
@@ -218,5 +286,27 @@ export const SEEDED_MESSAGES = [
     toolName: "structured_exchange",
     content: "requirements table reporting one addition, one change and one removal",
     details: REQUIREMENTS_CHANGE_TABLE,
+  },
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-6", name: "structured_exchange", arguments: { kind: "graph" } }],
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call-6",
+    toolName: "structured_exchange",
+    content: "nine components across five domains: interface, services, stores, a queue and two externals",
+    details: TYPED_GRAPH,
+  },
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-7", name: "structured_exchange", arguments: { kind: "graph" } }],
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call-7",
+    toolName: "structured_exchange",
+    content: "proposal: add a search service and its index, shard the order store, drop the catalogue's direct read",
+    details: TYPED_PROPOSAL,
   },
 ];
