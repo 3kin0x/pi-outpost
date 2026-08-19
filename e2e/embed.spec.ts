@@ -299,7 +299,7 @@ test.describe("diagrams in the widget", () => {
 
     const overlay = await readOverlay(page, "structured-enlarged");
     expect(overlay).toEqual({
-      // Portalled into the shadow root: the outermost point that is still styled
+      // Portalled inside the shadow tree, where the widget's own styling reaches
       tree: "shadow",
       position: "fixed",
       zIndex: "100",
@@ -349,6 +349,47 @@ test.describe("diagrams in the widget", () => {
 
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+
+  /**
+   * A table is the one kind made of HTML text, and text inherits.
+   *
+   * Inherited properties are not blocked by a shadow boundary — they are
+   * overridden by whatever the tree declares for itself, and the app declares
+   * its own on its root element. An overlay portalled past that root is a
+   * sibling of it, so it inherited from the host element instead, and this host
+   * paints `* { color: red }`. Every cell of an enlarged table came out red.
+   * Diagrams never showed it: SVG text carries an explicit `fill`.
+   */
+  test("an enlarged table is painted by the widget, not by the host page", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    await page.getByRole("button", { name: /Show table view at full size/ }).first().click();
+    await expect(page.getByRole("dialog", { name: /table view, full size/i })).toBeVisible();
+
+    const painted = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const overlay = shadow.querySelector('[data-testid="structured-enlarged"]')!;
+      const appRoot = shadow.querySelector("#root")!;
+      const cell = overlay.querySelector("td")!;
+      return {
+        insideTheAppRoot: appRoot.contains(overlay),
+        siblingOfTheAppRoot: overlay.parentNode === shadow,
+        overlayColour: getComputedStyle(overlay).color,
+        cellColour: getComputedStyle(cell).color,
+        hostColour: getComputedStyle(document.querySelector("#widget")!).color,
+        cellText: cell.textContent,
+      };
+    });
+
+    // The host really is painting red, or this test proves nothing
+    expect(painted.hostColour).toBe("rgb(255, 0, 0)");
+    expect(painted.insideTheAppRoot).toBe(true);
+    expect(painted.siblingOfTheAppRoot).toBe(false);
+    expect(painted.overlayColour).not.toBe("rgb(255, 0, 0)");
+    expect(painted.cellColour).not.toBe("rgb(255, 0, 0)");
+    expect(painted.cellText).toContain("REQ-001");
   });
 
   });
