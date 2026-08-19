@@ -1,0 +1,14 @@
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "table",
+  "data": {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      {
+        "role": "added"
+      }
+    ]
+  }
+}

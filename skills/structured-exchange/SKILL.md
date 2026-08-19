@@ -50,7 +50,8 @@ refused, never corrected — correcting it would produce a document you did not 
 ```
 
 `kind` is `graph`, `sequence`, or `table`. A table is a projection: it can be shown
-and reasoned about, never proposed.
+and reasoned about, never proposed — though its rows may report what a change did
+to them (see **Roles on a table's rows**).
 
 Each carries its own `data`:
 
@@ -70,6 +71,32 @@ Each carries its own `data`:
 
 A message declares a `label` and no `kind` — the label *is* what is being sent.
 Message order is the order you write them in; nothing sorts them for you.
+
+## Roles on a table's rows
+
+A table cannot be proposed, but it can *report* on a change it projects. Any row
+may say what it plays, and the interface colours it the way it colours an added or
+changed element in a graph:
+
+```jsonc
+"data": {
+  "columns": ["id", "requirement", "status"],
+  "rows": [
+    { "role": "added",   "cells": ["REQ-5", "Log every actuation.", "draft"] },
+    { "role": "changed", "cells": ["REQ-2", "Signal a fault within 200 ms.", "in review"] },
+    { "role": "removed", "cells": ["REQ-3", "Read battery voltage at 10 Hz.", "withdrawn"] },
+    { "cells": ["REQ-1", "Stop the vehicle within 40 m.", "approved"] }   // context
+  ]
+}
+```
+
+`role` is one of `added`, `changed`, `context`, `removed`. A row that declares none
+reads as context when any other row declares one. Both row forms are accepted, so
+`["REQ-1", "…"]` and `{ "cells": ["REQ-1", "…"] }` are the same row, and a table
+that declares no role anywhere is rendered exactly as before roles existed.
+
+Declare the role — do not put it in a column and expect the colours. A `status`
+column is your data and is rendered as data; nothing infers a role from it.
 
 ## Grouping: containers
 

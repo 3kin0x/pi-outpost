@@ -14,6 +14,7 @@
  */
 import {
   PROPOSABLE_KINDS,
+  readTableRow,
   STRUCTURED_EXCHANGE_CEILINGS,
   type StructuredContainer,
   type StructuredElement,
@@ -298,12 +299,16 @@ export function validateStructuredExchangeSemantics(envelope: StructuredExchange
   if (envelope.kind === "table") {
     const { columns, rows } = envelope.data as StructuredTableData;
     rows.forEach((row, index) => {
-      if (row.length !== columns.length) {
+      // Through the reader, not off the row: a row carrying a role is an object,
+      // and `.length` on one is `undefined`, which compares unequal to every
+      // column count and refused every role-carrying table ever written.
+      const { cells } = readTableRow(row);
+      if (cells.length !== columns.length) {
         issues.push({
           rule: "row-column-mismatch",
           path: `/data/rows/${index}`,
-          message: `row has ${row.length} values but ${columns.length} columns are declared`,
-          observed: row.length,
+          message: `row has ${cells.length} values but ${columns.length} columns are declared`,
+          observed: cells.length,
           limit: columns.length,
         });
       }

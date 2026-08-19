@@ -50,6 +50,12 @@
     },
     {
       "file": "valid/graph-containers-at-the-ceiling.json"
+    },
+    {
+      "file": "valid/table-rows-with-roles.json"
+    },
+    {
+      "file": "valid/table-rows-partly-roled.json"
     }
   ],
   "invalid": [
@@ -160,6 +166,18 @@
     {
       "file": "invalid/containers-over-the-ceiling.json",
       "expectedRule": "schema/maxItems"
+    },
+    {
+      "file": "invalid/table-row-unknown-role.json",
+      "expectedRule": "schema/enum"
+    },
+    {
+      "file": "invalid/table-row-without-cells.json",
+      "expectedRule": "schema/required"
+    },
+    {
+      "file": "invalid/table-row-object-column-mismatch.json",
+      "expectedRule": "row-column-mismatch"
     }
   ]
 }

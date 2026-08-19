@@ -236,6 +236,19 @@
           "$ref": "#/$defs/label"
         }
       }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ],
+        "maxLength": 1000
+      },
+      "maxItems": 50
     }
   },
   "properties": {
@@ -347,17 +360,31 @@
               "type": "array",
               "maxItems": 5000,
               "items": {
-                "type": "array",
-                "items": {
-                  "type": [
-                    "string",
-                    "number",
-                    "boolean",
-                    "null"
-                  ],
-                  "maxLength": 1000
-                },
-                "maxItems": 50
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/cells"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "cells"
+                    ],
+                    "properties": {
+                      "cells": {
+                        "$ref": "#/$defs/cells"
+                      },
+                      "role": {
+                        "enum": [
+                          "added",
+                          "changed",
+                          "context",
+                          "removed"
+                        ]
+                      }
+                    }
+                  }
+                ]
               }
             }
           }

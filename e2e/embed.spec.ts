@@ -412,34 +412,134 @@ test.describe("diagrams in the widget", () => {
 
     // Grabbed deep in the table, not at the header: a column boundary is a line
     // the whole height of it, and that is where a reader reading row ten reaches.
-    const grip = await page.evaluate(() => {
-      const shadow = document.querySelector("#widget")!.shadowRoot!;
-      const table = [...shadow.querySelectorAll("table")].find((element) => element.textContent?.includes("REQ-001"))!;
-      const row = [...table.querySelectorAll("tbody tr")].at(-1)!;
-      row.scrollIntoView({ block: "center" });
-      const handle = row.querySelectorAll("td")[1]!.querySelector('[aria-hidden="true"]')!;
-      const box = handle.getBoundingClientRect();
-      return {
-        x: box.x + box.width / 2,
-        y: box.y + box.height / 2,
-        before: Math.round(table.querySelectorAll("th")[1]!.getBoundingClientRect().width),
-      };
-    });
+    //
+    // Through a locator rather than coordinates read in an earlier evaluate: the
+    // transcript above this table is still growing, so a box measured one call
+    // ago describes where the grip *was* — the press landed on the conversation
+    // container and the drag asserted against a table nobody had touched.
+    const table = page.locator("table").filter({ hasText: "REQ-001" }).first();
+    const handle = table.locator("tbody tr").last().locator("td").nth(1).locator('[aria-hidden="true"]');
+    await handle.scrollIntoViewIfNeeded();
+    const box = (await handle.boundingBox())!;
+    const before = Math.round((await table.locator("th").nth(1).boundingBox())!.width);
 
-    await page.mouse.move(grip.x, grip.y);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(grip.x + 150, grip.y, { steps: 10 });
+    await page.mouse.move(box.x + box.width / 2 + 150, box.y + box.height / 2, { steps: 10 });
     await page.mouse.up();
 
-    const after = await page.evaluate(() => {
-      const shadow = document.querySelector("#widget")!.shadowRoot!;
-      const table = [...shadow.querySelectorAll("table")].find((element) => element.textContent?.includes("REQ-001"))!;
-      return Math.round(table.querySelectorAll("th")[1]!.getBoundingClientRect().width);
-    });
+    const after = Math.round((await table.locator("th").nth(1).boundingBox())!.width);
 
     // The whole drag, not the first few pixels of it: pointer capture on the
     // divider died on the first re-render and a 150-pixel gesture arrived as 30.
-    expect(after - grip.before).toBeGreaterThanOrEqual(140);
+    expect(after - before).toBeGreaterThanOrEqual(140);
+  });
+
+  /**
+   * A row's role, which only a browser can settle: the tints are Tailwind classes
+   * resolved by the cascade, and jsdom resolves no cascade at all — a unit test
+   * can see which class was asked for, never which colour arrived, and least of
+   * all whether the host page's own stylesheet got there first.
+   */
+  test("a row's declared role is painted by the widget, and can be switched off", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    const painted = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const table = [...shadow.querySelectorAll("table")].find((element) =>
+        element.textContent?.includes("REQ-005"),
+      )!;
+      const rows = [...table.querySelectorAll("tbody tr")] as HTMLElement[];
+      return rows.map((row) => {
+        const style = getComputedStyle(row);
+        return {
+          role: row.dataset.rowRole,
+          background: style.backgroundColor,
+          decoration: getComputedStyle(row.querySelector("td")!).textDecorationLine,
+        };
+      });
+    });
+
+    expect(painted.map((row) => row.role)).toEqual(["added", "changed", "removed", "context"]);
+    // Four roles, four grounds: two that resolved to the same colour would leave a
+    // reader unable to tell an addition from a deletion
+    expect(new Set(painted.map((row) => row.background)).size).toBe(4);
+    // and none of them transparent, which is what an unresolved class looks like
+    expect(painted.every((row) => row.background !== "rgba(0, 0, 0, 0)")).toBe(true);
+    expect(painted[2]!.decoration).toContain("line-through");
+
+    // The key is the filter, as it is for a diagram
+    const key = page.getByTestId("table-role-key").last();
+    await key.getByRole("button", { name: "removed" }).click();
+
+    const afterHiding = await page.evaluate(() => {
+      const shadow = document.querySelector("#widget")!.shadowRoot!;
+      const table = [...shadow.querySelectorAll("table")].find((element) =>
+        element.textContent?.includes("REQ-005"),
+      )!;
+      return [...table.querySelectorAll("tbody tr")].map((row) => (row as HTMLElement).dataset.rowRole);
+    });
+    expect(afterHiding).toEqual(["added", "changed", "context"]);
+    await expect(page.getByTestId("structured-filtered").last()).toContainText("removed");
+  });
+
+  /**
+   * The two file exports, taken as files.
+   *
+   * A unit test can check the text a function returns; only a browser can say
+   * whether the widget actually hands a file over — the download is a blob URL, an
+   * anchor click and a browser that has to accept both, none of which jsdom has.
+   * The workbook is checked for being a workbook: a zip whose first entry names the
+   * relationships every spreadsheet application looks for before it opens anything.
+   */
+  test("a table leaves the widget as a file, in both formats", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    // The last of the two tables in the transcript is the one that reports roles
+    const csvDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: /download CSV/ }).last().click();
+    const csv = await csvDownload;
+    const csvText = await (await csv.createReadStream()).toArray();
+    const text = Buffer.concat(csvText).toString("utf8");
+
+    expect(csv.suggestedFilename()).toMatch(/\.csv$/);
+    expect(text.split("\r\n")[0]).toBe("\ufeffID,Requirement,Status,change");
+    // The role travels as a value, since the colour that states it cannot
+    expect(text).toContain(",added");
+    expect(text).toContain(",removed");
+    // Prose with a comma in it stays one field
+    expect(text).toContain('"The system shall log every actuation, with a monotonic timestamp.",draft,added');
+
+    const xlsxDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: /download XLSX/ }).last().click();
+    const xlsx = await xlsxDownload;
+    const bytes = Buffer.concat(await (await xlsx.createReadStream()).toArray());
+
+    expect(xlsx.suggestedFilename()).toMatch(/\.xlsx$/);
+    // "PK": a zip, which is what a workbook is — carrying the three entries a
+    // spreadsheet application looks for before it will open one without repairing it
+    expect(bytes.subarray(0, 2).toString("latin1")).toBe("PK");
+    const entries = bytes.toString("latin1");
+    expect(entries).toContain("[Content_Types].xml");
+    expect(entries).toContain("xl/workbook.xml");
+    expect(entries).toContain("xl/worksheets/sheet1.xml");
+  });
+
+  test("a narrowed table exports what it shows, and says so before it does", async ({ page }) => {
+    await openHost(page, { ...withDiagrams(), theme: "light" });
+    await expect(page.getByTitle("connected")).toBeVisible();
+
+    await page.getByTestId("table-role-key").last().getByRole("button", { name: "removed" }).click();
+    await expect(page.getByTestId("table-export-narrowed").last()).toContainText("1 rows fewer");
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: /download CSV/ }).last().click();
+    const text = Buffer.concat(await (await (await download).createReadStream()).toArray()).toString("utf8");
+
+    expect(text).toContain("REQ-005");
+    expect(text).not.toContain("REQ-003");
   });
 
   test("a table reaches the widget at all, rows and cell kinds intact", async ({ page }) => {

@@ -129,6 +129,40 @@ and an explicit white ground, so what lands in the document is what was on scree
 earlier version drew them as HTML inside `foreignObject`, which looks identical in the
 browser and loses everything the moment it is serialized.
 
+## A table that reports a change
+
+A table cannot be proposed — it has no identity per row for a patch to join against,
+and an envelope declaring a table with a `target` or a `removal` is refused. It can
+still report on a change it projects. Any row may declare what it plays:
+
+```json
+"rows": [
+  { "role": "added",   "cells": ["REQ-5", "Log every actuation.", "draft"] },
+  { "role": "changed", "cells": ["REQ-2", "Signal a fault within 200 ms.", "in review"] },
+  { "role": "removed", "cells": ["REQ-3", "Read battery voltage at 10 Hz.", "withdrawn"] },
+  { "cells": ["REQ-1", "Stop within 40 m.", "approved"] }
+]
+```
+
+`role` is `added`, `changed`, `context` or `removed`, and it is rendered with the
+colours a graph uses for the same words. A row that declares none reads as context
+among rows that do. Both row forms are accepted for the life of version 1, so
+`["REQ-1", "…"]` and `{ "cells": ["REQ-1", "…"] }` are the same row and a table that
+declares no role anywhere renders exactly as it did before roles existed.
+
+Declare the role rather than encoding it in a column. A `status` column of your own
+vocabulary is data, and is rendered as data — nothing infers a role from a cell.
+
+A reader can switch a role off from the key, which narrows the table to the rows that
+remain, and can take the table away with **download CSV** or **download XLSX**. Where
+rows declare roles, both exports carry a `change` column, because the colour that
+states the role in the rendering does not survive the crossing. A narrowed table
+exports only what it shows, and the controls say so.
+
+Old consumers: a copy of the widget published before roles existed validates against
+its own committed schema, so a role-carrying table is refused there and the tool
+result falls back to raw output. It degrades; it does not break.
+
 ## If you are not building in this repository
 
 You do not need our command-line interface, and you do not need this repository. The

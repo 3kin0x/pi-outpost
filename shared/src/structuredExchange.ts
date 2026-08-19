@@ -122,9 +122,44 @@ export interface StructuredSequenceData {
 
 export type StructuredTableCell = string | number | boolean | null;
 
+/**
+ * What a row plays in the change the table projects.
+ *
+ * Declared rather than derived, unlike an element's: a table has no identity per
+ * row to join against a target, so there is nothing to derive it from. It is an
+ * observation the producer made about the authority it read, and nothing in this
+ * application acts on it.
+ */
+export type StructuredTableRowRole = "added" | "changed" | "context" | "removed";
+
+/**
+ * A row, in either of the two forms version 1 accepts.
+ *
+ * The bare array is what every document written before roles existed carries, and
+ * it stays valid for the life of this version. Read one through `readTableRow`
+ * rather than by testing which form it is.
+ */
+export type StructuredTableRow =
+  | StructuredTableCell[]
+  | { cells: StructuredTableCell[]; role?: StructuredTableRowRole };
+
 export interface StructuredTableData {
   columns: string[];
-  rows: StructuredTableCell[][];
+  rows: StructuredTableRow[];
+}
+
+/**
+ * The one place the two row forms are told apart.
+ *
+ * Validation, rendering, the textual equivalent and the export all read a row
+ * through this, so the union costs one function rather than a test at every use —
+ * and a row whose cells were read as `undefined` cannot reach a length check.
+ */
+export function readTableRow(row: StructuredTableRow): {
+  cells: StructuredTableCell[];
+  role?: StructuredTableRowRole;
+} {
+  return Array.isArray(row) ? { cells: row } : { cells: row.cells, role: row.role };
 }
 
 export type StructuredExchangeData = StructuredGraphData | StructuredSequenceData | StructuredTableData;
