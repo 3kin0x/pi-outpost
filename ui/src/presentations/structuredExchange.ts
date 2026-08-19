@@ -12,14 +12,17 @@ import {
   type StructuredExchangeVerdict,
 } from "@pi-outpost/shared/structured-exchange/parse";
 import { checkStructuredExchangeSchemaInBrowser } from "@pi-outpost/shared/structured-exchange/schema-browser";
-import type {
-  StructuredElement,
-  StructuredEdge,
-  StructuredGraphData,
-  StructuredMessage,
-  StructuredSequenceData,
-  StructuredTableData,
-  ValidatedStructuredExchange,
+import {
+  readTableRow,
+  type StructuredElement,
+  type StructuredEdge,
+  type StructuredGraphData,
+  type StructuredMessage,
+  type StructuredSequenceData,
+  type StructuredTableCell,
+  type StructuredTableData,
+  type StructuredTableRowRole,
+  type ValidatedStructuredExchange,
 } from "@pi-outpost/shared/structured-exchange";
 
 /**
@@ -105,6 +108,50 @@ export const ROLE_LABEL: Record<ChangeRole, string> = {
   context: "existing",
   unchanged: "",
 };
+
+/**
+ * The same wording for a table's rows, plus the one a diagram states elsewhere.
+ *
+ * A graph says "removed" in a list beside the picture, because a removal there is
+ * a bare reference with nothing to draw. A removed row carries its own cells, so
+ * it is shown in place — and shares the word, so a reader meets one vocabulary.
+ */
+export const TABLE_ROLE_LABEL: Record<StructuredTableRowRole, string> = {
+  added: "added",
+  changed: "changed",
+  context: "existing",
+  removed: "removed",
+};
+
+/** The order roles are listed in, wherever they are listed. */
+export const TABLE_ROLES: StructuredTableRowRole[] = ["added", "changed", "context", "removed"];
+
+/** Whether any row of this table says anything about a change. */
+export function tableDeclaresRoles(data: StructuredTableData): boolean {
+  return data.rows.some((row) => readTableRow(row).role !== undefined);
+}
+
+/**
+ * What a row plays, as the reader should see it.
+ *
+ * A row that declares nothing is context — but only among rows that declare
+ * something. In a table that reports no change at all there is no context to be
+ * the exception to, so it has no role, and the table renders as the data it is.
+ */
+export function tableRowRole(
+  row: StructuredTableData["rows"][number],
+  declaresRoles: boolean,
+): StructuredTableRowRole | undefined {
+  if (!declaresRoles) return undefined;
+  return readTableRow(row).role ?? "context";
+}
+
+/** Which roles this table actually uses, in the order they are always listed. */
+export function tableRolesPresent(data: StructuredTableData): StructuredTableRowRole[] {
+  if (!tableDeclaresRoles(data)) return [];
+  const used = new Set(data.rows.map((row) => tableRowRole(row, true)));
+  return TABLE_ROLES.filter((role) => used.has(role));
+}
 
 /** Where an element sits, and how big its box is. */
 export type PlacedNode = { id: string; x: number; y: number; width: number; height: number };
@@ -371,7 +418,8 @@ export type StructureDescription = {
   things: DescribedThing[];
   links: DescribedLink[];
   columns?: string[];
-  rows?: (string | number | boolean | null)[][];
+  /** A row's cells, and what it says it plays — `undefined` in a table that reports no change. */
+  rows?: { cells: StructuredTableCell[]; role?: StructuredTableRowRole }[];
   /** Every declared container, including one no member names. */
   containers: { id: string; label: string }[];
   removals: { type: string; ref: string }[];
@@ -385,13 +433,17 @@ export function describeStructure(
 
   if (envelope.kind === "table") {
     const data = envelope.data as StructuredTableData;
+    const declaresRoles = tableDeclaresRoles(data);
     return {
       thingNoun: "column",
       linkNoun: "row",
       things: [],
       links: [],
       columns: data.columns,
-      rows: data.rows,
+      rows: data.rows.map((row) => {
+        const role = tableRowRole(row, declaresRoles);
+        return { cells: readTableRow(row).cells, ...(role === undefined ? {} : { role }) };
+      }),
       containers: [],
       removals,
     };
@@ -554,4 +606,18 @@ function escapeMermaid(text: string): string {
       .replace(/[#";<>]/g, (character) => MERMAID_ENTITY[character])
       .replace(/[\r\n\t\f\v\u0000-\u001f\u2028\u2029]+/g, " ")
   );
+}
+
+/** Which vocabulary a filterable name belongs to. */
+export type FilterScope = "element" | "relationship" | "role";
+
+/**
+ * A type name qualified by what it is a type of.
+ *
+ * The two vocabularies are independent and may share a word, so they cannot share a
+ * namespace: with a bare name, a graph whose blocks and whose connections both used
+ * "power" lost both when the reader hid either.
+ */
+export function filterKey(of: FilterScope, kind: string): string {
+  return `${of}:${kind}`;
 }

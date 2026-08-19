@@ -136,6 +136,30 @@ const REQUIREMENTS_TABLE = {
   },
 };
 
+/**
+ * The same table, reporting on a change rather than describing a state.
+ *
+ * A table cannot be proposed — it has no identity per row to patch against — but
+ * it can say what a change did to the rows it projects, and that is the only
+ * rendering in the application where a change role is drawn in HTML rather than
+ * in SVG. Which makes it the one that a host page's stylesheet can reach.
+ */
+const REQUIREMENTS_CHANGE_TABLE = {
+  schema: "urn:structured-exchange:1",
+  kind: "table",
+  data: {
+    columns: ["ID", "Requirement", "Status"],
+    rows: [
+      // The comma is deliberate: prose is where a CSV export breaks, and this row
+      // is the one the browser test parses back.
+      { role: "added", cells: ["REQ-005", "The system shall log every actuation, with a monotonic timestamp.", "draft"] },
+      { role: "changed", cells: ["REQ-002", "The dashboard shall signal a fault within 100 ms of detection.", "in review"] },
+      { role: "removed", cells: ["REQ-003", "The ECU shall read battery voltage at 10 Hz.", "withdrawn"] },
+      { cells: ["REQ-001", "The braking system shall bring the vehicle to a full stop within 40 m.", "approved"] },
+    ],
+  },
+};
+
 export const SEEDED_MESSAGES = [
   { role: "user", content: "Draw me the architecture." },
   { role: "assistant", content: [{ type: "text", text: SEEDED_MERMAID }] },
@@ -183,5 +207,16 @@ export const SEEDED_MESSAGES = [
     toolName: "structured_exchange",
     content: "requirements table with 4 rows",
     details: REQUIREMENTS_TABLE,
+  },
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-5", name: "structured_exchange", arguments: { kind: "table" } }],
+  },
+  {
+    role: "toolResult",
+    toolCallId: "call-5",
+    toolName: "structured_exchange",
+    content: "requirements table reporting one addition, one change and one removal",
+    details: REQUIREMENTS_CHANGE_TABLE,
   },
 ];

@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EnlargedView } from "../components/EnlargedView";
-import type {
-  StructuredContainer,
-  StructuredElement,
-  StructuredMessage,
-  StructuredRemoval,
-  StructuredGraphData,
-  StructuredSequenceData,
-  StructuredTableData,
-  ValidatedStructuredExchange,
+import {
+  readTableRow,
+  type StructuredContainer,
+  type StructuredElement,
+  type StructuredMessage,
+  type StructuredRemoval,
+  type StructuredGraphData,
+  type StructuredSequenceData,
+  type StructuredTableData,
+  type StructuredTableRowRole,
+  type ValidatedStructuredExchange,
 } from "@pi-outpost/shared/structured-exchange";
 import {
   describeStructure,
+  filterKey,
   displayLabel,
   elementRole,
   fieldChanges,
@@ -19,10 +22,17 @@ import {
   layoutGraph,
   relationshipRole,
   ROLE_LABEL,
+  TABLE_ROLE_LABEL,
+  tableDeclaresRoles,
+  tableRolesPresent,
+  tableRowRole,
   toMermaid,
   validStructuredExchange,
   type ChangeRole,
+  type FilterScope,
 } from "./structuredExchange";
+export { filterKey, type FilterScope } from "./structuredExchange";
+import { downloadCsv, downloadXlsx, tableExport } from "./tableExport";
 import type { PresentationProps, ToolItem } from "./types";
 
 /**
@@ -180,19 +190,7 @@ export function kindsPresent(things: { kind?: string }[]): string[] {
   return seen;
 }
 
-/** Which vocabulary a type name belongs to. */
-export type FilterScope = "element" | "relationship";
 
-/**
- * A type name qualified by what it is a type of.
- *
- * The two vocabularies are independent and may share a word, so they cannot share a
- * namespace: with a bare name, a graph whose blocks and whose connections both used
- * "power" lost both when the reader hid either.
- */
-export function filterKey(of: FilterScope, kind: string): string {
-  return `${of}:${kind}`;
-}
 
 const LEGEND_ROW = 17;
 const LEGEND_GAP = 18;
@@ -1787,6 +1785,22 @@ function SequenceView({ data, isProposal }: { data: StructuredSequenceData; isPr
 
 /* ── Table ──────────────────────────────────────────────────────────────────── */
 
+/**
+ * A row's role, in HTML rather than in SVG.
+ *
+ * The same three colours the diagram paints an element with — green, amber, the
+ * dimmed grey of context — so a reader who has learnt what an addition looks like
+ * in a graph does not learn it again here. `removed` takes the red the removals
+ * list already uses, and is struck through as well: colour alone would leave the
+ * one destructive role indistinguishable to a reader who cannot separate it.
+ */
+const ROW_ROLE_STYLE: Record<StructuredTableRowRole, string> = {
+  added: "bg-emerald-50 dark:bg-emerald-950/40",
+  changed: "bg-amber-50 dark:bg-amber-950/40",
+  context: "bg-zinc-50 text-zinc-500 dark:bg-zinc-900/60 dark:text-zinc-400",
+  removed: "bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200",
+};
+
 /** Narrow enough to be a column still, wide enough to grab again. */
 const MIN_COLUMN_WIDTH = 48;
 
@@ -1811,7 +1825,15 @@ const COLUMN_STEP = 16;
  * what the browser worked out and only then switches to `fixed` — from that
  * point the columns hold their size and the wrapper scrolls.
  */
-function TableView({ data }: { data: StructuredTableData }) {
+function TableView({
+  data,
+  hidden,
+  setHidden,
+}: {
+  data: StructuredTableData;
+  hidden: ReadonlySet<string>;
+  setHidden: (hidden: ReadonlySet<string>) => void;
+}) {
   const [widths, setWidths] = useState<number[] | null>(null);
   const headRef = useRef<HTMLTableRowElement>(null);
 
@@ -1889,8 +1911,52 @@ function TableView({ data }: { data: StructuredTableData }) {
     />
   );
 
+  const declaresRoles = tableDeclaresRoles(data);
+  const rolesPresent = tableRolesPresent(data);
+  const shown = data.rows.filter((row) => {
+    const role = tableRowRole(row, declaresRoles);
+    return role === undefined || !hidden.has(filterKey("role", role));
+  });
+
+  const toggle = (role: StructuredTableRowRole) => {
+    const next = new Set(hidden);
+    const key = filterKey("role", role);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setHidden(next);
+  };
+
   return (
     <div className="overflow-x-auto">
+      {/* The key beside the table rather than inside it: a table is text, and it
+          leaves this application as its textual equivalent rather than as a
+          figure, so there is no picture for the key to travel inside. It is also
+          the filter, as the diagram's key is — what a reader reads a colour from
+          is what they switch. */}
+      {rolesPresent.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px]" data-testid="table-role-key">
+          {rolesPresent.map((role) => {
+            const off = hidden.has(filterKey("role", role));
+            return (
+              <button
+                key={role}
+                type="button"
+                onClick={() => toggle(role)}
+                aria-pressed={!off}
+                className={`flex items-center gap-1 rounded border border-zinc-300 px-1.5 py-0.5 dark:border-zinc-700 ${
+                  off ? "opacity-50" : ""
+                }`}
+              >
+                <span className={`inline-block h-2.5 w-2.5 rounded-sm ${ROW_ROLE_STYLE[role].split(" ")[0]}`} />
+                <span>
+                  {TABLE_ROLE_LABEL[role]}
+                  {off ? " (hidden)" : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <table
         className={`border-collapse text-xs ${widths ? "" : "w-full"}`}
         style={total === undefined ? undefined : { tableLayout: "fixed", width: total }}
@@ -1914,19 +1980,33 @@ function TableView({ data }: { data: StructuredTableData }) {
           </tr>
         </thead>
         <tbody>
-          {data.rows.map((row, rowIndex) => (
-            <tr key={rowIndex}>
-              {row.map((cell, cellIndex) => (
-                <td
-                  key={cellIndex}
-                  className="relative border border-zinc-200 px-2 py-1 align-top break-words dark:border-zinc-800"
-                >
-                  {cell === null ? <span className="opacity-40">—</span> : String(cell)}
-                  {divider(cellIndex, data.columns[cellIndex] ?? "", false)}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {shown.map((row, rowIndex) => {
+            const { cells } = readTableRow(row);
+            const role = tableRowRole(row, declaresRoles);
+            return (
+              <tr
+                key={rowIndex}
+                className={role === undefined ? undefined : ROW_ROLE_STYLE[role]}
+                data-row-role={role}
+              >
+                {cells.map((cell, cellIndex) => (
+                  <td
+                    key={cellIndex}
+                    // The strike goes on the cell, not on the row: a decoration set on
+                    // a `tr` does not reach the cells inside it — the browser computes
+                    // `none` on every one of them, and the one destructive role was
+                    // left resting on colour alone.
+                    className={`relative border border-zinc-200 px-2 py-1 align-top break-words dark:border-zinc-800 ${
+                      role === "removed" ? "line-through" : ""
+                    }`}
+                  >
+                    {cell === null ? <span className="opacity-40">—</span> : String(cell)}
+                    {divider(cellIndex, data.columns[cellIndex] ?? "", false)}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1961,14 +2041,33 @@ function envelopeSource(structured: string | undefined, envelope: ValidatedStruc
  * is not data. This is the same information in a form that does not depend on
  * seeing it.
  */
-function textualEquivalent(envelope: ValidatedStructuredExchange, isProposal: boolean): string {
+function textualEquivalent(
+  envelope: ValidatedStructuredExchange,
+  isProposal: boolean,
+  hidden: ReadonlySet<string> = new Set(),
+): string {
   const described = describeStructure(envelope, isProposal);
   const lines: string[] = [];
 
   if (described.columns !== undefined && described.rows !== undefined) {
+    // A table leaves this application as these words — there is no figure to
+    // export — so a narrowed reading has to say so here or it says so nowhere.
+    const roleHidden = (role: string | undefined) => role !== undefined && hidden.has(filterKey("role", role));
+    const withheld = described.rows.filter((row) => roleHidden(row.role));
+    if (withheld.length > 0) {
+      lines.push(
+        `Filtered view — ${withheld.length} of ${described.rows.length} rows hidden ` +
+          `(${[...new Set(withheld.map((row) => TABLE_ROLE_LABEL[row.role!]))].join(", ")}).`,
+      );
+      lines.push("");
+    }
     lines.push(described.columns.join(" | "));
     for (const row of described.rows) {
-      lines.push(row.map((cell) => (cell === null ? "" : String(cell))).join(" | "));
+      if (roleHidden(row.role)) continue;
+      const cells = row.cells.map((cell) => (cell === null ? "" : String(cell))).join(" | ");
+      // The role after the cells, in the words the key uses: a reader on the text
+      // is reading it because they cannot see the colour that carries it.
+      lines.push(row.role === undefined ? cells : `${cells}  (${TABLE_ROLE_LABEL[row.role]})`);
     }
   } else {
     // Named and counted, so a reader who cannot see the picture knows how much of it
@@ -2120,12 +2219,17 @@ function StructuredExchangeBody({ item }: PresentationProps) {
     ) : envelope.kind === "sequence" ? (
       <SequenceView data={envelope.data as StructuredSequenceData} isProposal={isProposal} />
     ) : (
-      <TableView data={envelope.data as StructuredTableData} />
+      <TableView data={envelope.data as StructuredTableData} hidden={hidden} setHidden={setHidden} />
     );
 
   // Named outside the handlers: a function declaration is hoisted, so the narrowing
   // that follows the guard above does not reach inside one.
   const fileName = `${envelope.kind}-${envelope.target ?? "diagram"}.svg`.replace(/[^\w.-]+/g, "-");
+  const exportBaseName = `${envelope.kind}-${envelope.target ?? "data"}`.replace(/[^\w.-]+/g, "-");
+  // Taken at the moment of export rather than held in state: what leaves is what
+  // the reader is looking at, and what they are looking at is what `hidden` says.
+  const exportedTable = () => tableExport(envelope.data as StructuredTableData, hidden);
+  const narrowedExport = envelope.kind === "table" ? exportedTable().withheld : 0;
 
   /**
    * The diagram's markup, standing on its own — colours and ground included.
@@ -2214,7 +2318,7 @@ function StructuredExchangeBody({ item }: PresentationProps) {
           className="flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
         >
           <span>
-            Filtered view — {[...hidden].map((key) => key.replace(/^(element|relationship):/, "")).join(", ")} hidden.{" "}
+            Filtered view — {[...hidden].map((key) => key.replace(/^(element|relationship|role):/, "")).join(", ")} hidden.{" "}
             {isProposal ? "The full proposal still applies." : ""}
           </span>
           <button type="button" className="underline" onClick={() => setHidden(new Set())}>
@@ -2286,7 +2390,42 @@ function StructuredExchangeBody({ item }: PresentationProps) {
         >
           ⤢ enlarge
         </button>
-        {envelope.kind !== "table" && (
+        {envelope.kind === "table" ? (
+          <>
+            <button
+              type="button"
+              className="text-zinc-500 underline"
+              title={
+                narrowedExport === 0
+                  ? "Save as .csv — opens in any spreadsheet"
+                  : `Save as .csv — ${narrowedExport} hidden rows are left out`
+              }
+              onClick={() => downloadCsv(exportedTable(), `${exportBaseName}.csv`)}
+            >
+              ⤓ download CSV
+            </button>
+            <button
+              type="button"
+              className="text-zinc-500 underline"
+              title={
+                narrowedExport === 0
+                  ? "Save as .xlsx — one sheet, values typed as they are declared"
+                  : `Save as .xlsx — ${narrowedExport} hidden rows are left out`
+              }
+              onClick={() => void downloadXlsx(exportedTable(), `${exportBaseName}.xlsx`)}
+            >
+              ⤓ download XLSX
+            </button>
+            {narrowedExport > 0 && (
+              // Said on the controls, not after the fact: a reader who has hidden a
+              // role and exports is otherwise told nothing, and a spreadsheet cannot
+              // carry the banner the rendering shows.
+              <span className="text-xs text-amber-700 dark:text-amber-300" data-testid="table-export-narrowed">
+                exports {narrowedExport} rows fewer than the table declares
+              </span>
+            )}
+          </>
+        ) : (
           <>
             <button
               type="button"
@@ -2329,7 +2468,7 @@ function StructuredExchangeBody({ item }: PresentationProps) {
 
       {showText && (
         <pre data-testid="structured-text-equivalent" className="overflow-x-auto rounded bg-zinc-100 p-2 text-xs dark:bg-zinc-800">
-          {textualEquivalent(envelope, isProposal)}
+          {textualEquivalent(envelope, isProposal, hidden)}
         </pre>
       )}
       {showExport && mermaid !== undefined && (

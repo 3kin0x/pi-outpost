@@ -4,7 +4,7 @@ import type { ChatItem } from "@pi-outpost/shared";
 import { STRUCTURED_EXCHANGE_SCHEMA_V1 as S } from "@pi-outpost/shared/structured-exchange";
 import { selectPresentation, PRESENTATIONS } from "./registry";
 import { structuredExchangePresentation } from "./StructuredExchangeView";
-import { validStructuredExchange } from "./structuredExchange";
+import { ROLE_LABEL, TABLE_ROLE_LABEL, validStructuredExchange } from "./structuredExchange";
 import { KIND_PRESENTATIONS } from "./StructuredExchangeView";
 import { STRUCTURED_EXCHANGE_CEILINGS } from "@pi-outpost/shared/structured-exchange";
 import * as structuredExchangeModule from "./structuredExchange";
@@ -337,6 +337,135 @@ describe("declared order and declared kinds survive", () => {
     expect([...container.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual(["zebra", "alpha", "middle"]);
     const firstRow = [...(container.querySelectorAll("tbody tr")[0]?.querySelectorAll("td") ?? [])];
     expect(firstRow.map((cell) => cell.textContent)).toEqual(["z1", "a1", "m1"]);
+  });
+
+  describe("a table's rows may report a change", () => {
+    const roled = {
+      schema: S,
+      kind: "table",
+      data: {
+        columns: ["ID", "Requirement", "Status"],
+        rows: [
+          { role: "added", cells: ["REQ-5", "Log every actuation.", "draft"] },
+          { role: "changed", cells: ["REQ-2", "Signal a fault within 200 ms.", "in review"] },
+          { role: "removed", cells: ["REQ-3", "Read battery voltage at 10 Hz.", "withdrawn"] },
+          { cells: ["REQ-1", "Stop within 40 m.", "approved"] },
+        ],
+      },
+    };
+
+    const rowsOf = (container: HTMLElement) => [...container.querySelectorAll("tbody tr")] as HTMLElement[];
+
+    it("presents each declared role differently, and strikes a removed row through", () => {
+      const { container } = renderBody(withStructured(roled));
+      const rows = rowsOf(container);
+
+      expect(rows.map((row) => row.dataset.rowRole)).toEqual(["added", "changed", "removed", "context"]);
+      // Four rows, four distinct presentations: two roles that looked alike would
+      // leave a reader unable to tell an addition from a deletion.
+      expect(new Set(rows.map((row) => row.className)).size).toBe(4);
+      // Colour is not the only channel for the one destructive role, and the strike
+      // has to be on the cells: a decoration on the row never reaches them.
+      expect(rows[2]!.querySelector("td")!.className).toContain("line-through");
+    });
+
+    it("marks an added row the way an added element is marked", () => {
+      // One vocabulary across the kinds, in both channels a reader meets it in:
+      // the word the key shows, and the colour family the ground comes from.
+      expect(TABLE_ROLE_LABEL.added).toBe(ROLE_LABEL.added);
+      expect(TABLE_ROLE_LABEL.changed).toBe(ROLE_LABEL.changed);
+      expect(TABLE_ROLE_LABEL.context).toBe(ROLE_LABEL.context);
+
+      const { container } = renderBody(withStructured(roled));
+      const rows = rowsOf(container);
+      // The diagram paints an addition emerald-50 (#ecfdf5) and a change amber-50
+      // (#fffbeb); the table names the same two scales rather than picking its own.
+      expect(rows[0]!.className).toContain("emerald");
+      expect(rows[1]!.className).toContain("amber");
+    });
+
+    it("marks a row that declares nothing as context, among rows that declare something", () => {
+      const { container } = renderBody(withStructured(roled));
+      expect(rowsOf(container).at(-1)!.dataset.rowRole).toBe("context");
+    });
+
+    it("leaves a table that declares no role exactly as it was", () => {
+      const plain = {
+        schema: S,
+        kind: "table",
+        data: { columns: ["ID", "Status"], rows: [["REQ-1", "approved"], ["REQ-2", "draft"]] },
+      };
+      const { container, queryByTestId } = renderBody(withStructured(plain));
+
+      expect(rowsOf(container).map((row) => row.dataset.rowRole)).toEqual([undefined, undefined]);
+      expect(rowsOf(container).every((row) => row.className === "")).toBe(true);
+      expect(queryByTestId("table-role-key")).toBeNull();
+    });
+
+    it("never reads a role out of the producer's own data", () => {
+      // A "Status" column saying "added" is data. Colouring from it would leave a
+      // producer unable to say "this row is unchanged and its status is added".
+      const statuses = {
+        schema: S,
+        kind: "table",
+        data: { columns: ["ID", "Status"], rows: [["REQ-1", "added"], ["REQ-2", "removed"]] },
+      };
+      const { container, queryByTestId } = renderBody(withStructured(statuses));
+
+      expect(rowsOf(container).map((row) => row.dataset.rowRole)).toEqual([undefined, undefined]);
+      expect(queryByTestId("table-role-key")).toBeNull();
+    });
+
+    it("names every role present in a key, and the same words in the text equivalent", () => {
+      const { getByTestId, getByText } = renderBody(withStructured(roled));
+      const key = getByTestId("table-role-key");
+
+      expect([...key.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+        "added",
+        "changed",
+        "existing",
+        "removed",
+      ]);
+
+      fireEvent.click(getByText("show text equivalent"));
+      const text = getByTestId("structured-text-equivalent").textContent ?? "";
+      expect(text).toContain("REQ-5 | Log every actuation. | draft  (added)");
+      expect(text).toContain("REQ-1 | Stop within 40 m. | approved  (existing)");
+      expect(text).toContain("(removed)");
+    });
+
+    it("hides the rows of a role the reader switches off, and says it is doing so", () => {
+      const { container, getByTestId, getByText } = renderBody(withStructured(roled));
+
+      fireEvent.click(within(getByTestId("table-role-key")).getByText("removed"));
+
+      const rows = rowsOf(container);
+      expect(rows.map((row) => row.dataset.rowRole)).toEqual(["added", "changed", "context"]);
+      // Absent, not struck through: a hidden row must not read as a removed one
+      expect(rows.some((row) => row.querySelector("td")!.className.includes("line-through"))).toBe(false);
+      expect(getByTestId("structured-filtered").textContent).toContain("removed");
+      expect(getByText("show everything")).toBeTruthy();
+    });
+
+    it("carries the narrowing into the text equivalent, which is how a table leaves here", () => {
+      const { getByTestId, getByText } = renderBody(withStructured(roled));
+
+      fireEvent.click(within(getByTestId("table-role-key")).getByText("removed"));
+      fireEvent.click(getByText("show text equivalent"));
+
+      const text = getByTestId("structured-text-equivalent").textContent ?? "";
+      expect(text).toContain("Filtered view — 1 of 4 rows hidden (removed).");
+      expect(text).not.toContain("Read battery voltage");
+    });
+
+    it("shows everything again when the reader asks", () => {
+      const { container, getByTestId, getByText } = renderBody(withStructured(roled));
+
+      fireEvent.click(within(getByTestId("table-role-key")).getByText("removed"));
+      expect(rowsOf(container)).toHaveLength(3);
+      fireEvent.click(getByText("show everything"));
+      expect(rowsOf(container)).toHaveLength(4);
+    });
   });
 
   it("keeps two relationships between the same pair distinct when their kinds differ", () => {
