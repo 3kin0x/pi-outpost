@@ -59,6 +59,16 @@ npx pi-outpost init   # writes a starter pi-outpost.config.json here
 npx pi-outpost        # serves the UI on http://127.0.0.1:3141/
 ```
 
+The server opens the interface in your browser once it is listening. `--no-open`, or
+`"openBrowser": false`, if you would rather it did not.
+
+**Or download a single file with nothing installed at all** — no Node, no npm.
+Each release carries an executable per platform under
+[Releases](https://github.com/laurentftech/pi-outpost/releases): the server and the
+web UI are inside it. Unsigned, so macOS and Windows warn on first launch; see
+[docs/sea-packaging.md](docs/sea-packaging.md), which also covers building one
+yourself with `npx pi-outpost build-exe`.
+
 Open the UI with no credentials and it asks for them: pick a provider and paste an API key, or declare an OpenAI-compatible endpoint of your own (see [Model credentials](#model-credentials)). Nothing to restart — the chat is usable as soon as you save.
 
 pi-outpost never starts without a configuration file: the agent's working directory, its tools and its sandbox are decided there, and guessing them from whatever directory you happen to be standing in is not a decision anyone wants made for them. `init` writes the safe version of that file (read-only, no bash) for you to open up as needed.
@@ -113,6 +123,8 @@ pi-outpost init [options]     write a starter configuration file
 pi-outpost config [options]   print the configuration that would be used, and where it came from
 pi-outpost login --provider <name>
                               store an API key in <agentDir>/auth.json
+pi-outpost build-exe [options]
+                              build a standalone executable from this installation
 ```
 
 > **Upgrading from a pre-`0.1.0` clone?** Three behaviours changed. The server now **refuses to start without a configuration file** (it used to fall back to a plain local pi: your launch directory as workspace, full toolset, bash enabled) — run `pi-outpost init`. `PI_OUTPOST_PORT`/`PORT` now **override** `server.port` instead of being overridden by it, in line with `PI_OUTPOST_TOKEN`, which always won. And `PI_CWD` is now `PI_OUTPOST_CWD`.
@@ -128,6 +140,9 @@ pi-outpost login --provider <name>
 | `-h, --help` / `-v, --version` | |
 | `init --global` | Write to the user config directory instead of `./` |
 | `init --force` | Overwrite an existing file |
+| `--open` / `--no-open` | Open the interface in your browser once listening (default: wherever a desktop session exists) |
+| `build-exe --out <path>` | Where to write the executable (default `./pi-outpost`, `.exe` on Windows) |
+| `build-exe --force` | Replace an existing file at that path |
 
 There is deliberately **no `--token` flag**: a secret on the command line is readable by anyone who can list processes. Use `PI_OUTPOST_TOKEN` or the file's `server.token`.
 

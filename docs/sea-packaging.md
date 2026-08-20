@@ -8,33 +8,55 @@ inlined at build time into the bundle.
 
 > **Requires Node ≥ 26** (for `--build-sea` + `mainFormat: "module"` support).
 
-## Quick start (from npm)
+## The two ways to get one
 
-The fastest way to get a standalone `.exe` is from the published npm package:
+**Download it.** Every release carries an executable per platform, under
+[Releases](https://github.com/laurentftech/pi-outpost/releases): `pi-outpost-<version>-macos-arm64`,
+`-macos-x64`, `-linux-x64`, `-windows-x64.exe`. Nothing installed, nothing built.
 
-```powershell
-# 1. Install pi-outpost anywhere with Node.js
+They are **not signed for distribution**. macOS Gatekeeper and Windows SmartScreen
+both warn on a downloaded unsigned binary; on macOS you clear it with
+`xattr -d com.apple.quarantine ./pi-outpost` or the Open-anyway button in System
+Settings. Real signing means a certificate and notarisation, and is not done here.
+
+**Build it from the package you have:**
+
+```bash
 npm install pi-outpost
-
-# 2. Create a SEA config file
-# (on Windows the output must end in .exe)
-# NOTE: -Encoding utf8NoBOM — plain utf8 adds a BOM that breaks Node's JSON parse
-@'
-{ "main": "node_modules/pi-outpost/dist/pi-outpost.sea.mjs",
-  "output": "pi-outpost.exe",
-  "mainFormat": "module" }
-'@ | Out-File -Encoding utf8NoBOM sea-config.json
-
-# 3. Build the executable (Node ≥ 26 only)
-node --build-sea sea-config.json
-
-# 4. Run it (the web UI is already inside the .exe — nothing else to copy)
-.\pi-outpost.exe --version
+npx pi-outpost build-exe          # → ./pi-outpost (./pi-outpost.exe on Windows)
 ```
 
-The published npm package ships two bundles:
-- `pi-outpost.mjs` (≈ 2 MB) — npm dependencies external, for `npx` / `npm start`.
-- `pi-outpost.sea.mjs` (≈ 21 MB) — all dependencies **and the web UI** inlined, for `--build-sea`.
+That is the whole procedure. The command writes the SEA config itself — including
+the module format and an encoding without a byte order mark, the two details that
+used to make this fail unreadably — builds, signs the result where the platform
+requires it, and prints the path.
+
+```
+--out <path>   where to write it (default: ./pi-outpost, ./pi-outpost.exe on Windows)
+--force        replace an existing file at that path
+```
+
+On **Node ≥ 26** it uses `node --build-sea`. On anything older it falls back to
+injecting the shipped `sea-prep.blob` into a copy of your `node` binary with
+`postject`, and says so — the two artifacts are not identical, and when one of them
+misbehaves the first question is which one you have.
+
+On macOS the result is signed ad-hoc (`codesign --sign -`). That is what makes a
+modified binary *launch* at all: without it the kernel kills it, naming neither the
+signature nor the remedy. It is not a distribution signature.
+
+## Starting it
+
+Running the executable starts the server and opens the interface in your default
+browser, at the address it actually bound — including when the configuration asked
+for port `0` and the operating system chose. Launching it from a file manager works
+the same way, which is the point: there is no terminal there for an address to be
+printed to.
+
+No browser is opened where none can be shown — no desktop session, a container, a
+remote shell, a CI runner. `--open` and `--no-open` decide it explicitly, and
+`"openBrowser": false` in the configuration pins it for a deployment. A browser that
+fails to open never stops the server: the address is printed either way.
 
 ## Build from source
 
@@ -90,7 +112,47 @@ npx postject pi-outpost.exe NODE_SEA_BLOB node_modules/pi-outpost/dist/sea-prep.
 signtool sign /fd SHA256 pi-outpost.exe   # re-sign after injection
 ```
 
-> This is the legacy workflow. Prefer `--build-sea` (above) — no external tools needed.
+> `pi-outpost build-exe` does this for you, including the `--macho-segment-name
+> NODE_SEA` that macOS needs and the ad-hoc signature without which the result is
+> killed at launch. Reach for the manual form only when you are debugging the
+> command itself.
+
+## Extensions with real npm imports
+
+An extension named in `extensionScripts` lives on disk beside the executable, and
+until now it could only import Node built-ins: there are no `node_modules` next to a
+single file, so `import { Type } from "typebox"` had nothing to resolve against.
+
+It works now. The packages the agent is built from — `typebox`, `@earendil-works/pi-tui`,
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai/*` — are served to
+extensions from inside the executable:
+
+```ts
+// ext.ts, sitting next to pi-outpost, with no node_modules anywhere
+import { Type } from "typebox";
+import * as agent from "@earendil-works/pi-coding-agent";
+
+export default function extension() {
+  const schema = Type.Object({ ok: Type.Boolean() });
+  return { name: "my-extension", tools: [] };
+}
+```
+
+```json
+{ "extensionScripts": ["./ext.ts"] }
+```
+
+**How.** jiti — the loader the SDK reads extensions through — takes a `virtualModules`
+map of specifier to *already-loaded module object*, bypassing filesystem resolution.
+The SDK builds that map from static imports and selects it for its Bun binary; a
+Node executable is not that, so it fell through to `getAliases()`, whose
+`require.resolve` throws inside a blob and took all extension loading with it. Both
+build scripts now widen the condition to include a Node single executable. The
+objects are already in the bundle; nothing is written to disk, and nothing changes
+outside an executable — `npm run dev` and `npm start` resolve packages normally.
+
+You get the same objects the agent itself uses, not a second copy: the versions are
+whatever the executable was built with, and an extension cannot pin its own.
 
 ## Skills are not inside the executable
 
@@ -119,12 +181,12 @@ which is deliberate on the SDK's part but worth knowing.
 
 ## Extension loading with the SEA build
 
-Config.`extensionPaths` loads `.ts`/`.mjs` files via the pi SDK's jiti
-loader, which works inside a SEA binary (extensions are loaded from the
-filesystem at runtime).
-
-The `extensionScripts` config key loads `.mjs` files at runtime via native
-`import()`, which esbuild preserves in the bundled output:
+Both `extensionPaths` and `extensionScripts` load `.ts`/`.mjs` files from the
+filesystem through the pi SDK's jiti loader — not through a native `import()`,
+which an earlier version of this page claimed and which could never have reached a
+file the blob does not contain. jiti reads the file at runtime and, inside an
+executable, serves the agent's own packages to it as virtual modules (see
+[Extensions with real npm imports](#extensions-with-real-npm-imports)):
 
 ```json
 {

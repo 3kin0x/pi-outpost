@@ -1,0 +1,94 @@
+## MODIFIED Requirements
+
+### Requirement: CliFlags
+
+The binary SHALL accept `--config <path>`, `--profile <name>`, `--cwd <dir>`, `--agent-dir <dir>`, `--port <n>`, `--host <addr>`, `--help` and `--version`. Relative paths given on the command line SHALL be resolved against the current directory (paths inside a config file remain relative to that file). The binary SHALL NOT accept a flag carrying the auth token. An unknown flag SHALL be an error that names the flag and points at `--help`.
+
+The binary SHALL additionally accept a `build-exe` subcommand, and `--out <path>` and `--force` flags that apply to it. It SHALL accept `--open` and `--no-open`, which decide whether starting the server launches a browser, and which apply wherever the server starts rather than to any one subcommand. A flag given outside the subcommand it belongs to SHALL be an error like any other misplaced flag, rather than being silently ignored.
+
+#### Scenario: HelpListsEveryFlag
+- **WHEN** the user runs `pi-outpost --help`
+- **THEN** it prints every flag, the config discovery order, and exits zero
+
+#### Scenario: UnknownFlag
+- **WHEN** the user runs `pi-outpost --porte 8080`
+- **THEN** it exits non-zero, names the unknown flag, and suggests `--help`
+
+#### Scenario: VersionMatchesThePackage
+- **WHEN** the user runs `pi-outpost --version`
+- **THEN** it prints the version of the installed package
+
+#### Scenario: HelpDocumentsTheBuildCommand
+- **WHEN** the user runs `pi-outpost --help`
+- **THEN** the `build-exe` subcommand, its options, and the browser-opening flags appear alongside the other commands
+
+### Requirement: PublishedCliPackage
+
+The project SHALL publish a `pi-outpost` package to npm that runs the server with no clone and no build step: `npx pi-outpost`. The package SHALL contain the bundled server and the built web UI, and SHALL declare a `pi-outpost` binary. The server SHALL locate the web UI inside the package it was installed as, and SHALL keep working from a repository clone and from the SEA layout without code changes.
+
+The package SHALL also carry what building a standalone executable from it requires, so that an installation is sufficient on its own — nothing to fetch, nothing to clone, nothing to write by hand.
+
+#### Scenario: RunFromNpx
+- **GIVEN** a machine with Node and a valid config file, and no pi-outpost clone
+- **WHEN** the user runs `npx pi-outpost`
+- **THEN** the server starts and serves the web UI at the configured host and port
+
+#### Scenario: WebUiShippedInTheTarball
+- **WHEN** the package is packed
+- **THEN** the tarball contains the server bundle and the web UI's `index.html` and assets
+- **AND** packing fails if the web UI was not built
+
+#### Scenario: TheTarballCarriesWhatABuildNeeds
+- **WHEN** the package is packed
+- **THEN** the tarball contains everything `build-exe` reads, and building an executable from a fresh install requires no other download
+
+## ADDED Requirements
+
+### Requirement: StartingOpensTheInterface
+
+However the server was started — from a package runner, from an installed binary, or
+from a standalone executable — starting it for a person SHALL open the interface in
+their default browser, at the address the server is actually listening on, once it is
+listening and not before. Anyone who starts this reads the address off the terminal
+and pastes it into a browser; the software can do that itself.
+
+The address SHALL be the one bound, not the one requested: where the port was chosen
+by the operating system, the opened address SHALL be the port it chose.
+
+Whether to open SHALL be decided by whether a browser can be shown at all — a
+desktop session exists — and not by whether a terminal is attached: an executable
+launched from a file manager has no terminal and is exactly the case that most needs
+opening. It SHALL be suppressed where a browser is the wrong answer: no desktop
+session, a container or a service, or a server that exists to back an interface
+hosted elsewhere. The decision SHALL be overridable in both directions from the
+command line and from configuration.
+
+A failure to open SHALL NOT be a failure to start: the server SHALL keep running and
+SHALL print the address, which is what the operator would have read anyway.
+
+#### Scenario: StartingOnADesktopOpensTheInterface
+- **GIVEN** a machine with a desktop session
+- **WHEN** the operator starts the server
+- **THEN** the default browser opens the interface, and it is being served by the time the page loads
+
+#### Scenario: LaunchedWithoutATerminal
+- **GIVEN** a standalone executable launched from a file manager, with no terminal attached
+- **THEN** the browser still opens — the absence of a terminal is not the absence of a person
+
+#### Scenario: TheOpenedAddressIsTheBoundOne
+- **GIVEN** a configuration that lets the operating system choose the port
+- **WHEN** the browser is opened
+- **THEN** the address it opens is the one the server bound, not the one configured
+
+#### Scenario: NothingOpensWhereNothingCanSeeIt
+- **WHEN** the server runs with no desktop session available
+- **THEN** no browser is launched, and the address is printed as usual
+
+#### Scenario: TheOperatorCanSaySoEitherWay
+- **WHEN** the operator asks for no browser, or asks for one where it would not have opened
+- **THEN** the request is honoured
+
+#### Scenario: AFailedOpenIsNotAFailedStart
+- **GIVEN** a machine where launching a browser fails
+- **WHEN** the server starts
+- **THEN** it is running and serving, and the address is printed
