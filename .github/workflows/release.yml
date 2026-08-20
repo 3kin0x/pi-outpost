@@ -38,8 +38,12 @@ jobs:
         include:
           - runner: macos-latest
             arch: arm64
-          - runner: macos-13
-            arch: x64
+          # No Intel macOS build. `macos-13` was the last x64 label and GitHub has
+          # retired it: a job requesting it does not fail, it queues until the 24h
+          # timeout — which would hang `publish`, since the publish waits on this
+          # matrix. `macos-15-intel` is the successor label and is worth adding
+          # once someone has watched a job actually start on it; queuing forever is
+          # not a thing to discover on a tag.
           - runner: ubuntu-latest
             arch: x64
           - runner: windows-latest
