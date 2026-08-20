@@ -12,7 +12,12 @@ inlined at build time into the bundle.
 
 **Download it.** Every release carries an executable per platform, under
 [Releases](https://github.com/laurentftech/pi-outpost/releases): `pi-outpost-<version>-macos-arm64`,
-`-macos-x64`, `-linux-x64`, `-windows-x64.exe`. Nothing installed, nothing built.
+`-linux-x64`, `-windows-x64.exe`. Nothing installed, nothing built.
+
+No Intel macOS build: GitHub retired the `macos-13` runner, and a job asking for it
+queues until it times out rather than failing. On an Intel Mac, build your own with
+`npx pi-outpost build-exe` — it works, and it is what produced the executables this
+feature was tested with.
 
 They are **not signed for distribution**. macOS Gatekeeper and Windows SmartScreen
 both warn on a downloaded unsigned binary; on macOS you clear it with
