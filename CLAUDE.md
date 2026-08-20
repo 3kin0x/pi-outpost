@@ -151,3 +151,13 @@ shows those.
 What "exercised" means: drive the actual feature — create the file, open the
 document, ask the agent for the thing — then read back the DOM, the filesystem, or
 the session transcript to check what really happened. A screenshot is not a check.
+
+How: `npm run bench` (`scripts/embed-bench.mts`) leaves a real widget running —
+host page on its own origin with hostile CSS, two servers behind it, a seeded
+transcript with diagrams and tables. Fixed ports: host **4321**, plain server
+**4322**, seeded transcript **4323**; use `127.0.0.1`, not `localhost`, because
+that is the origin the server allows.
+
+**Rebuild first**: `web`, then `@pi-outpost/embed`, then `build:e2e-host`. The
+bench serves `dist/`, so an unbuilt fix is invisible and you will debug a fix that
+is already correct.
