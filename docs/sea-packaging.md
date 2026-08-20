@@ -117,6 +117,43 @@ signtool sign /fd SHA256 pi-outpost.exe   # re-sign after injection
 > killed at launch. Reach for the manual form only when you are debugging the
 > command itself.
 
+## Extensions with real npm imports
+
+An extension named in `extensionScripts` lives on disk beside the executable, and
+until now it could only import Node built-ins: there are no `node_modules` next to a
+single file, so `import { Type } from "typebox"` had nothing to resolve against.
+
+It works now. The packages the agent is built from — `typebox`, `@earendil-works/pi-tui`,
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai/*` — are served to
+extensions from inside the executable:
+
+```ts
+// ext.ts, sitting next to pi-outpost, with no node_modules anywhere
+import { Type } from "typebox";
+import * as agent from "@earendil-works/pi-coding-agent";
+
+export default function extension() {
+  const schema = Type.Object({ ok: Type.Boolean() });
+  return { name: "my-extension", tools: [] };
+}
+```
+
+```json
+{ "extensionScripts": ["./ext.ts"] }
+```
+
+**How.** jiti — the loader the SDK reads extensions through — takes a `virtualModules`
+map of specifier to *already-loaded module object*, bypassing filesystem resolution.
+The SDK builds that map from static imports and selects it for its Bun binary; a
+Node executable is not that, so it fell through to `getAliases()`, whose
+`require.resolve` throws inside a blob and took all extension loading with it. Both
+build scripts now widen the condition to include a Node single executable. The
+objects are already in the bundle; nothing is written to disk, and nothing changes
+outside an executable — `npm run dev` and `npm start` resolve packages normally.
+
+You get the same objects the agent itself uses, not a second copy: the versions are
+whatever the executable was built with, and an extension cannot pin its own.
+
 ## Skills are not inside the executable
 
 The npm package ships the bundled skills under `dist/skills/`, and the server finds
@@ -144,12 +181,12 @@ which is deliberate on the SDK's part but worth knowing.
 
 ## Extension loading with the SEA build
 
-Config.`extensionPaths` loads `.ts`/`.mjs` files via the pi SDK's jiti
-loader, which works inside a SEA binary (extensions are loaded from the
-filesystem at runtime).
-
-The `extensionScripts` config key loads `.mjs` files at runtime via native
-`import()`, which esbuild preserves in the bundled output:
+Both `extensionPaths` and `extensionScripts` load `.ts`/`.mjs` files from the
+filesystem through the pi SDK's jiti loader — not through a native `import()`,
+which an earlier version of this page claimed and which could never have reached a
+file the blob does not contain. jiti reads the file at runtime and, inside an
+executable, serves the agent's own packages to it as virtual modules (see
+[Extensions with real npm imports](#extensions-with-real-npm-imports)):
 
 ```json
 {

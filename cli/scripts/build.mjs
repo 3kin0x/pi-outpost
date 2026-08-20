@@ -99,39 +99,51 @@ await esbuild.build({
   },
 });
 
-// ── Patch getAliases() for SEA mode ──────────────────────────────────────────
-// In SEA mode (or when running the bundled file outside node_modules), the
-// SDK's getAliases() calls require.resolve("typebox") relative to the bundle's
-// location on disk. Since the SEA bundle is fully inlined, there is no
-// node_modules/ at that path and require.resolve() throws MODULE_NOT_FOUND.
-// We wrap getAliases() so resolution failures produce empty aliases instead —
-// enough for extensions that use only type imports (stripped by jiti).
+// ── Let extensions reach the bundled packages ────────────────────────────────
+// The same patch server/scripts/build-sea.mjs applies, and for the same reason:
+// this bundle is what `--build-sea` turns into an executable, so an extension
+// loaded from disk beside it has no node_modules to resolve the agent's own
+// packages from. jiti's `virtualModules` serves them as already-loaded objects,
+// the SDK already builds that map, and it selects it on `isBunBinary` — false in
+// a Node SEA. One condition, not a new mechanism.
+//
+// Two bundles carry this because two paths produce an executable: this one for
+// `node --build-sea`, and server/dist/bundle.mjs for the blob. Patching only one
+// leaves extensions working on whichever path the machine happened to take.
 {
-  console.log("[build] patching getAliases() for SEA bundle …");
+  console.log("[build] routing extension imports through jiti's virtual modules …");
   let src = await readFile(SEA_BUNDLE, "utf-8");
-  // esbuild bundles with 2-space indentation — match it exactly
-  const openBefore =
-    "function getAliases() {\n" +
-    "  if (_aliases)\n" +
-    "    return _aliases;";
-  const openAfter =
-    "function getAliases() {\n" +
-    "  if (_aliases)\n" +
-    "    return _aliases;\n" +
-    "  try {";
-  const tailBefore =
-    "};\n" +
-    "  return _aliases;\n" +
-    "}";
-  const tailAfter =
-    "};\n" +
-    "  return _aliases;\n" +
+
+  const helper =
+    "\nfunction __piOutpostIsSea() {\n" +
+    "  try {\n" +
+    "    return require(\"node:sea\").isSea();\n" +
     "  } catch {\n" +
-    "    _aliases = {};\n" +
-    "    return _aliases;\n" +
+    "    return false;\n" +
     "  }\n" +
-    "}";
+    "}\n";
+  const requireShim = "const require = ___createRequire(import.meta.url);";
+  if (!src.includes(requireShim)) {
+    throw new Error("[build] the bundle's createRequire shim moved — the SEA extension patch needs it");
+  }
+  src = src.replace(requireShim, requireShim + helper);
+
+  const branchBefore = "...isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
+  if (!src.includes(branchBefore)) {
+    throw new Error("[build] the SDK's jiti branch moved — extensions would lose their bundled packages");
+  }
+  src = src.replace(branchBefore, "...isBunBinary || __piOutpostIsSea() ? { virtualModules: VIRTUAL_MODULES, tryNative: false }");
+
+  // Kept as a seatbelt rather than as the mechanism: if the detection above ever
+  // stops matching, extension loading degrades instead of throwing before the
+  // first extension is read.
+  const openBefore = "function getAliases() {\n" + "  if (_aliases)\n" + "    return _aliases;";
+  const openAfter = openBefore + "\n  try {";
+  const tailBefore = "};\n" + "  return _aliases;\n" + "}";
+  const tailAfter =
+    "};\n" + "  return _aliases;\n" + "  } catch {\n" + "    _aliases = {};\n" + "    return _aliases;\n" + "  }\n" + "}";
   src = src.replace(openBefore, openAfter).replace(tailBefore, tailAfter);
+
   await writeFile(SEA_BUNDLE, src, "utf-8");
 }
 

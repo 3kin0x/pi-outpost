@@ -78,40 +78,66 @@ await esbuild.build({
   },
 });
 
-// ── 1b. Patch getAliases() for SEA mode ──────────────────────────────────────
-// In SEA mode, the entire bundle is embedded in the .exe — there are no
-// node_modules/ directories on the filesystem at the executable's location.
-// The SDK's getAliases() calls require.resolve("typebox") which throws in
-// that environment, preventing jiti from being created and silently killing
-// all extension loading.  We wrap the function body so that if filesystem
-// resolution fails, empty aliases are returned — enough for extensions that
-// import only Node built-in modules (npm-registered pi packages still need
-// full filesystem resolution and aren't supported in SEA mode).
+// ── 1b. Let extensions reach the bundled packages, in SEA mode ───────────────
+// An extension loaded at runtime lives outside the executable and may import the
+// packages the agent itself is built from — pi-coding-agent, pi-tui, typebox. There
+// are no node_modules beside a single-file executable, so the SDK's getAliases(),
+// which answers with filesystem paths from require.resolve(), throws and takes all
+// extension loading down with it.
+//
+// jiti already has the mechanism for exactly this, and the SDK already uses it: its
+// `virtualModules` option maps a specifier to an *already-loaded module object* and
+// bypasses filesystem resolution entirely. The SDK builds that map (VIRTUAL_MODULES)
+// from static imports — "These MUST be static so Bun bundles them into the compiled
+// binary" — and selects it when `isBunBinary`. Which is false in a Node SEA, so we
+// fall to the aliases and die.
+//
+// So the patch is one condition, not a new mechanism: take the same branch Bun takes
+// when this is a single executable. The objects are already inside the blob (esbuild
+// bundles those static imports), which is what makes it work at all.
+//
+// The upstream fix is the same three lines in the SDK's own detection; this stays
+// until that lands.
 {
-  console.log("[build-sea] patching getAliases() for SEA mode …");
+  console.log("[build-sea] routing extension imports through jiti's virtual modules …");
   let bundleSrc = await readFile(BUNDLE_PATH, "utf-8");
-  // Replace the getAliases function: wrap the body so require.resolve
-  // failures are caught and returned as {}.
-  // Match the function opening and wrap body in try
-  const openBefore = "function getAliases() {\n" +
-    "  if (_aliases)\n" +
-    "    return _aliases;";
-  const openAfter = "function getAliases() {\n" +
-    "  if (_aliases)\n" +
-    "    return _aliases;\n" +
-    "  try {";
-  // Match ";, return _aliases; }" sequence unique to getAliases' tail
-  const tailBefore = "};\n" +
-    "  return _aliases;\n" +
-    "}";
-  const tailAfter = "};\n" +
-    "  return _aliases;\n" +
+
+  // `node:sea` answers this for real; wrapped because a runtime without it must
+  // simply say no rather than take the whole loader with it.
+  const helper =
+    "\nfunction __piOutpostIsSea() {\n" +
+    "  try {\n" +
+    "    return require(\"node:sea\").isSea();\n" +
     "  } catch {\n" +
-    "    _aliases = {};\n" +
-    "    return _aliases;\n" +
+    "    return false;\n" +
     "  }\n" +
-    "}";
+    "}\n";
+  const requireShim = "const require = ___createRequire(import.meta.url);";
+  if (!bundleSrc.includes(requireShim)) {
+    throw new Error("[build-sea] the bundle's createRequire shim moved — the SEA extension patch needs it");
+  }
+  bundleSrc = bundleSrc.replace(requireShim, requireShim + helper);
+
+  const branchBefore = "...isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
+  const branchAfter = "...isBunBinary || __piOutpostIsSea() ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
+  if (!bundleSrc.includes(branchBefore)) {
+    // Loudly, not silently: a patch that quietly stops matching leaves extensions
+    // broken in exactly the build nobody runs locally.
+    throw new Error("[build-sea] the SDK's jiti branch moved — extensions would lose their bundled packages");
+  }
+  bundleSrc = bundleSrc.replace(branchBefore, branchAfter);
+
+  // getAliases() keeps its guard, demoted from mechanism to seatbelt: it is no
+  // longer how extensions resolve anything, but a build where the detection above
+  // failed must degrade to "extensions with no npm imports" rather than to a
+  // loader that throws before any extension is read.
+  const openBefore = "function getAliases() {\n" + "  if (_aliases)\n" + "    return _aliases;";
+  const openAfter = openBefore + "\n  try {";
+  const tailBefore = "};\n" + "  return _aliases;\n" + "}";
+  const tailAfter =
+    "};\n" + "  return _aliases;\n" + "  } catch {\n" + "    _aliases = {};\n" + "    return _aliases;\n" + "  }\n" + "}";
   bundleSrc = bundleSrc.replace(openBefore, openAfter).replace(tailBefore, tailAfter);
+
   await writeFile(BUNDLE_PATH, bundleSrc, "utf-8");
 }
 
