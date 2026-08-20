@@ -628,7 +628,6 @@ if (EMBEDDED_WEB && Object.keys(EMBEDDED_WEB).length > 0) {
 }
 
 await app.listen({ port: PORT, host: HOST });
-console.log(`[server] http://${HOST}:${PORT}/`);
 
 /**
  * Land the operator in the interface they just started.
@@ -641,7 +640,12 @@ console.log(`[server] http://${HOST}:${PORT}/`);
  */
 {
   const bound = app.server.address();
+  // Printed from what was bound, not from what was asked for: with `port: 0` the
+  // configured value is a number nobody is listening on, and this line was saying
+  // `http://127.0.0.1:0/` — which is the whole of what an operator gets when no
+  // browser opens.
   const url = typeof bound === "object" && bound !== null ? browsableUrl(bound) : `http://${HOST}:${PORT}/`;
+  console.log(`[server] ${url}`);
   // A server with no interface of its own has nothing to open: in development the
   // UI comes from Vite on another port, and a tab on this one shows a 404. It is
   // also what a backend for an embedded widget looks like, which is the other case

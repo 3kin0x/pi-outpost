@@ -13,6 +13,7 @@ import { describe, test } from "node:test";
 import {
   BuildExeError,
   carriesSeaSentinel,
+  SEA_SENTINEL_FUSE,
   producedExecutableRuns,
   buildExecutable,
   canBuildDirectly,
@@ -176,5 +177,19 @@ describe("whether a runtime can host an injected blob", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the module does not poison the binary it builds", () => {
+  test("the sentinel never appears as a literal in the source", () => {
+    // This module is inlined into the bundle that becomes the executable. A literal
+    // here puts a second sentinel inside the binary Node is asked to inject into,
+    // and Node refuses: "found more than one occurrence of sentinel". It broke three
+    // CI runners at once, and nothing local reproduced it.
+    const source = readFileSync(new URL("../src/buildExe.ts", import.meta.url), "utf8");
+    const assembled = "NODE_SEA_FUSE_" + "fce680ab2cc467b6" + "e072b8b5df1996b2";
+    assert.equal(source.includes(assembled), false, "buildExe.ts must assemble the sentinel, never spell it");
+    // and what it assembles is still the right string
+    assert.equal(SEA_SENTINEL_FUSE, assembled);
   });
 });

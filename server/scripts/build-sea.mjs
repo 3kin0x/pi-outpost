@@ -116,10 +116,17 @@ await esbuild.build({
 }
 
 // ── 2a. Generate preparation blob (for npm distribution, cross-platform) ─────
-// The blob can be injected into a node.exe on any platform via postject.
+// The blob can be injected into a node binary of any platform via postject.
+//
+// It carries `mainFormat: "module"`, and that is a deliberate reversal. It was
+// removed once, because injecting a blob that declares a module format into a node
+// too old to know the field asserts at startup — issue #14, which read like a
+// platform mismatch and was not. But the bundle *is* ESM: without the field the
+// runtime loads it as CommonJS and dies on its first `import`, so a blob without it
+// is one nobody can use. The field stays and the requirement is stated instead:
+// this blob wants Node >= 26, the same version --build-sea needs.
 console.log("[build-sea] generating SEA preparation blob …");
-const blobCfg = { ...SEA_CFG, output: resolve(OUT_DIR, "sea-prep.blob") };
-delete blobCfg.mainFormat;
+const blobCfg = { ...SEA_CFG, mainFormat: "module", output: resolve(OUT_DIR, "sea-prep.blob") };
 await writeFile(SEA_CONFIG_PATH, JSON.stringify(blobCfg, null, 2));
 execFileSync(process.execPath, ["--experimental-sea-config", SEA_CONFIG_PATH], { stdio: "inherit" });
 

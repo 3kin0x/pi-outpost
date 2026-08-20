@@ -90,8 +90,20 @@ export function findBuildInputs(from?: string): { bundle?: string; blob?: string
 
 export class BuildExeError extends Error {}
 
-/** The marker postject overwrites. A node built without single-executable support has none. */
-export const SEA_SENTINEL_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
+/**
+ * The marker postject overwrites. A node built without single-executable support has none.
+ *
+ * Assembled at run time, never written out whole. This module is inlined into the
+ * bundle that becomes the executable, so a literal here would put a second copy of
+ * the sentinel inside the very binary Node is asked to inject into — and Node
+ * refuses with "found more than one occurrence of sentinel", which is how this was
+ * discovered: on three CI runners at once, by the feature that reads it.
+ *
+ * Joined through an array rather than concatenated, because a bundler folds adjacent
+ * string literals back into one and the literal would reappear.
+ */
+const FUSE_PARTS = ["NODE", "SEA", "FUSE", "fce680ab2cc467b6", "e072b8b5df1996b2"];
+export const SEA_SENTINEL_FUSE = `${FUSE_PARTS.slice(0, 3).join("_")}_${FUSE_PARTS.slice(3).join("")}`;
 
 /**
  * Whether this `node` can host an injected blob at all.
@@ -289,7 +301,7 @@ export function buildExecutable(options: BuildOptions = {}): BuildResult {
     "NODE_SEA_BLOB",
     blob,
     "--sentinel-fuse",
-    "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
+    SEA_SENTINEL_FUSE,
     ...(platform === "darwin" ? ["--macho-segment-name", "NODE_SEA"] : []),
     "--overwrite",
   ]);
