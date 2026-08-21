@@ -127,14 +127,13 @@ describe("persistent runtime settings", () => {
 
       // Browsing rides the same server: it needs nothing the refusals above
       // changed, and a server boot is the expensive thing in this file.
-      // The top of the tree as this platform spells it: "/" on POSIX, the current
-      // drive's root on Windows.
-      const fsRoot = path.parse(process.cwd()).root;
-      client.send({ type: "browse_server_directory", path: fsRoot, requestId: "b1" });
+      // "/" is the top on both platforms: a real directory on POSIX, and on Windows
+      // a virtual one whose entries are the drives.
+      client.send({ type: "browse_server_directory", path: "/", requestId: "b1" });
       const top = await client.waitFor((m) => m.type === "server_directory" && m.requestId === "b1", 15_000);
-      assert.equal(top.path, fsRoot);
-      assert.equal(top.parent, null);
-      assert.ok(top.entries.length > 0, "the filesystem root has directories");
+      assert.equal(top.path, "/");
+      assert.equal(top.parent, null, "the top has nowhere to go back to");
+      assert.ok(top.entries.length > 0, "the top of the tree is not empty");
 
       // Outside the workspace the file browser is confined to — the point of this browser.
       client.send({ type: "browse_server_directory", path: path.join(root, "shared"), requestId: "b2" });

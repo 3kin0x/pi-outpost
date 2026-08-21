@@ -52,7 +52,9 @@ describe("listServerDirectories", () => {
       const fsRoot = rootOf(root);
       const top = await listServerDirectories(fsRoot);
       assert.equal(top.path, fsRoot);
-      assert.equal(top.parent, null, "the root has nowhere to go back to");
+      // On POSIX "/" is the end of the walk. On Windows a drive root goes back to
+      // the drive list — see "the Windows virtual root" below.
+      assert.equal(top.parent, process.platform === "win32" ? VIRTUAL_ROOT : null, "the way back from the top");
       assert.ok(top.entries.length > 0);
 
       // Every step down is reachable, including the parts outside any workspace.
@@ -156,23 +158,25 @@ describe("listServerDirectories", () => {
   });
 });
 
+/**
+ * Named platform, not the one underneath: what these pin is the grammar, and the
+ * Windows half of it has its own suite below. A test whose expectation is derived
+ * from the host it happens to run on pins nothing.
+ */
 describe("normalizeServerPath", () => {
   test("an empty request is the filesystem root", () => {
-    const fsRoot = rootOf(process.cwd());
-    assert.equal(normalizeServerPath(""), fsRoot);
-    assert.equal(normalizeServerPath("   "), fsRoot);
+    assert.equal(normalizeServerPath("", "linux"), "/");
+    assert.equal(normalizeServerPath("   ", "linux"), "/");
   });
 
   test("a relative path is anchored at the root, not at the server's cwd", () => {
-    const fsRoot = rootOf(process.cwd());
-    assert.equal(normalizeServerPath("etc"), path.join(fsRoot, "etc"));
+    assert.equal(normalizeServerPath("etc", "linux"), "/etc");
     // Climbing above the root lands on the root, never in the process's cwd.
-    assert.equal(normalizeServerPath("../../etc"), path.join(fsRoot, "etc"));
+    assert.equal(normalizeServerPath("../../etc", "linux"), "/etc");
   });
 
   test("collapses traversal inside an absolute path", () => {
-    const fsRoot = rootOf(process.cwd());
-    assert.equal(normalizeServerPath(path.join(fsRoot, "usr", "local", "..", "share")), path.join(fsRoot, "usr", "share"));
+    assert.equal(normalizeServerPath("/usr/local/../share", "linux"), "/usr/share");
   });
 });
 
