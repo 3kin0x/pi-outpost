@@ -82,10 +82,11 @@ describe("persistent runtime settings", () => {
     }
   });
 
-  test("a refused update leaves the running server and its config file alone", async () => {
+  test("refusals change nothing, and the path picker browses the host", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-outpost-settings-bad-"));
     let server;
     try {
+      await cp(path.join(FIXTURES, "test-skill"), path.join(root, "shared", "test-skill"), { recursive: true });
       server = await startServer(root, { userSkillPaths: [], server: { port: await freePort() } });
       const configPath = path.join(root, CONFIG_FILE);
       const before = await readFile(configPath, "utf8");
@@ -123,23 +124,9 @@ describe("persistent runtime settings", () => {
         false,
         "the live session was kept",
       );
-      client.close();
-    } finally {
-      await server?.stop();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 
-  test("the settings path picker browses the server's directories over the protocol", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "pi-outpost-browse-"));
-    let server;
-    try {
-      await cp(path.join(FIXTURES, "test-skill"), path.join(root, "shared", "test-skill"), { recursive: true });
-      server = await startServer(root, { server: { port: await freePort() } });
-      const client = connect(server.wsUrl());
-      await client.open();
-      await client.waitFor("hello", 30_000);
-
+      // Browsing rides the same server: it needs nothing the refusals above
+      // changed, and a server boot is the expensive thing in this file.
       client.send({ type: "browse_server_directory", path: "/", requestId: "b1" });
       const top = await client.waitFor((m) => m.type === "server_directory" && m.requestId === "b1", 15_000);
       assert.equal(top.path, "/");
