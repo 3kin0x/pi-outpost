@@ -181,6 +181,7 @@ export interface AgentState {
   /** Latest tree lifecycle request, so controls close only on a real acknowledgement and retain errors. */
   fileOperation: FileOperationState | null;
   extensionPaths: string[];
+  tools: { name: string; active: boolean }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
   versions: { piOutpost: string; piSdk?: string; agent?: string } | null;
   gitAvailable: boolean;
@@ -228,6 +229,7 @@ const initialState: AgentState = {
   created: null,
   fileOperation: null,
   extensionPaths: [],
+  tools: [],
   sandbox: null,
   versions: null,
   gitAvailable: false,
@@ -335,6 +337,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     gitAvailable: message.gitAvailable === true,
     credentials: message.credentials ?? null,
     extensionPaths: message.extensionPaths ?? [],
+    tools: message.tools ?? [],
     sandbox: message.sandbox ?? null,
     versions: message.versions ?? null,
   };

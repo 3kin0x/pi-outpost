@@ -11,7 +11,7 @@ function sandbox(overrides: Partial<Sandbox> = {}): Sandbox {
 
 function setup(overrides: Partial<Props> = {}) {
   const onUpdateConfig = vi.fn();
-  const props: Props = { extensionPaths: [], sandbox: sandbox(), onUpdateConfig, ...overrides };
+  const props: Props = { extensionPaths: [], tools: [], commands: [], sandbox: sandbox(), onUpdateConfig, ...overrides };
   const view = render(<SettingsMenu {...props} />);
   const rerenderWith = (next: Partial<Props>) => view.rerender(<SettingsMenu {...props} {...next} />);
   return { onUpdateConfig, ...view, rerenderWith };
@@ -23,6 +23,23 @@ const check = (name: RegExp) => screen.getByRole("checkbox", { name });
 const applyButton = () => screen.getByRole("button", { name: /Apply/ });
 
 describe("SettingsMenu", () => {
+  it("shows the effective tools and loaded skills", () => {
+    setup({
+      tools: [{ name: "present_structure", active: true }, { name: "bash", active: false }],
+      commands: [{ name: "skill:structured-exchange", source: "skill" }],
+    });
+    openMenu();
+    expect(screen.getByText("1 tools active · 1 inactive")).toBeInTheDocument();
+    expect(screen.getByText("1 skills loaded")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("1 tools active · 1 inactive"));
+    fireEvent.click(screen.getByText("1 skills loaded"));
+    expect(screen.getByText("present_structure")).toBeInTheDocument();
+    expect(screen.getByText("active")).toBeInTheDocument();
+    expect(screen.getByText("bash")).toBeInTheDocument();
+    expect(screen.getByText("inactive")).toBeInTheDocument();
+    expect(screen.getByText("skill:structured-exchange")).toBeInTheDocument();
+  });
+
   it("stays closed until asked", () => {
     setup();
     expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument();

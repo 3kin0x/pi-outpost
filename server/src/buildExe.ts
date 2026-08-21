@@ -77,10 +77,17 @@ export function canBuildDirectly(version: string = process.version): boolean {
  */
 export function findBuildInputs(from?: string): { bundle?: string; blob?: string } {
   from = from ?? import.meta.dirname;
-  const roots = [from, path.resolve(from, "../../cli/dist")];
+  // A checkout's command starts from server/src, but its current SEA bundle lives
+  // in server/dist. Prefer it over cli/dist, whose published-package bundle can be
+  // from an earlier release and would silently discard the source changes just built.
+  const candidates = [
+    { root: from, bundle: "pi-outpost.sea.mjs" },
+    { root: path.resolve(from, "../dist"), bundle: "bundle.mjs" },
+    { root: path.resolve(from, "../../cli/dist"), bundle: "pi-outpost.sea.mjs" },
+  ];
   const found: { bundle?: string; blob?: string } = {};
-  for (const root of roots) {
-    const bundle = path.join(root, "pi-outpost.sea.mjs");
+  for (const { root, bundle: bundleName } of candidates) {
+    const bundle = path.join(root, bundleName);
     const blob = path.join(root, "sea-prep.blob");
     if (found.bundle === undefined && fs.existsSync(bundle)) found.bundle = bundle;
     if (found.blob === undefined && fs.existsSync(blob)) found.blob = blob;

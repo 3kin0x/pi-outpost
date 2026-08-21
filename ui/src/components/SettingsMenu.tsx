@@ -11,12 +11,14 @@ interface SandboxConfig {
 
 interface SettingsMenuProps {
   extensionPaths: string[];
+  tools: { name: string; active: boolean }[];
+  commands: { name: string; source: string }[];
   sandbox: SandboxConfig | null;
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
   onUpdateConfig: (sandbox: SandboxConfig) => void;
 }
 
-export function SettingsMenu({ extensionPaths, sandbox, versions, onUpdateConfig }: SettingsMenuProps) {
+export function SettingsMenu({ extensionPaths, tools, commands, sandbox, versions, onUpdateConfig }: SettingsMenuProps) {
   const [open, setOpen] = useState(false);
   const [sandboxRoot, setSandboxRoot] = useState("");
   const [sandboxWritableRoot, setSandboxWritableRoot] = useState("");
@@ -24,6 +26,9 @@ export function SettingsMenu({ extensionPaths, sandbox, versions, onUpdateConfig
   const [sandboxAllowBash, setSandboxAllowBash] = useState(false);
   const [applying, setApplying] = useState(false);
   const ref = useClickOutside(() => setOpen(false));
+  const activeTools = tools.filter((tool) => tool.active);
+  const inactiveTools = tools.filter((tool) => !tool.active);
+  const skills = commands.filter((command) => command.source === "skill");
 
   // Sync local state when sandbox config changes (e.g. after apply ack)
   useEffect(() => {
@@ -73,6 +78,19 @@ export function SettingsMenu({ extensionPaths, sandbox, versions, onUpdateConfig
           </div>
 
           <div className="min-h-0 overflow-y-auto p-4">
+            <section className="mb-4">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Agent resources</h3>
+              {tools.length === 0 ? <p className="text-xs text-zinc-400 dark:text-zinc-500">Tool inventory unavailable for this runtime</p> : <details>
+                <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">{activeTools.length} tools active{inactiveTools.length ? ` · ${inactiveTools.length} inactive` : ""}</summary>
+                <ul className="mt-2 space-y-1">
+                  {tools.map((tool) => <li key={tool.name} className="flex justify-between rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"><span>{tool.name}</span><span>{tool.active ? "active" : "inactive"}</span></li>)}
+                </ul>
+              </details>}
+              {skills.length === 0 ? <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">No skills loaded</p> : <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">{skills.length} skills loaded</summary>
+                <ul className="mt-2 space-y-1">{skills.map((skill) => <li key={skill.name} className="rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{skill.name}</li>)}</ul>
+              </details>}
+            </section>
             {/* Extensions section */}
             <section className="mb-4">
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">

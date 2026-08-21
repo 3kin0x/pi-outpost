@@ -6,7 +6,7 @@
  * not execute, a path silently overwritten.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
@@ -22,6 +22,7 @@ import {
   releaseArtifactName,
   seaConfigBytes,
   seaConfigFor,
+  findBuildInputs,
 } from "../src/buildExe.ts";
 
 describe("the generated SEA config", () => {
@@ -41,6 +42,31 @@ describe("the generated SEA config", () => {
 
   test("silences the experimental warning, which is not news to anyone running this", () => {
     assert.equal(seaConfigFor("/x/bundle.mjs", "/x/out").disableExperimentalSEAWarning, true);
+  });
+});
+
+describe("build inputs in a checkout", () => {
+  test("prefers the freshly-built server bundle over a stale published CLI bundle", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "pi-outpost-build-inputs-"));
+    try {
+      const source = path.join(dir, "server", "src");
+      const serverDist = path.join(dir, "server", "dist");
+      const cliDist = path.join(dir, "cli", "dist");
+      mkdirSync(source, { recursive: true });
+      mkdirSync(serverDist, { recursive: true });
+      mkdirSync(cliDist, { recursive: true });
+      writeFileSync(path.join(serverDist, "bundle.mjs"), "fresh");
+      writeFileSync(path.join(serverDist, "sea-prep.blob"), "fresh blob");
+      writeFileSync(path.join(cliDist, "pi-outpost.sea.mjs"), "stale");
+      writeFileSync(path.join(cliDist, "sea-prep.blob"), "stale blob");
+
+      assert.deepEqual(findBuildInputs(source), {
+        bundle: path.join(serverDist, "bundle.mjs"),
+        blob: path.join(serverDist, "sea-prep.blob"),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

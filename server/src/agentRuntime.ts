@@ -81,6 +81,8 @@ export interface RuntimeSnapshot {
   contextUsage?: ContextUsage;
   providers: ProviderStatus[];
   extensionPaths: string[];
+  /** Tools registered by the runtime, with their current model visibility. */
+  tools?: { name: string; active: boolean }[];
 }
 
 /**

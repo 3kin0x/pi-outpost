@@ -489,6 +489,8 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             gitStatus={state.gitStatus}
             gitLog={state.gitLog}
             extensionPaths={state.extensionPaths}
+            tools={state.tools}
+            commands={state.commands}
             sandbox={state.sandbox}
             versions={state.versions}
             onUpdateConfig={updateConfig}

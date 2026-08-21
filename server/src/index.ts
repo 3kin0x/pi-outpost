@@ -938,6 +938,7 @@ function snapshot(): SessionSnapshot {
     gitAvailable: GIT !== null,
     credentials: credentialStatus(),
     extensionPaths: state.extensionPaths,
+    tools: state.tools,
     // One line for what answers prompts: the SDK in this process, or the child.
     versions: {
       piOutpost: VERSION,
@@ -2381,6 +2382,13 @@ getHealth = () => (runtime.ok ? { ok: true, sessionId: runtime.snapshot().sessio
 console.log(`[pi] session ${runtime.snapshot().sessionId}`);
 console.log(`[pi] agent runtime ${runtime.kind}`);
 console.log(`[pi] model ${modelName()} · cwd ${AGENT_CWD} · agentDir ${AGENT_DIR}`);
+const runtimeTools = runtime.snapshot().tools;
+if (runtimeTools) {
+  console.log(`[pi] tools active: ${runtimeTools.filter((tool) => tool.active).map((tool) => tool.name).join(", ") || "(none)"}`);
+  console.log(`[pi] tools inactive: ${runtimeTools.filter((tool) => !tool.active).map((tool) => tool.name).join(", ") || "(none)"}`);
+}
+const runtimeSkills = runtime.snapshot().commands.filter((command) => command.source === "skill").map((command) => command.name);
+console.log(`[pi] skills: ${runtimeSkills.join(", ") || "(none)"}`);
 if (config.sandbox) {
   const extras = [
     config.sandbox.allowWrite ? "write" : "read-only",

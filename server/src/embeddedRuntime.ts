@@ -104,6 +104,7 @@ class EmbeddedRuntime implements AgentRuntime {
       contextUsage: session.getContextUsage() as ContextUsage | undefined,
       providers: this.providers(),
       extensionPaths: session.extensionRunner.getExtensionPaths(),
+      tools: this.tools(),
     };
   }
 
@@ -114,6 +115,14 @@ class EmbeddedRuntime implements AgentRuntime {
       name: model.name,
       reasoning: model.reasoning,
     }));
+  }
+
+  private tools(): { name: string; active: boolean }[] {
+    const active = new Set(this.session.getActiveToolNames());
+    return this.session
+      .getAllTools()
+      .map((tool) => ({ name: tool.name, active: active.has(tool.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**

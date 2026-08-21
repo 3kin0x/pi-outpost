@@ -311,6 +311,8 @@ export interface SessionSnapshot {
   credentials?: CredentialStatus;
   /** Absolute paths of loaded extension files. */
   extensionPaths?: string[];
+  /** Tools the active agent session can call; `active` means the model receives it in its prompt. */
+  tools?: { name: string; active: boolean }[];
   /**
    * Versions for the settings display: exactly one of `piSdk` and `agent`, naming
    * whatever is actually answering prompts.
