@@ -71,6 +71,17 @@ npm run build --workspace pi-outpost # produces both .mjs bundles in cli/dist/ (
 npm run build:sea --workspace server # .exe + sea-prep.blob in server/dist/ (UI inlined)
 ```
 
+`server/src/embedded-web.ts` is a build artifact and is **not** in git: `npm install`
+writes an empty one (`scripts/ensure-embedded-web.mjs`) so a fresh clone starts and
+typechecks, and the builds below fill it in.
+
+A filled one is only ever for packaging. The server prefers the inlined bundle over
+`web/dist`, so leaving one around means rebuilding `web/` changes nothing you can
+see — you debug a fix that is already correct. `npm run dev`, `npm start` and
+`npm run bench` therefore empty it first (`ensure-embedded-web.mjs --reset`);
+development serves what is on disk. After running a packaging build by hand, expect
+the next `npm run dev` to clear it, and never commit it.
+
 The `build:sea` step in `server/scripts/build-sea.mjs`:
 1. **Builds the web UI** (`npm run build --workspace web`) and **inlines it** into
    `server/src/embedded-web.ts` so the bundle is self-contained.
