@@ -76,7 +76,9 @@ export function ServerPathPicker({ label, browse, onBrowse, onSelect, onCancel }
               className="w-full truncate rounded px-2 py-1 text-left font-mono text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
               title={entry.path}
             >
-              {entry.name}/
+              {entry.name}
+              {/* A drive is spelled the way Windows spells it: "C:\", not "C:/". */}
+              {entry.name.endsWith(":") ? "\\" : "/"}
             </button>
           </li>
         ))}

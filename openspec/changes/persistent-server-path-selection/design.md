@@ -36,12 +36,20 @@ The settings menu shows the user's list alone, under "User skill paths". The fil
 
 The UI will list built-in skills from the runtime inventory. It will never write built-ins into any skill-path list or offer their removal.
 
-### One filesystem, not one host
+### A virtual root, because Windows has no single one
 
-Exploration starts at the filesystem root and walks down. On Windows that root is a
-drive's, and drives do not connect: a server started on `D:` walks `D:` only, even
-though an explicit `C:\…` still resolves. A drive picker is deliberately out of
-scope — a deployment serves the filesystem its resources are on.
+Exploration starts at the top and walks down. On POSIX that top is `/`. On Windows
+every drive has its own root and they do not connect — `dirname("C:\\")` is
+`C:\\` — so walking up would dead-end on whichever drive the server happens to
+have been started from. Since skill paths are chosen entirely by picker, with no
+text field to type another drive into, that would put a directory on `D:` out of
+reach altogether.
+
+So `/` on Windows names a *virtual* root whose entries are the drives, and a drive
+root's parent is that virtual root. Drive letters are probed by trying to open
+them, skipping `A:` and `B:` — touching a floppy controller costs seconds and
+nothing anyone configures lives there. POSIX is untouched: `/` is a real directory
+and its parent is nothing.
 
 ## Risks / Trade-offs
 

@@ -283,6 +283,16 @@ describe("SettingsMenu", () => {
       expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
     });
 
+    it("spells a Windows drive the way Windows does", () => {
+      const { onBrowseServerPath, rerenderWith } = setup();
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+      // The server's virtual root on Windows: its entries are the drives.
+      rerenderWith({ serverBrowse: browse({ path: "/", parent: null, entries: [{ name: "C:", path: "C:\\" }] }) });
+      fireEvent.click(screen.getByRole("button", { name: "C:\\" }));
+      expect(onBrowseServerPath).toHaveBeenLastCalledWith("C:\\");
+    });
+
     it("walks back up through the parent", () => {
       const { onBrowseServerPath, rerenderWith } = setup();
       openMenu();

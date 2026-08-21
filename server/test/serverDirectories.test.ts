@@ -11,7 +11,14 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { listServerDirectories, normalizeServerPath, ServerDirectoryError } from "../src/serverDirectories.ts";
+import {
+  listDrives,
+  listServerDirectories,
+  normalizeServerPath,
+  parentOf,
+  ServerDirectoryError,
+  VIRTUAL_ROOT,
+} from "../src/serverDirectories.ts";
 
 /**
  * The top of the tree above a given path, spelled the way this platform spells it:
@@ -166,5 +173,64 @@ describe("normalizeServerPath", () => {
   test("collapses traversal inside an absolute path", () => {
     const fsRoot = rootOf(process.cwd());
     assert.equal(normalizeServerPath(path.join(fsRoot, "usr", "local", "..", "share")), path.join(fsRoot, "usr", "share"));
+  });
+});
+
+/**
+ * Windows has no single filesystem root: every drive has its own and they do not
+ * connect. These run on any platform — the path grammar is chosen by the injected
+ * platform, not by the one underneath, so the win32 branch is exercised rather
+ * than assumed. What they cannot cover is a real readdir of a real drive; that is
+ * what the Windows CI job is for.
+ */
+describe("the Windows virtual root", () => {
+  const drives = async (root: string) => root === "C:\\" || root === "D:\\";
+
+  test("keeps the top of the tree off any one drive", () => {
+    assert.equal(normalizeServerPath("/", "win32"), VIRTUAL_ROOT);
+    assert.equal(normalizeServerPath("", "win32"), VIRTUAL_ROOT);
+    assert.equal(normalizeServerPath("\\", "win32"), VIRTUAL_ROOT);
+    // An explicit drive is still exactly what it says.
+    assert.equal(normalizeServerPath("D:\\skills", "win32"), "D:\\skills");
+  });
+
+  test("lists the drives that can be listed", async () => {
+    const listing = await listServerDirectories("/", { platform: "win32", probeDrive: drives });
+    assert.equal(listing.path, VIRTUAL_ROOT);
+    assert.equal(listing.parent, null, "the top has nowhere to go back to");
+    assert.deepEqual(listing.entries, [
+      { name: "C:", path: "C:\\" },
+      { name: "D:", path: "D:\\" },
+    ]);
+  });
+
+  test("leaves out a drive letter nothing answers on", async () => {
+    const entries = await listDrives(async (root) => root === "E:\\");
+    assert.deepEqual(entries, [{ name: "E:", path: "E:\\" }]);
+  });
+
+  test("never touches the floppy letters", async () => {
+    const asked: string[] = [];
+    await listDrives(async (root) => {
+      asked.push(root);
+      return false;
+    });
+    // Probing A: or B: spins a drive that still exists on some hardware, and
+    // nothing anyone configures lives there.
+    assert.equal(asked.includes("A:\\"), false);
+    assert.equal(asked.includes("B:\\"), false);
+    assert.equal(asked.includes("C:\\"), true);
+  });
+
+  test("walks back from a drive root to the drive list", () => {
+    assert.equal(parentOf("C:\\Users\\me", "win32"), "C:\\Users");
+    assert.equal(parentOf("C:\\", "win32"), VIRTUAL_ROOT);
+    assert.equal(parentOf(VIRTUAL_ROOT, "win32"), null);
+  });
+
+  test("changes nothing on POSIX, where the root really is the top", () => {
+    assert.equal(normalizeServerPath("/", "linux"), "/");
+    assert.equal(parentOf("/", "linux"), null);
+    assert.equal(parentOf("/mnt/skills", "linux"), "/mnt");
   });
 });

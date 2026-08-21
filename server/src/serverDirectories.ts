@@ -39,22 +39,97 @@ export class ServerDirectoryError extends Error {
 }
 
 /**
+ * The top of the tree, as one path the protocol can carry.
+ *
+ * On POSIX it is simply `/`. On Windows there is no single root — every drive has
+ * its own, and they do not connect — so `/` names a *virtual* one whose entries are
+ * the drives. Without it a settings path on another drive would be unreachable:
+ * `dirname("C:\\")` is `C:\\`, so walking up ends there, and skill paths have no
+ * text field to type one into.
+ */
+export const VIRTUAL_ROOT = "/";
+
+/**
+ * The path grammar of the platform being served — win32 separators and drive roots,
+ * or posix ones. Named explicitly rather than taken from `path`, so the Windows
+ * behaviour is exercised by tests that do not run on Windows: injecting the
+ * platform without its path math would only prove that a fake agrees with itself.
+ */
+const pathFor = (platform: NodeJS.Platform) => (platform === "win32" ? path.win32 : path.posix);
+
+export interface ServerDirectoryOptions {
+  /** Injectable so the Windows behaviour is testable on a machine that is not Windows. */
+  platform?: NodeJS.Platform;
+  /** Whether a drive root can be listed. Injectable for the same reason. */
+  probeDrive?: (root: string) => Promise<boolean>;
+}
+
+/**
+ * Drive letters worth probing, in order. Deliberately not `A:` and `B:`: on the
+ * hardware that still has a floppy controller, touching them spins a drive and
+ * blocks for seconds, and nothing anyone configures lives there.
+ */
+const DRIVE_LETTERS = "CDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+async function canList(root: string): Promise<boolean> {
+  try {
+    const handle = await fs.opendir(root);
+    await handle.close();
+    return true;
+  } catch {
+    // Absent, or present with no media (an empty optical drive) — either way it is
+    // not a place a setting can point at.
+    return false;
+  }
+}
+
+/** The drives this host can actually list, as pickable entries. */
+export async function listDrives(probe: (root: string) => Promise<boolean> = canList): Promise<ServerDirEntry[]> {
+  const probed = await Promise.all(
+    DRIVE_LETTERS.map(async (letter) => ((await probe(`${letter}:\\`)) ? { name: `${letter}:`, path: `${letter}:\\` } : undefined)),
+  );
+  return probed.filter((entry): entry is ServerDirEntry => entry !== undefined);
+}
+
+/**
  * Normalize a client-supplied path to an absolute one. Anchored at the filesystem
  * root rather than the process cwd: a relative path from a browser is not a path
  * relative to wherever the server happens to have been started, and treating it as
  * one would make the same request mean different things on two deployments.
  *
- * On Windows that root is the current drive's (`C:\`), since that is what
- * resolving an absolute path yields there. There is no drive switcher: a
- * deployment serves one filesystem, and what its settings point at is on it.
+ * The one path that is not resolved is the virtual root on Windows — resolving it
+ * would silently pin the top of the tree to whichever drive the server was started
+ * from, which is the drive the user is trying to leave.
  */
-export function normalizeServerPath(requested: string): string {
-  return path.resolve("/", requested.trim() === "" ? "/" : requested.trim());
+export function normalizeServerPath(requested: string, platform: NodeJS.Platform = process.platform): string {
+  const trimmed = requested.trim();
+  if (platform === "win32" && (trimmed === "" || trimmed === "/" || trimmed === "\\")) return VIRTUAL_ROOT;
+  return pathFor(platform).resolve("/", trimmed === "" ? "/" : trimmed);
+}
+
+/**
+ * The directory to walk back to, or null at the top.
+ *
+ * On Windows a drive root's parent is the virtual root — that is the way back to
+ * the other drives — and the virtual root itself has none.
+ */
+export function parentOf(target: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform === "win32" && target === VIRTUAL_ROOT) return null;
+  const parent = pathFor(platform).dirname(target);
+  if (parent !== target) return parent;
+  return platform === "win32" ? VIRTUAL_ROOT : null;
 }
 
 /** Immediate subdirectories of one server-side path. Symlinks that point at a directory count. */
-export async function listServerDirectories(requested: string): Promise<ServerDirectoryListing> {
-  const target = normalizeServerPath(requested);
+export async function listServerDirectories(
+  requested: string,
+  options: ServerDirectoryOptions = {},
+): Promise<ServerDirectoryListing> {
+  const platform = options.platform ?? process.platform;
+  const target = normalizeServerPath(requested, platform);
+  if (platform === "win32" && target === VIRTUAL_ROOT) {
+    return { path: VIRTUAL_ROOT, parent: null, entries: await listDrives(options.probeDrive) };
+  }
   let dirents;
   try {
     dirents = await fs.readdir(target, { withFileTypes: true });
@@ -70,7 +145,7 @@ export async function listServerDirectories(requested: string): Promise<ServerDi
 
   const entries: ServerDirEntry[] = [];
   for (const dirent of dirents) {
-    const full = path.join(target, dirent.name);
+    const full = pathFor(platform).join(target, dirent.name);
     if (dirent.isDirectory()) {
       entries.push({ name: dirent.name, path: full });
       continue;
@@ -88,6 +163,5 @@ export async function listServerDirectories(requested: string): Promise<ServerDi
   }
   entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
-  const parent = path.dirname(target);
-  return { path: target, parent: parent === target ? null : parent, entries };
+  return { path: target, parent: parentOf(target, platform), entries };
 }
