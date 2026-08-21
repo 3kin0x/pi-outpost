@@ -7,7 +7,7 @@
  * tests exist to pin what it *does* refuse: files, and paths it cannot read.
  */
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
@@ -26,7 +26,11 @@ import { listServerDirectories, normalizeServerPath, ServerDirectoryError } from
 const rootOf = (somePath: string) => path.parse(somePath).root;
 
 async function tree(): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "pi-outpost-dirs-"));
+  // Through realpath, because the walk below compares path segments against what
+  // the filesystem actually lists: the temp directory is reached by a symlink on
+  // macOS (/var → /private/var) and by an 8.3 short name on the Windows runner
+  // (C:\Users\RUNNER~1), and neither spelling appears in a listing of its parent.
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "pi-outpost-dirs-")));
   await mkdir(path.join(root, "mnt", "skills"), { recursive: true });
   await mkdir(path.join(root, "mnt", ".hidden"), { recursive: true });
   await writeFile(path.join(root, "mnt", "notes.md"), "not a directory");
