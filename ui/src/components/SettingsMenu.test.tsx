@@ -9,12 +9,32 @@ function sandbox(overrides: Partial<Sandbox> = {}): Sandbox {
   return { root: "/work", allowWrite: true, allowBash: false, ...overrides };
 }
 
+type Browse = NonNullable<Props["serverBrowse"]>;
+
+function browse(overrides: Partial<Browse> = {}): Browse {
+  return { status: "loaded", path: "/", parent: null, entries: [], requestId: "r1", ...overrides };
+}
+
 function setup(overrides: Partial<Props> = {}) {
   const onUpdateConfig = vi.fn();
-  const props: Props = { extensionPaths: [], tools: [], commands: [], sandbox: sandbox(), onUpdateConfig, ...overrides };
+  const onBrowseServerPath = vi.fn();
+  const onCloseServerBrowser = vi.fn();
+  const props: Props = {
+    extensionPaths: [],
+    tools: [],
+    commands: [],
+    sandbox: sandbox(),
+    userSkillPaths: [],
+    serverBrowse: null,
+    applyState: null,
+    onBrowseServerPath,
+    onCloseServerBrowser,
+    onUpdateConfig,
+    ...overrides,
+  };
   const view = render(<SettingsMenu {...props} />);
   const rerenderWith = (next: Partial<Props>) => view.rerender(<SettingsMenu {...props} {...next} />);
-  return { onUpdateConfig, ...view, rerenderWith };
+  return { onUpdateConfig, onBrowseServerPath, onCloseServerBrowser, ...view, rerenderWith };
 }
 
 const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -70,11 +90,13 @@ describe("SettingsMenu", () => {
   });
 
   describe("the sandbox form", () => {
-    it("says when there is no sandbox to configure", () => {
-      setup({ sandbox: null });
+    it("says when there is no sandbox to configure, and still applies the rest", () => {
+      const { onUpdateConfig } = setup({ sandbox: null, userSkillPaths: ["/mnt/skills"] });
       openMenu();
       expect(screen.getByText("No sandbox configured")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /Apply/ })).not.toBeInTheDocument();
+      // A deployment with no sandbox still has skill paths worth changing.
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith({ userSkillPaths: ["/mnt/skills"] });
     });
 
     it("starts from the current configuration", () => {
@@ -101,10 +123,8 @@ describe("SettingsMenu", () => {
       fireEvent.click(check(/Allow bash/));
       fireEvent.click(applyButton());
       expect(onUpdateConfig).toHaveBeenCalledWith({
-        root: "/new-root",
-        allowWrite: true,
-        allowBash: true,
-        writableRoot: undefined,
+        sandbox: { root: "/new-root", allowWrite: true, allowBash: true, writableRoot: undefined },
+        userSkillPaths: [],
       });
     });
 
@@ -113,7 +133,7 @@ describe("SettingsMenu", () => {
       openMenu();
       fireEvent.change(field(/Writable root/), { target: { value: "   " } });
       fireEvent.click(applyButton());
-      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ writableRoot: undefined }));
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ sandbox: expect.objectContaining({ writableRoot: undefined }) }));
     });
 
     it("passes a writable root through when one is given", () => {
@@ -121,13 +141,19 @@ describe("SettingsMenu", () => {
       openMenu();
       fireEvent.change(field(/Writable root/), { target: { value: "src/app" } });
       fireEvent.click(applyButton());
-      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ writableRoot: "src/app" }));
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ sandbox: expect.objectContaining({ writableRoot: "src/app" }) }));
     });
 
-    it("closes after applying", () => {
-      setup();
+    it("stays open while the apply is in flight, and closes once it is acknowledged", () => {
+      const { rerenderWith } = setup();
       openMenu();
       fireEvent.click(applyButton());
+      rerenderWith({ applyState: { status: "applying" } });
+      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+      expect(applyButton()).toBeDisabled();
+
+      // The acknowledgement only arrives once the server has persisted the change.
+      rerenderWith({ applyState: null });
       expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument();
     });
 
@@ -157,7 +183,162 @@ describe("SettingsMenu", () => {
       const { onUpdateConfig } = setup({ sandbox: sandbox({ locks: { root: true, allowBash: true }, allowBash: true }) });
       openMenu();
       fireEvent.click(applyButton());
-      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ root: "/work", allowBash: true }));
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ sandbox: expect.objectContaining({ root: "/work", allowBash: true }) }));
+    });
+  });
+
+  describe("skill paths", () => {
+    it("separates configured paths from the built-in inventory", () => {
+      setup({
+        userSkillPaths: ["/mnt/team-skills"],
+        commands: [
+          { name: "skill:structured-exchange", source: "skill" },
+          { name: "skill:team", source: "skill" },
+        ],
+      });
+      openMenu();
+      // Built-ins are inventory: listed, never removable.
+      fireEvent.click(screen.getByText("2 skills loaded"));
+      expect(screen.getByText("skill:structured-exchange")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remove skill:structured-exchange" })).not.toBeInTheDocument();
+      // The configured path is the editable half.
+      expect(screen.getByText("/mnt/team-skills")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove /mnt/team-skills" })).toBeInTheDocument();
+    });
+
+    it("shows only the user's own paths — the configuration file's are not its business", () => {
+      setup({ userSkillPaths: ["/mnt/mine"], commands: [{ name: "skill:from-config", source: "skill" }] });
+      openMenu();
+      expect(screen.getByText("User skill paths")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove /mnt/mine" })).toBeInTheDocument();
+      // Skills the configuration file brings in are inventory, not a path list.
+      fireEvent.click(screen.getByText("1 skills loaded"));
+      expect(screen.getByText("skill:from-config")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Remove skill:from-config/ })).not.toBeInTheDocument();
+    });
+
+    it("says when nothing extra is configured", () => {
+      setup();
+      openMenu();
+      expect(screen.getByText("No skill directories added")).toBeInTheDocument();
+    });
+
+    it("adds a directory chosen from the server and reports it on apply", () => {
+      const { onUpdateConfig, onBrowseServerPath, rerenderWith } = setup();
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Add directory…" }));
+      expect(onBrowseServerPath).toHaveBeenCalledWith("/");
+
+      rerenderWith({ serverBrowse: browse({ entries: [{ name: "mnt", path: "/mnt" }] }) });
+      fireEvent.click(screen.getByRole("button", { name: "mnt/" }));
+      expect(onBrowseServerPath).toHaveBeenLastCalledWith("/mnt");
+
+      rerenderWith({
+        serverBrowse: browse({ path: "/mnt", parent: "/", entries: [{ name: "skills", path: "/mnt/skills" }] }),
+      });
+      fireEvent.click(screen.getByRole("button", { name: "skills/" }));
+      rerenderWith({ serverBrowse: browse({ path: "/mnt/skills", parent: "/mnt", entries: [] }) });
+      fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+
+      expect(screen.getByText("/mnt/skills")).toBeInTheDocument();
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ userSkillPaths: ["/mnt/skills"] }));
+    });
+
+    it("removes a configured path", () => {
+      const { onUpdateConfig } = setup({ userSkillPaths: ["/mnt/a", "/mnt/b"] });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Remove /mnt/a" }));
+      expect(screen.queryByText("/mnt/a")).not.toBeInTheDocument();
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ userSkillPaths: ["/mnt/b"] }));
+    });
+
+    it("does not add the same directory twice", () => {
+      const { onUpdateConfig, rerenderWith } = setup({ userSkillPaths: ["/mnt/skills"] });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Add directory…" }));
+      rerenderWith({ serverBrowse: browse({ path: "/mnt/skills", parent: "/mnt" }) });
+      fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ userSkillPaths: ["/mnt/skills"] }));
+    });
+  });
+
+  describe("the server path picker", () => {
+    it("browses from whatever the sandbox root already points at", () => {
+      const { onBrowseServerPath } = setup({ sandbox: sandbox({ root: "/work" }) });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+      expect(onBrowseServerPath).toHaveBeenCalledWith("/work");
+    });
+
+    it("puts the chosen directory in the field it was opened for", () => {
+      const { rerenderWith } = setup();
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for writable root" }));
+      rerenderWith({ serverBrowse: browse({ path: "/work/scratch", parent: "/work" }) });
+      fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+      expect(field(/Writable root/)).toHaveValue("/work/scratch");
+      expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
+    });
+
+    it("walks back up through the parent", () => {
+      const { onBrowseServerPath, rerenderWith } = setup();
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+      rerenderWith({ serverBrowse: browse({ path: "/mnt/skills", parent: "/mnt" }) });
+      fireEvent.click(screen.getByRole("button", { name: "Up" }));
+      expect(onBrowseServerPath).toHaveBeenLastCalledWith("/mnt");
+    });
+
+    it("shows a path it could not read, and changes no field", () => {
+      const { onUpdateConfig, rerenderWith } = setup({ sandbox: sandbox({ root: "/work" }) });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+      // The refused path is named in the error; the picker still stands on the
+      // directory that did list, which is the only one selectable.
+      rerenderWith({
+        serverBrowse: browse({ status: "error", path: "/mnt", parent: "/", error: 'Cannot list "/private": permission denied' }),
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent('Cannot list "/private": permission denied');
+      expect(field(/^Root/)).toHaveValue("/work");
+      expect(screen.getByTestId("picker-path")).toHaveTextContent("/mnt");
+
+      fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ sandbox: expect.objectContaining({ root: "/mnt" }) }));
+    });
+
+    it("gives up the listing when the picker is cancelled", () => {
+      const { onCloseServerBrowser, rerenderWith } = setup();
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+      rerenderWith({ serverBrowse: browse() });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
+      expect(onCloseServerBrowser).toHaveBeenCalled();
+    });
+  });
+
+  describe("a refused apply", () => {
+    it("stays open, says why, and leaves the settings as the server still has them", () => {
+      const { rerenderWith } = setup({ sandbox: sandbox({ root: "/work" }), userSkillPaths: ["/mnt/a"] });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Remove /mnt/a" }));
+      fireEvent.change(field(/^Root/), { target: { value: "/nowhere" } });
+      fireEvent.click(applyButton());
+      rerenderWith({ applyState: { status: "applying" } });
+      rerenderWith({ applyState: { status: "error", message: "cannot save /etc/pi.json: does not exist" } });
+
+      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("cannot save /etc/pi.json: does not exist");
+      expect(applyButton()).toBeEnabled();
+
+      // The server kept its configuration, so the menu goes back to showing it.
+      rerenderWith({ applyState: { status: "error", message: "cannot save" }, sandbox: sandbox({ root: "/work" }), userSkillPaths: ["/mnt/a"] });
+      expect(field(/^Root/)).toHaveValue("/work");
+      expect(screen.getByText("/mnt/a")).toBeInTheDocument();
     });
   });
 

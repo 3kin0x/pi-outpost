@@ -50,7 +50,8 @@ import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
-import { loadConfig, NoConfigError } from "./config.ts";
+import { allSkillPaths, ConfigWriteError, type EditableSettings, loadConfig, NoConfigError, persistEditableSettings } from "./config.ts";
+import { listServerDirectories, ServerDirectoryError } from "./serverDirectories.ts";
 import {
   CredentialError,
   CredentialSyncError,
@@ -736,7 +737,7 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
        * and being given nothing is a worse surprise than either.
        */
       ...(() => {
-        const paths = [...config.skillPaths, ...(config.noSkills ? [] : BUNDLED_SKILLS)];
+        const paths = [...allSkillPaths(config), ...(config.noSkills ? [] : BUNDLED_SKILLS)];
         return paths.length > 0 ? { additionalSkillPaths: paths } : {};
       })(),
       ...(config.noPromptTemplates ? { noPromptTemplates: true } : {}),
@@ -938,6 +939,11 @@ function snapshot(): SessionSnapshot {
     gitAvailable: GIT !== null,
     credentials: credentialStatus(),
     extensionPaths: state.extensionPaths,
+    // What is configured, not what got loaded — built-in skills reach the menu
+    // through `commands` instead. The two lists are separate because only one of
+    // them is the user's to edit.
+    skillPaths: config.skillPaths,
+    userSkillPaths: config.userSkillPaths,
     tools: state.tools,
     // One line for what answers prompts: the SDK in this process, or the child.
     versions: {
@@ -1272,13 +1278,21 @@ async function handleSetCredential(socket: WebSocket, provider: string, apiKey: 
 }
 
 /**
- * Update sandbox config at runtime. Re-resolves the file browser paths and
- * creates a fresh session so new tool restrictions take effect for subsequent
- * turns. The running turn (if any) continues under the old sandbox.
+ * Apply the editable runtime settings: persist them, then rebuild the session so
+ * the new toolset and skills take effect.
+ *
+ * Persist *first*, and give up on the whole thing if the write fails. The old
+ * order — mutate the live config, rebuild, and never write anything — meant a
+ * change the user watched take effect vanished at the next restart, and there was
+ * no moment at which the two disagreed visibly enough to notice. Writing first
+ * also makes the failure honest: a configuration that cannot be saved leaves the
+ * running server exactly as it was, and says so.
+ *
+ * The running turn (if any) continues under the old sandbox.
  */
 async function handleUpdateConfig(
   socket: WebSocket,
-  newSandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string },
+  update: { sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }; userSkillPaths?: string[] },
 ): Promise<void> {
   if (replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
@@ -1286,31 +1300,80 @@ async function handleUpdateConfig(
   }
   const rebuildTools = runtime.rebuildTools;
   if (!rebuildTools) {
-    // The sandbox describes tools this server builds. An RPC child builds its own,
-    // so accepting the change would leave the UI showing a boundary nothing enforces.
-    send(socket, { type: "error", message: new RuntimeUnsupportedError("Changing the sandbox", runtime.kind).message });
+    // These settings describe resources this server builds. An RPC child builds its
+    // own, so accepting the change would leave the UI showing a boundary nothing
+    // enforces and skills the child never loaded.
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Changing runtime settings", runtime.kind).message });
+    return;
+  }
+  if (update.sandbox && config.sandbox === undefined) {
+    send(socket, { type: "error", message: "No sandbox configured — cannot update" });
     return;
   }
 
+  // Paths typed into Settings resolve like paths written in the config file —
+  // against the file's own directory — since that file is where they are going.
+  const configDir = path.dirname(config.configFile);
+  const resolve = (p: string) => path.resolve(configDir, p);
+
   // Enforce locks from config: locked fields keep their current value
   const locks = config.sandboxLocks ?? {};
-  const mergedSandbox = {
-    root: locks.root ? config.sandbox!.root : newSandbox.root,
-    allowWrite: locks.allowWrite ? config.sandbox!.allowWrite : newSandbox.allowWrite,
-    allowBash: locks.allowBash ? config.sandbox!.allowBash : newSandbox.allowBash,
-    writableRoot: locks.writableRoot ? config.sandbox!.writableRoot : newSandbox.writableRoot,
+  const current = config.sandbox;
+  const mergedSandbox =
+    update.sandbox && current
+      ? {
+          root: locks.root ? current.root : resolve(update.sandbox.root),
+          allowWrite: locks.allowWrite ? current.allowWrite : update.sandbox.allowWrite,
+          allowBash: locks.allowBash ? current.allowBash : update.sandbox.allowBash,
+          writableRoot: locks.writableRoot
+            ? current.writableRoot
+            : update.sandbox.writableRoot === undefined
+              ? undefined
+              : resolve(update.sandbox.writableRoot),
+        }
+      : undefined;
+  const mergedSkillPaths = update.userSkillPaths?.map(resolve);
+
+  const persisted: EditableSettings = {
+    ...(mergedSandbox ? { sandbox: mergedSandbox } : {}),
+    ...(mergedSkillPaths ? { userSkillPaths: mergedSkillPaths } : {}),
   };
+  try {
+    persistEditableSettings(config, persisted);
+  } catch (error) {
+    // Nothing has been touched: the live configuration, the browser roots and the
+    // session are all still the ones the user is looking at.
+    reportError(error);
+    send(socket, {
+      type: "error",
+      message: error instanceof ConfigWriteError ? error.message : `Could not save settings: ${String(error)}`,
+    });
+    return;
+  }
 
   replacingSession = true;
   try {
-    // Persist to the live config object so the next server start remembers
-    config.sandbox = {
-      root: mergedSandbox.root,
-      allowWrite: mergedSandbox.allowWrite,
-      allowBash: mergedSandbox.allowBash,
-      writableRoot: mergedSandbox.writableRoot,
-      readExceptions: config.sandbox?.readExceptions ?? [],
-    };
+    if (mergedSkillPaths) config.userSkillPaths = mergedSkillPaths;
+    if (mergedSandbox) {
+      config.sandbox = {
+        root: mergedSandbox.root,
+        allowWrite: mergedSandbox.allowWrite,
+        allowBash: mergedSandbox.allowBash,
+        writableRoot: mergedSandbox.writableRoot,
+        readExceptions: [],
+      };
+    }
+    if (config.sandbox) {
+      // Recomputed rather than carried over: skill paths are read-only exceptions to
+      // the sandbox (see loadConfig), so a skill directory added outside the root
+      // would otherwise be a skill the agent is forbidden to read.
+      config.sandbox.readExceptions = [
+        ...allSkillPaths(config),
+        ...config.promptPaths,
+        ...config.extensionPaths,
+        ...config.extensionScripts,
+      ];
+    }
     BROWSER_ROOT = await resolveBrowserRoot(config);
     WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
     GIT = await probeGit(BROWSER_ROOT);
@@ -1319,9 +1382,14 @@ async function handleUpdateConfig(
     fileWatcher = buildFileWatcher();
     sandboxedTools = config.sandbox ? await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes) : undefined;
     // Replace the current session so the new runtime picks up the updated tools
+    // and re-runs skill discovery over the new paths.
     await rebuildTools.call(runtime);
+    // Only now: the settings are on disk and the session in front of the user was
+    // built from them.
+    send(socket, { type: "update_config_ack", ...snapshot() });
   } catch (error) {
     reportError(error);
+    send(socket, { type: "error", message: `Settings saved, but the session could not be rebuilt: ${error instanceof Error ? error.message : String(error)}` });
     try {
       await rebuildTools.call(runtime);
     } catch (recoveryError) {
@@ -1329,6 +1397,21 @@ async function handleUpdateConfig(
     }
   } finally {
     replacingSession = false;
+  }
+}
+
+/** Directory listing for a Settings path picker — directories only, from `/`. */
+async function handleBrowseServerDirectory(socket: WebSocket, requestedPath: string, requestId: string): Promise<void> {
+  try {
+    const listing = await listServerDirectories(requestedPath);
+    send(socket, { type: "server_directory", requestId, ...listing });
+  } catch (error) {
+    send(socket, {
+      type: "server_directory_error",
+      requestId,
+      path: error instanceof ServerDirectoryError ? error.path : requestedPath,
+      message: error instanceof ServerDirectoryError ? error.message : `Cannot list "${requestedPath}": ${String(error)}`,
+    });
   }
 }
 
@@ -2339,21 +2422,36 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         ...(message.compat ? { compat: message.compat } : {}),
       }).catch(reportError);
       break;
+    case "browse_server_directory":
+      if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
+      handleBrowseServerDirectory(socket, message.path, message.requestId).catch(reportError);
+      break;
     case "update_config": {
-      if (config.sandbox === undefined) {
-        send(socket, { type: "error", message: "No sandbox configured — cannot update" });
+      if (message.sandbox !== undefined) {
+        if (
+          typeof message.sandbox.root !== "string" ||
+          typeof message.sandbox.allowWrite !== "boolean" ||
+          typeof message.sandbox.allowBash !== "boolean" ||
+          (message.sandbox.writableRoot !== undefined && typeof message.sandbox.writableRoot !== "string")
+        ) {
+          send(socket, { type: "error", message: "Invalid sandbox config" });
+          return;
+        }
+      }
+      if (message.userSkillPaths !== undefined) {
+        if (!Array.isArray(message.userSkillPaths) || message.userSkillPaths.some((p) => typeof p !== "string" || p.trim() === "")) {
+          send(socket, { type: "error", message: "Invalid skill paths" });
+          return;
+        }
+      }
+      if (message.sandbox === undefined && message.userSkillPaths === undefined) {
+        send(socket, { type: "error", message: "Nothing to update" });
         return;
       }
-      if (
-        typeof message.sandbox?.root !== "string" ||
-        typeof message.sandbox.allowWrite !== "boolean" ||
-        typeof message.sandbox.allowBash !== "boolean" ||
-        (message.sandbox.writableRoot !== undefined && typeof message.sandbox.writableRoot !== "string")
-      ) {
-        send(socket, { type: "error", message: "Invalid sandbox config" });
-        return;
-      }
-      handleUpdateConfig(socket, message.sandbox).catch(reportError);
+      handleUpdateConfig(socket, {
+        ...(message.sandbox ? { sandbox: message.sandbox } : {}),
+        ...(message.userSkillPaths ? { userSkillPaths: message.userSkillPaths } : {}),
+      }).catch(reportError);
       break;
     }
   }

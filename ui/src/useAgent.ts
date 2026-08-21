@@ -17,6 +17,7 @@ import type {
   GitRevision,
   ModelChoice,
   ProviderCompat,
+  ServerDirEntry,
   ServerMessage,
   SessionSummary,
   ThinkingLevel,
@@ -129,6 +130,27 @@ function samePair(a: { base: GitRevision; target: GitRevision }, b: { base: GitR
   return a.base.rev === b.base.rev && a.base.path === b.base.path && a.target.rev === b.target.rev && a.target.path === b.target.path;
 }
 
+/**
+ * The Settings path picker's current listing. One at a time: the picker is a
+ * modal step inside the settings menu, so a second browse replaces the first
+ * rather than accumulating (the requestId is what discards a stale answer).
+ */
+export interface ServerBrowseState {
+  status: "loading" | "loaded" | "error";
+  path: string;
+  parent: string | null;
+  entries: ServerDirEntry[];
+  error?: string;
+  requestId: string;
+}
+
+/**
+ * The in-flight settings apply, so the menu can stay open on a refusal and show
+ * why. Cleared by the acknowledgement, which only arrives after the server has
+ * persisted the change — "applied" here means "on disk", not "sent".
+ */
+export type SettingsApplyState = { status: "applying" } | { status: "error"; message: string };
+
 export interface AgentState {
   connected: boolean;
   /** The server refused our token (WS close 4401): show the token screen, stop reconnecting. */
@@ -183,6 +205,16 @@ export interface AgentState {
   extensionPaths: string[];
   tools: { name: string; active: boolean }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
+  /**
+   * Skill paths added through Settings — the list the user may add to and remove
+   * from. The configuration file's own `skillPaths` are not carried into the UI:
+   * they load regardless, and nothing here may touch them.
+   */
+  userSkillPaths: string[];
+  /** Open server-directory listing for a Settings path field; null when no picker is open. */
+  serverBrowse: ServerBrowseState | null;
+  /** Outcome of the settings apply the user is waiting on; null when none is in flight. */
+  settingsApply: SettingsApplyState | null;
   versions: { piOutpost: string; piSdk?: string; agent?: string } | null;
   gitAvailable: boolean;
   gitStatus: GitStatusState | null;
@@ -231,6 +263,9 @@ const initialState: AgentState = {
   extensionPaths: [],
   tools: [],
   sandbox: null,
+  userSkillPaths: [],
+  serverBrowse: null,
+  settingsApply: null,
   versions: null,
   gitAvailable: false,
   credentials: null,
@@ -268,6 +303,9 @@ type Action =
   | { type: "git_file_history_closed" }
   | { type: "git_file_diff_started"; base: GitRevision; target: GitRevision; requestId: string }
   | { type: "git_file_diff_cleared" }
+  | { type: "server_browse_started"; path: string; requestId: string }
+  | { type: "server_browse_closed" }
+  | { type: "settings_apply_started" }
   | { type: "branding_settled" }
   | { type: "branding_loaded"; branding: Branding };
 
@@ -339,6 +377,9 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     extensionPaths: message.extensionPaths ?? [],
     tools: message.tools ?? [],
     sandbox: message.sandbox ?? null,
+    userSkillPaths: message.userSkillPaths ?? [],
+    serverBrowse: null,
+    settingsApply: null,
     versions: message.versions ?? null,
   };
 }
@@ -434,6 +475,24 @@ function reduce(state: AgentState, action: Action): AgentState {
     };
   }
   if (action.type === "git_file_diff_cleared") return { ...state, gitFileDiff: null };
+  if (action.type === "server_browse_started") {
+    return {
+      ...state,
+      serverBrowse: {
+        status: "loading",
+        // The directory *on screen*, which is still the previous one until the
+        // answer lands — path, parent and entries move together or not at all.
+        // Moving the path early would put one directory's name over another's
+        // contents, and leave a refused path selectable when the answer is an error.
+        path: state.serverBrowse?.path ?? action.path,
+        parent: state.serverBrowse?.parent ?? null,
+        entries: state.serverBrowse?.entries ?? [],
+        requestId: action.requestId,
+      },
+    };
+  }
+  if (action.type === "server_browse_closed") return { ...state, serverBrowse: null };
+  if (action.type === "settings_apply_started") return { ...state, settingsApply: { status: "applying" } };
 
   const message = action.message;
   switch (message.type) {
@@ -582,7 +641,44 @@ function reduce(state: AgentState, action: Action): AgentState {
         errors: message.errorMessage ? [...state.errors, message.errorMessage] : state.errors,
       };
     case "error":
-      return { ...state, errors: [...state.errors, message.message] };
+      return {
+        ...state,
+        errors: [...state.errors, message.message],
+        // An apply is a modal wait on one answer, and the server answers a refused
+        // one with exactly this. Attributing the first error that lands during the
+        // wait keeps the menu open on the message that explains the refusal.
+        settingsApply: state.settingsApply?.status === "applying" ? { status: "error", message: message.message } : state.settingsApply,
+      };
+    case "server_directory":
+      if (state.serverBrowse?.requestId !== message.requestId) return state;
+      return {
+        ...state,
+        serverBrowse: {
+          status: "loaded",
+          path: message.path,
+          parent: message.parent,
+          entries: message.entries,
+          requestId: message.requestId,
+        },
+      };
+    case "server_directory_error":
+      if (state.serverBrowse?.requestId !== message.requestId) return state;
+      return {
+        ...state,
+        /**
+         * The directory that was on screen stays *whole* — path and entries both.
+         * Keeping the entries while moving `path` to the one that failed was worse
+         * than either: the picker then showed one directory's contents under
+         * another's name, and "Use this directory" would have selected the path the
+         * server had just refused to read. The refusal is in `error`, which is
+         * where it names the path.
+         */
+        serverBrowse: {
+          ...state.serverBrowse,
+          status: "error",
+          error: message.message,
+        },
+      };
     case "directory_listing":
       if (message.requestId.startsWith("dir:") && state.directoryRequests[message.path] !== message.requestId) {
         return state;
@@ -1227,8 +1323,23 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     /** Onboarding: declare an OpenAI-compatible endpoint (corporate gateway, vLLM, Ollama…). */
     declareProvider: (declaration: { provider: string; baseUrl: string; apiKey: string; models: string[]; compat?: ProviderCompat }) =>
       sendMessage({ type: "declare_provider", ...declaration }),
-    /** Update sandbox config at runtime. */
-    updateConfig: (sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }) =>
-      sendMessage({ type: "update_config", sandbox }),
+    /** List the directories under one server-side path, for a Settings path field. */
+    browseServerDirectory: (path: string) => {
+      const requestId = `serverdir:${crypto.randomUUID()}`;
+      dispatch({ type: "server_browse_started", path, requestId });
+      sendMessage({ type: "browse_server_directory", path, requestId });
+    },
+    closeServerBrowser: () => dispatch({ type: "server_browse_closed" }),
+    /**
+     * Apply the editable runtime settings. The server persists them before it
+     * acknowledges, so `settingsApply` clears only once they are on disk.
+     */
+    updateConfig: (update: {
+      sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
+      userSkillPaths?: string[];
+    }) => {
+      dispatch({ type: "settings_apply_started" });
+      sendMessage({ type: "update_config", ...update });
+    },
   };
 }
