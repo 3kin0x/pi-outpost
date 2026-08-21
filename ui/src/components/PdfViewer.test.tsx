@@ -75,6 +75,19 @@ describe("PdfViewer", () => {
     expect((init as RequestInit).headers).toEqual({ Authorization: "Bearer secret-token" });
   });
 
+  it("refetches changed bytes even when the workspace path stays the same", async () => {
+    serverReturnsPdf();
+    const { rerender } = render(<PdfViewer path="report.pdf" revision={1} />);
+    await screen.findByText("Page 1 / 3");
+
+    rerender(<PdfViewer path="report.pdf" revision={2} />);
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    const urls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url));
+    expect(urls[0]).toContain("v=1");
+    expect(urls[1]).toContain("v=2");
+  });
+
   it("moves between pages, and stops at the ends", async () => {
     serverReturnsPdf(2);
     render(<PdfViewer path="report.pdf" />);

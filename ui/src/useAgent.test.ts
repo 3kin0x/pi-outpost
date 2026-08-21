@@ -1151,6 +1151,67 @@ describe("the file browser", () => {
     expect(result.current.state.fileTree["src"]).toHaveLength(1);
   });
 
+  it("ignores an older directory listing that arrives after its replacement", async () => {
+    const result = await connected();
+
+    act(() => result.current.listDirectory("docs"));
+    const olderRequestId = lastRequestId();
+    act(() => result.current.listDirectory("docs"));
+    const newerRequestId = lastRequestId();
+
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: newerRequestId,
+        path: "docs",
+        entries: [{ name: "new.txt", type: "file" }],
+      }),
+    );
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: olderRequestId,
+        path: "docs",
+        entries: [{ name: "stale.txt", type: "file" }],
+      }),
+    );
+
+    expect(result.current.state.fileTree["docs"]).toEqual([{ name: "new.txt", type: "file" }]);
+  });
+
+  it("ignores an old directory listing after the session root is replaced", async () => {
+    const result = await connected();
+    act(() => result.current.listDirectory("docs"));
+    const oldRequestId = lastRequestId();
+
+    act(() =>
+      mockWs!.receive({
+        type: "session_replaced",
+        sessionId: "sess_2",
+        branding: {},
+        model: "",
+        thinkingLevel: "off",
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        contextUsage: null,
+        gitAvailable: false,
+      }),
+    );
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: oldRequestId,
+        path: "docs",
+        entries: [{ name: "old-root.txt", type: "file" }],
+      }),
+    );
+
+    expect(result.current.state.sessionId).toBe("sess_2");
+    expect(result.current.state.fileTree["docs"]).toBeUndefined();
+  });
+
   it("refuses to submit a save while disconnected, since nothing would answer it", async () => {
     const result = await connected();
     act(() => mockWs!.receive({ type: "file_content", requestId: "x", path: "a.ts", content: "a", size: 1, mtimeMs: 1 }));
@@ -1469,6 +1530,25 @@ describe("directory_changed", () => {
     act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
 
     expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "read_file", path: "docs/note.md" }));
+  });
+
+  it("invalidates a raw PDF preview when its directory changed", async () => {
+    const result = await connected();
+    act(() => result.current.readFile("docs/report.pdf"));
+    act(() =>
+      mockWs!.receive({
+        type: "file_browser_error",
+        requestId: lastRequestId(),
+        path: "docs/report.pdf",
+        message: "Binary file — preview not supported",
+      }),
+    );
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("error"));
+    const before = result.current.state.previewRevision;
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
+
+    expect(result.current.state.previewRevision).toBe(before + 1);
   });
 
   it("leaves a preview alone when some other directory changed", async () => {

@@ -68,6 +68,17 @@ describe("FileViewer", () => {
       expect(screen.getByText("Binary file — preview not supported")).toBeInTheDocument();
     });
 
+    it("cache-busts an image when its raw preview revision changes", () => {
+      const file: OpenFile = { status: "error", path: "plot.png", message: "Binary file — preview not supported" };
+      const { rerenderWith } = setup({ file, rawRevision: 1 });
+      const first = screen.getByRole("img").getAttribute("src");
+
+      rerenderWith({ file, rawRevision: 2 });
+
+      expect(screen.getByRole("img")).toHaveAttribute("src", expect.stringContaining("v=2"));
+      expect(screen.getByRole("img").getAttribute("src")).not.toBe(first);
+    });
+
     it("offers a source toggle for markdown only", () => {
       const { rerenderWith } = setup({ file: loaded({ path: "notes.md", content: "# Title\n" }) });
       expect(button(/source/)).toBeInTheDocument();

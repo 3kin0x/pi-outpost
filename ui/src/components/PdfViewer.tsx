@@ -69,9 +69,9 @@ function failureMessage(failure: PdfFailure): string {
 }
 
 /** Fetch the bytes, turning the server's refusals into the viewer's failure states. */
-async function fetchPdfBytes(serverUrl: string, path: string, token: string | null): Promise<Uint8Array> {
+async function fetchPdfBytes(serverUrl: string, path: string, token: string | null, revision: number): Promise<Uint8Array> {
   // fetch can carry a header, unlike <img> — the token stays out of the URL here.
-  const response = await fetch(rawFileUrl(serverUrl, path, null), {
+  const response = await fetch(rawFileUrl(serverUrl, path, null, revision), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {
@@ -253,11 +253,14 @@ export function PdfViewer({
   path,
   serverUrl = "",
   token = null,
+  revision = 0,
   onLoaded,
 }: {
   path: string;
   serverUrl?: string;
   token?: string | null;
+  /** Cache-buster incremented when the file changes without changing path. */
+  revision?: number;
   /** Called once the document opened — a PDF that never displayed is not attachable. */
   onLoaded?: (path: string) => void;
 }) {
@@ -281,7 +284,7 @@ export function PdfViewer({
 
     (async () => {
       try {
-        const bytes = await fetchPdfBytes(serverUrl, path, token);
+        const bytes = await fetchPdfBytes(serverUrl, path, token, revision);
         const { doc: document, task } = await openDocument(bytes);
         loading = task;
         if (cancelled) {
@@ -314,7 +317,7 @@ export function PdfViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onLoaded is a
     // notification, not an input: a caller passing a fresh closure each render
     // must not refetch the document.
-  }, [path, serverUrl, token]);
+  }, [path, serverUrl, token, revision]);
 
   const pageCount = doc?.numPages ?? 0;
 

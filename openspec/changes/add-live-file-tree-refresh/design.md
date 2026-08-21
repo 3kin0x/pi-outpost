@@ -133,6 +133,20 @@ to preserve.
 Worth stating because the unit tests passed. They asserted what was sent, which was right, and
 the defect was in what remained on screen — the class of thing only the running app reports.
 
+### D9 — Raw previews reload by revision, not by path
+
+Images and PDFs do not use `read_file`: they load `/files/raw`, and a PDF's loading effect is keyed
+by path. A directory notification therefore increments a primitive preview revision which is
+included in the raw URL. The changed URL both reruns the PDF effect and bypasses browser caches;
+text previews keep using their request-correlated `read_file` path.
+
+### D10 — Directory listings are latest-request-wins
+
+Watcher refreshes can overlap on a busy directory. Each requested listing is recorded per path,
+and a `dir:` response is accepted only when its request id is still the latest for that path.
+Without this ordering, a slow response to an older event can overwrite a newer authoritative
+listing and leave the tree stale until another event happens.
+
 ## Risks / Trade-offs
 
 - **A busy watched directory costs one listing per window.** Bounded by D4 and by the fact that

@@ -38,3 +38,6 @@
 - [x] 6.4 A scenario-to-test matrix, classifying every scenario covered/partial/uncovered.
 - [x] 6.5 Drive the running app: change a file from outside the process, watch the tree update untouched; then exercise the refresh control (CLAUDE.md's running-app rule). *Found the defect in design D8: refreshing collapsed every expanded branch while the wire traffic looked correct. Fixed, and pinned by a regression test that fails on the old code.*
 - [x] 6.6 Full `server` and `ui` suites green. *`ui` 56 files / 1182 tests pass. `server` 1241 pass, 1 fail — `credentials.test.mjs` "an unconfigured server reports no usable model", which fails identically on a clean tree here (it wants a reachable model catalog) and is unrelated to this change.*
+- [x] 6.7 Make watcher verification portable across canonical temp paths and platform-specific `fs.watch` timing/parent notifications.
+- [x] 6.8 Prove changed image/PDF previews refetch raw bytes at an unchanged workspace path.
+- [x] 6.9 Prove overlapping directory listings are latest-request-wins.

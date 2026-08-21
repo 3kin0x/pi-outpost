@@ -48,6 +48,8 @@ interface FileViewerProps {
   onImageLoad: (path: string) => void;
   /** Confirms that a PDF actually rendered before it becomes a chat attachment. */
   onPdfLoad?: (path: string) => void;
+  /** Changes when raw bytes at the same workspace path must be fetched again. */
+  rawRevision?: number;
 }
 
 function isMarkdown(path: string): boolean {
@@ -92,6 +94,7 @@ export function FileViewer({
   token = null,
   onImageLoad,
   onPdfLoad,
+  rawRevision = 0,
 }: FileViewerProps) {
   const [showRaw, setShowRaw] = useState(false);
   const [showGitDiff, setShowGitDiff] = useState(initialShowGitDiff);
@@ -330,6 +333,7 @@ export function FileViewer({
                 path={file.path}
                 serverUrl={serverUrl}
                 token={token}
+                revision={rawRevision}
                 {...(onPdfLoad ? { onLoaded: onPdfLoad } : {})}
               />
             </Suspense>
@@ -338,7 +342,7 @@ export function FileViewer({
         {image && edit === null && !showGitDiff && (
           <div className="flex h-full items-center justify-center p-4">
             <img
-              src={rawFileUrl(serverUrl, file.path, token)}
+              src={rawFileUrl(serverUrl, file.path, token, rawRevision)}
               alt={file.path}
               onLoad={() => onImageLoad(file.path)}
               className="max-h-full max-w-full rounded object-contain"
