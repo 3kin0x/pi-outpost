@@ -14,12 +14,16 @@ import { describe, test } from "node:test";
 import { listServerDirectories, normalizeServerPath, ServerDirectoryError } from "../src/serverDirectories.ts";
 
 /**
- * The top of the tree, spelled the way this platform spells it: "/" on POSIX, and
- * the current drive's root ("C:\\") on Windows, which is what `path.resolve` on an
- * absolute path yields there. The browser has no drive switcher — a deployment
- * serves one filesystem, and the paths it points settings at are on it.
+ * The top of the tree above a given path, spelled the way this platform spells it:
+ * "/" on POSIX, and that path's drive root ("C:\\") on Windows.
+ *
+ * Per-path, not one constant, because on Windows there is more than one root and
+ * they do not connect: the CI runner keeps the checkout on `D:` and the temp
+ * directory on `C:`, so a walk down from one can never reach the other. The
+ * browser inherits that — it resolves an absolute path the way the platform does,
+ * which honours an explicit `C:\…` but offers no drive switcher when walking.
  */
-const FS_ROOT = path.parse(process.cwd()).root;
+const rootOf = (somePath: string) => path.parse(somePath).root;
 
 async function tree(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "pi-outpost-dirs-"));
@@ -33,14 +37,16 @@ describe("listServerDirectories", () => {
   test("walks from the filesystem root down to a mounted directory", async () => {
     const root = await tree();
     try {
-      const top = await listServerDirectories(FS_ROOT);
-      assert.equal(top.path, FS_ROOT);
+      // The root of the filesystem this fixture is on — the only one a walk can reach.
+      const fsRoot = rootOf(root);
+      const top = await listServerDirectories(fsRoot);
+      assert.equal(top.path, fsRoot);
       assert.equal(top.parent, null, "the root has nowhere to go back to");
       assert.ok(top.entries.length > 0);
 
       // Every step down is reachable, including the parts outside any workspace.
-      let current = FS_ROOT;
-      for (const segment of path.relative(FS_ROOT, path.join(root, "mnt")).split(path.sep)) {
+      let current = fsRoot;
+      for (const segment of path.relative(fsRoot, path.join(root, "mnt")).split(path.sep)) {
         const listing = await listServerDirectories(current);
         const next = listing.entries.find((entry) => entry.name === segment);
         assert.ok(next, `"${segment}" must be listed under ${current}`);
@@ -141,17 +147,20 @@ describe("listServerDirectories", () => {
 
 describe("normalizeServerPath", () => {
   test("an empty request is the filesystem root", () => {
-    assert.equal(normalizeServerPath(""), FS_ROOT);
-    assert.equal(normalizeServerPath("   "), FS_ROOT);
+    const fsRoot = rootOf(process.cwd());
+    assert.equal(normalizeServerPath(""), fsRoot);
+    assert.equal(normalizeServerPath("   "), fsRoot);
   });
 
   test("a relative path is anchored at the root, not at the server's cwd", () => {
-    assert.equal(normalizeServerPath("etc"), path.join(FS_ROOT, "etc"));
+    const fsRoot = rootOf(process.cwd());
+    assert.equal(normalizeServerPath("etc"), path.join(fsRoot, "etc"));
     // Climbing above the root lands on the root, never in the process's cwd.
-    assert.equal(normalizeServerPath("../../etc"), path.join(FS_ROOT, "etc"));
+    assert.equal(normalizeServerPath("../../etc"), path.join(fsRoot, "etc"));
   });
 
   test("collapses traversal inside an absolute path", () => {
-    assert.equal(normalizeServerPath(path.join(FS_ROOT, "usr", "local", "..", "share")), path.join(FS_ROOT, "usr", "share"));
+    const fsRoot = rootOf(process.cwd());
+    assert.equal(normalizeServerPath(path.join(fsRoot, "usr", "local", "..", "share")), path.join(fsRoot, "usr", "share"));
   });
 });

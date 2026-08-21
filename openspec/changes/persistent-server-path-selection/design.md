@@ -36,6 +36,13 @@ The settings menu shows the user's list alone, under "User skill paths". The fil
 
 The UI will list built-in skills from the runtime inventory. It will never write built-ins into any skill-path list or offer their removal.
 
+### One filesystem, not one host
+
+Exploration starts at the filesystem root and walks down. On Windows that root is a
+drive's, and drives do not connect: a server started on `D:` walks `D:` only, even
+though an explicit `C:\…` still resolves. A drive picker is deliberately out of
+scope — a deployment serves the filesystem its resources are on.
+
 ## Risks / Trade-offs
 
 - [An unrestricted explorer exposes readable host topology] → retain the existing WebSocket authentication boundary and return directory names only; operators accept this visibility for authenticated clients.
