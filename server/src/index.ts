@@ -93,6 +93,7 @@ import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
 import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
+import { createDirectoryWatcher, type DirectoryWatcher } from "./fileWatcher.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
 import {
   firstExchange,
@@ -251,6 +252,22 @@ let sandboxedTools = config.sandbox
 let BROWSER_ROOT = await resolveBrowserRoot(config);
 let WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
 let GIT = await probeGit(BROWSER_ROOT);
+
+/**
+ * Watches the directories the browser has listed, so the tree follows the disk
+ * whoever changed it — this process, the agent through bash, or nothing here at
+ * all. Rebuilt when the sandbox root moves: a watch is a handle on a path under
+ * the *old* root, and the client drops its cached tree on a session replace for
+ * the same reason.
+ */
+function buildFileWatcher(): DirectoryWatcher | undefined {
+  if (!config.files.watch) return undefined;
+  return createDirectoryWatcher({
+    root: BROWSER_ROOT,
+    onChange: (relPath) => broadcast({ type: "directory_changed", path: relPath }),
+  });
+}
+let fileWatcher = buildFileWatcher();
 
 // --- HTTP server ---------------------------------------------------------------
 //
@@ -1296,6 +1313,9 @@ async function handleUpdateConfig(
     BROWSER_ROOT = await resolveBrowserRoot(config);
     WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
     GIT = await probeGit(BROWSER_ROOT);
+    // Every watched path was relative to the root that just moved.
+    fileWatcher?.close();
+    fileWatcher = buildFileWatcher();
     sandboxedTools = config.sandbox ? await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes) : undefined;
     // Replace the current session so the new runtime picks up the updated tools
     await rebuildTools.call(runtime);
@@ -1772,6 +1792,10 @@ async function handleListDirectory(socket: WebSocket, dirPath: string, requestId
   try {
     const entries = await listDirectory(BROWSER_ROOT, dirPath);
     send(socket, { type: "directory_listing", requestId, path: dirPath, entries });
+    // After the listing, not before: a directory the client was refused is one it
+    // is not showing, and watching it would announce changes nobody can act on.
+    // Registering here also makes "watched" mean exactly "displayed somewhere".
+    void fileWatcher?.watch(dirPath);
   } catch (error) {
     const message = error instanceof FileBrowserError ? error.message : `Unexpected error: ${(error as Error).message}`;
     send(socket, { type: "file_browser_error", requestId, path: dirPath, message });

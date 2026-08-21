@@ -642,3 +642,31 @@ describe("creating", () => {
     expect(screen.queryByRole("textbox", { name: /New file or folder in src/ })).toBeNull();
   });
 });
+
+describe("refreshing", () => {
+  it("offers a refresh control when one is wired", () => {
+    const onRefresh = vi.fn();
+    setup({ onRefresh });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh the file tree" }));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers it on a read-only tree too", () => {
+    // The safety net cannot be conditional on anything the user would have to
+    // diagnose first: a watcher that reports nothing looks exactly like a
+    // workspace that did not change, and a read-only workspace still moves
+    // underneath you.
+    setup({ onRefresh: vi.fn(), writableRoot: null, onCreateFile: vi.fn() });
+
+    expect(screen.getByRole("button", { name: "Refresh the file tree" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /New file or folder in the workspace root/ })).toBeNull();
+  });
+
+  it("offers none when no refresh callback is supplied", () => {
+    setup();
+
+    expect(screen.queryByRole("button", { name: "Refresh the file tree" })).toBeNull();
+  });
+});

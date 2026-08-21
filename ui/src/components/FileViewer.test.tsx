@@ -372,3 +372,27 @@ describe("FileViewer", () => {
     });
   });
 });
+
+describe("a file that moved underneath the viewer", () => {
+  it("keeps an unsaved draft when the file is re-read from disk", () => {
+    // Directory watching re-reads the open file whenever its directory changes,
+    // which can land mid-edit. The draft is the user's; verified here rather than
+    // assumed, because "the buffer is local state so it must be safe" is exactly
+    // the kind of reasoning that ships a data-loss bug.
+    const { rerenderWith } = setup();
+    edit("my unsaved work\n");
+
+    rerenderWith({ file: loaded({ content: "changed by someone else\n", mtimeMs: 2000 }) });
+
+    expect(screen.getByRole("textbox")).toHaveValue("my unsaved work\n");
+  });
+
+  it("says so, rather than silently resolving it, once the bytes have moved", () => {
+    const { rerenderWith } = setup();
+    edit("my unsaved work\n");
+
+    rerenderWith({ file: loaded({ content: "changed by someone else\n", mtimeMs: 2000 }) });
+
+    expect(screen.getByText(/changed on disk/i)).toBeInTheDocument();
+  });
+});

@@ -83,6 +83,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     respondToDialog,
     dismissNotification,
     listDirectory,
+    refreshFileTree,
     readFile,
     writeFile,
     createFile,
@@ -425,6 +426,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             gitFiles={state.gitStatus?.files}
             attachedPaths={attachedPaths}
             onExpand={listDirectory}
+            onRefresh={refreshFileTree}
             onSelectFile={(path) => {
               setDiffOnOpen(false);
               readFile(path);

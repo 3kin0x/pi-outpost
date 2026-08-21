@@ -7,6 +7,9 @@
     "writableRoot": "./workspace/scratch",
     "allowBash": false
   },
+  "files": {
+    "watch": true
+  },
   "pdf": {
     "maxBytes": 26214400
   },

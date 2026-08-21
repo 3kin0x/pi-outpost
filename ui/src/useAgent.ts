@@ -117,6 +117,12 @@ export interface GitFileDiffState {
   requestId: string;
 }
 
+/** The directory a browser-root-relative path sits in; "" for a path at the root. */
+function parentDirectory(path: string): string {
+  const lastSlash = path.lastIndexOf("/");
+  return lastSlash < 0 ? "" : path.slice(0, lastSlash);
+}
+
 /** Two revision pairs are the same request when both sides match, side for side. */
 function samePair(a: { base: GitRevision; target: GitRevision }, b: { base: GitRevision; target: GitRevision }): boolean {
   return a.base.rev === b.base.rev && a.base.path === b.base.path && a.target.rev === b.target.rev && a.target.path === b.target.path;
@@ -824,6 +830,41 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     }
   }, [refreshGitStatus]);
 
+  /**
+   * Re-list a directory — but only one the tree is actually holding.
+   *
+   * The server watches every directory that was ever listed, including ones the
+   * user has since collapsed. A directory nothing displays has nothing to
+   * refresh, so this is where that is decided rather than on the wire.
+   */
+  const relistDirectory = useCallback(
+    (path: string) => {
+      const held = fileTreeRef.current[path];
+      if (held === undefined) return;
+      // Only announce loading when there is nothing to keep showing. Blanking a
+      // directory that already has entries unmounts its rows, and a row's
+      // expanded state is the row's own — so re-listing the root would silently
+      // collapse every branch under it and throw away where the user was. The
+      // old entries stay on screen until the new ones land; the listing replaces
+      // them wholesale either way.
+      if (!Array.isArray(held) && held !== "loading") dispatch({ type: "dir_list_started", path });
+      sendMessage({ type: "list_directory", path, requestId: `dir:${crypto.randomUUID()}` });
+    },
+    [sendMessage],
+  );
+
+  /**
+   * Re-list everything the tree is holding, in one action.
+   *
+   * The manual counterpart to directory watching, and deliberately not
+   * conditional on it: `fs.watch` is best-effort by contract, and a filesystem
+   * that emits no events — a network mount, a spent inotify budget, watching
+   * turned off — is indistinguishable from a workspace that did not change.
+   */
+  const refreshFileTree = useCallback(() => {
+    for (const path of Object.keys(fileTreeRef.current)) relistDirectory(path);
+  }, [relistDirectory]);
+
   // Branding is pure config (no session dependency) and served as soon as the process
   // starts — fetch it directly instead of waiting on the WS "hello", which only arrives
   // once the (slower) AgentSession runtime is ready.
@@ -879,16 +920,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           return;
         }
         if (message.type === "file_changed") {
-          const lastSlash = message.path.lastIndexOf("/");
-          const parentPath = lastSlash < 0 ? "" : message.path.slice(0, lastSlash);
-          console.log("[file_changed] path=", message.path, "parentPath=", parentPath, "fileTree keys=", Object.keys(fileTreeRef.current).join(","));
-          if (fileTreeRef.current[parentPath] !== undefined) {
-            console.log("[file_changed] parent found in fileTree, refreshing");
-            dispatch({ type: "dir_list_started", path: parentPath });
-            sendMessage({ type: "list_directory", path: parentPath, requestId: `dir:${crypto.randomUUID()}` });
-          } else {
-            console.log("[file_changed] parent NOT in fileTree, skipping refresh");
-          }
+          relistDirectory(parentDirectory(message.path));
           const openFile = openFileRef.current;
           if (openFile?.status === "loaded" && openFile.path === message.path) {
             const requestId = `file:${crypto.randomUUID()}`;
@@ -898,6 +930,25 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           // An open "± diff" pane for this file would silently go stale otherwise
           if (gitDiffPathRef.current === message.path) {
             sendMessage({ type: "git_diff", path: message.path, requestId: `gitdiff:${crypto.randomUUID()}` });
+          }
+          refreshGitStatus();
+          return;
+        }
+        if (message.type === "directory_changed") {
+          relistDirectory(message.path);
+          // The watcher reports the directory, not the entry, so anything living
+          // in it may be what moved. Re-reading the open file is one read and
+          // cannot lose work: the editor's draft is its own state, and a file
+          // that changed underneath an edit already surfaces as a save conflict.
+          const openFile = openFileRef.current;
+          if (openFile?.status === "loaded" && parentDirectory(openFile.path) === message.path) {
+            const requestId = `file:${crypto.randomUUID()}`;
+            dispatch({ type: "file_read_started", path: openFile.path, requestId });
+            sendMessage({ type: "read_file", path: openFile.path, requestId });
+          }
+          const gitDiffPath = gitDiffPathRef.current;
+          if (gitDiffPath !== null && parentDirectory(gitDiffPath) === message.path) {
+            sendMessage({ type: "git_diff", path: gitDiffPath, requestId: `gitdiff:${crypto.randomUUID()}` });
           }
           refreshGitStatus();
           return;
@@ -963,7 +1014,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       socketRef.current = null;
       socket?.close();
     };
-  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, authNonce]);
+  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, relistDirectory, authNonce]);
 
   return {
     state,
@@ -1012,6 +1063,8 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       dispatch({ type: "dir_list_started", path });
       sendMessage({ type: "list_directory", path, requestId: `dir:${crypto.randomUUID()}` });
     },
+    /** Re-list every directory the tree is holding (the tree's manual refresh). */
+    refreshFileTree,
     /** Open a file's read-only preview. */
     readFile: (path: string) => {
       const requestId = `file:${crypto.randomUUID()}`;
