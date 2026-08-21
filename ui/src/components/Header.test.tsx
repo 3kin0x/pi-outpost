@@ -24,6 +24,8 @@ type Props = React.ComponentProps<typeof Header>;
 function setup(overrides: Partial<Props> = {}) {
   const handlers = {
     onUpdateConfig: vi.fn(),
+    onBrowseServerPath: vi.fn(),
+    onCloseServerBrowser: vi.fn(),
     onToggleSidebar: vi.fn(),
     onToggleHideTools: vi.fn(),
     onToggleTheme: vi.fn(),
@@ -57,6 +59,9 @@ function setup(overrides: Partial<Props> = {}) {
     gitLog: null,
     extensionPaths: [],
     sandbox: null,
+    userSkillPaths: [],
+    serverBrowse: null,
+    settingsApply: null,
     ...handlers,
     ...overrides,
   };

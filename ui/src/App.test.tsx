@@ -57,6 +57,9 @@ function agentState(overrides: Record<string, unknown> = {}) {
     fileSearch: null,
     extensionPaths: [],
     sandbox: null,
+    userSkillPaths: [],
+    serverBrowse: null,
+    settingsApply: null,
     versions: null,
     gitAvailable: false,
     gitStatus: null,
@@ -112,6 +115,8 @@ function agentApi(state: ReturnType<typeof agentState>) {
     setCredential: vi.fn(),
     declareProvider: vi.fn(),
     updateConfig: vi.fn(),
+    browseServerDirectory: vi.fn(),
+    closeServerBrowser: vi.fn(),
   };
 }
 
