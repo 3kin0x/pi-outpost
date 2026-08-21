@@ -1875,11 +1875,19 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
 async function handleListDirectory(socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
   try {
     const entries = await listDirectory(BROWSER_ROOT, dirPath);
+    // After a *successful* listing, so "watched" still means exactly "displayed
+    // somewhere" — a directory the client was refused is one it is not showing, and
+    // watching it would announce changes nobody can act on.
+    //
+    // But before the reply, and awaited. The client treats the listing as the moment
+    // the directory became watched; arming afterwards left a window — one realpath
+    // wide, and wider on a loaded host — in which a change made right after opening a
+    // folder was never announced at all. That gap is invisible until it isn't: it is
+    // what made the watcher tests time out on CI while passing on every developer's
+    // machine. Watching stays best-effort, so a failure to arm never turns a good
+    // listing into an error.
+    await fileWatcher?.watch(dirPath).catch(() => {});
     send(socket, { type: "directory_listing", requestId, path: dirPath, entries });
-    // After the listing, not before: a directory the client was refused is one it
-    // is not showing, and watching it would announce changes nobody can act on.
-    // Registering here also makes "watched" mean exactly "displayed somewhere".
-    void fileWatcher?.watch(dirPath);
   } catch (error) {
     const message = error instanceof FileBrowserError ? error.message : `Unexpected error: ${(error as Error).message}`;
     send(socket, { type: "file_browser_error", requestId, path: dirPath, message });
