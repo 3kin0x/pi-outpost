@@ -40,6 +40,32 @@ export function naturalWidth(svg: string): number | undefined {
   return Number.isFinite(width) && width > 0 ? width : undefined;
 }
 
+function mermaidCode(children: React.ReactNode): string | null {
+  if (
+    children !== null &&
+    typeof children === "object" &&
+    "props" in children &&
+    typeof (children.props as { className?: string }).className === "string" &&
+    /language-mermaid\b/.test((children.props as { className: string }).className)
+  ) {
+    return String((children.props as { children?: React.ReactNode }).children ?? "").trim();
+  }
+  return null;
+}
+
+/**
+ * A `ReactMarkdown` `pre` renderer: routes ```mermaid fences to `Mermaid`, keeps
+ * everything else as plain `<pre>`. Shared by every markdown surface (chat
+ * messages, the file-viewer's `.md` preview) so a diagram fence renders the same
+ * way wherever it appears, rather than each surface reimplementing the routing.
+ */
+export function MarkdownPre(props: React.HTMLAttributes<HTMLPreElement>) {
+  const { children, ...rest } = props;
+  const code = mermaidCode(children);
+  if (code !== null) return <Mermaid code={code} />;
+  return <pre {...rest}>{children}</pre>;
+}
+
 export function Mermaid({ code }: { code: string }) {
   const id = useId().replace(/[^a-zA-Z0-9]/g, "");
   const theme = useThemeContext();

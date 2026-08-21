@@ -7,7 +7,7 @@ import type { ChatItem } from "@pi-outpost/shared";
 import { normalizeMathDelimiters } from "../util/markdownMath";
 import { isExternalRef, rawFileUrl, resolveRelativeHref } from "../util/workspacePath";
 import { CopyButton } from "./CopyButton";
-import { Mermaid } from "./Mermaid";
+import { MarkdownPre } from "./Mermaid";
 
 type AssistantItem = Extract<ChatItem, { kind: "assistant" }>;
 
@@ -40,27 +40,6 @@ function ThinkingBlock({ text }: { text: string }) {
       )}
     </div>
   );
-}
-
-function mermaidCode(children: React.ReactNode): string | null {
-  if (
-    children !== null &&
-    typeof children === "object" &&
-    "props" in children &&
-    typeof (children.props as { className?: string }).className === "string" &&
-    /language-mermaid\b/.test((children.props as { className: string }).className)
-  ) {
-    return String((children.props as { children?: React.ReactNode }).children ?? "").trim();
-  }
-  return null;
-}
-
-/** Route ```mermaid fences to the Mermaid renderer, keep other code in <pre>. */
-function PreBlock(props: React.HTMLAttributes<HTMLPreElement>) {
-  const { children, ...rest } = props;
-  const code = mermaidCode(children);
-  if (code !== null) return <Mermaid code={code} />;
-  return <pre {...rest}>{children}</pre>;
 }
 
 export function AssistantMessage({ item, serverUrl = "", token = null, onOpenFile }: AssistantMessageProps) {
@@ -111,7 +90,7 @@ export function AssistantMessage({ item, serverUrl = "", token = null, onOpenFil
       );
     }
 
-    return { pre: PreBlock, img: MarkdownImg, a: MarkdownLink };
+    return { pre: MarkdownPre, img: MarkdownImg, a: MarkdownLink };
   }, [serverUrl, token]);
 
   return (

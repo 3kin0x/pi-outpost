@@ -11,6 +11,7 @@ import { SplitDiffBlock } from "./DiffBlocks";
 import { diffLines } from "../util/diff";
 import { isImageFile, isPdfFile, rawFileUrl, resolveRelativeHref } from "../util/workspacePath";
 import { normalizeMathDelimiters } from "../util/markdownMath";
+import { MarkdownPre } from "./Mermaid";
 import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 
 // pdf.js is over a megabyte: a session that never opens a PDF must not load it.
@@ -373,6 +374,9 @@ export function FileViewer({
               remarkPlugins={[remarkGfm, remarkMath]}
               rehypePlugins={[rehypeKatex]}
               components={{
+                // Same routing AssistantMessage uses: a ```mermaid fence renders as a
+                // diagram here too, instead of falling through to plain <pre> text.
+                pre: MarkdownPre,
                 // Relative links point at sibling files, not server routes: open them
                 // in the viewer instead of navigating the page (which 404s)
                 a: ({ href, children, ...rest }) => {
