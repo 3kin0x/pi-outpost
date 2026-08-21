@@ -491,6 +491,21 @@ export function loadPdfjs(): Promise<typeof import("pdfjs-dist/legacy/build/pdf.
   parser ??= (async () => {
     // Before the import: pdf.js reads `DOMMatrix` while the module evaluates.
     ensureDomMatrix();
+    // Node has no Worker to hand pdf.js, so `getDocument()` runs the "fake
+    // worker" path: the same worker code, in-process, instead of a real thread.
+    // Left to find that code itself, pdf.js defaults `workerSrc` to
+    // "./pdf.worker.mjs" and reaches it with a *dynamic* `import()` resolved next
+    // to the installed package — fine with `node_modules` on disk, but there is
+    // no such file "next to" a single-file SEA executable, and Node's SEA loader
+    // only resolves dynamic `import()` to built-in modules. There it fails with
+    // "No such built-in module: ./pdf.worker.mjs" and every extraction dies.
+    //
+    // pdf.js checks `globalThis.pdfjsWorker` before ever taking that dynamic
+    // path (its own documented Node.js pattern), so importing the worker
+    // ourselves — statically, so esbuild bundles it into the same output file —
+    // and publishing it there short-circuits the lookup entirely.
+    const pdfjsWorker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = pdfjsWorker;
     return import("pdfjs-dist/legacy/build/pdf.mjs");
   })().catch((error: unknown) => {
     parser = undefined;

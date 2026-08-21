@@ -83,6 +83,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     respondToDialog,
     dismissNotification,
     listDirectory,
+    refreshFileTree,
     readFile,
     writeFile,
     createFile,
@@ -115,7 +116,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
   const [draftMentions, setDraftMentions] = useState<string[]>([]);
   const [previewAttachmentError, setPreviewAttachmentError] = useState<string | null>(null);
   const [loadedPreviewImagePath, setLoadedPreviewImagePath] = useState<string | null>(null);
-  const [loadedPreviewPdfPath, setLoadedPreviewPdfPath] = useState<string | null>(null);
+  const [loadedPreviewPdf, setLoadedPreviewPdf] = useState<{ path: string; revision: number } | null>(null);
   const [viewerDirty, setViewerDirty] = useState(false);
   const attachmentsRef = useRef<Attachment[]>([]);
   const activePreviewPathRef = useRef<string | null>(null);
@@ -214,20 +215,27 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
       setAttachments((current) => current.filter((attachment) => attachment.source !== "preview"));
       setPreviewAttachmentError(null);
       setLoadedPreviewImagePath(null);
-      setLoadedPreviewPdfPath(null);
+      setLoadedPreviewPdf(null);
     }
     if (dismissedPreviewPathRef.current === path) return;
+
+    // A raw preview revision means the bytes at this path may have changed. Drop
+    // the previous automatic attachment before attempting the replacement so a
+    // failed refresh cannot leave stale image bytes queued for the next prompt.
+    if (isImageFile(path) || isPdfFile(path)) {
+      setAttachments((current) => current.filter((attachment) => attachment.source !== "preview"));
+    }
 
     let cancelled = false;
     async function attachPreview() {
       const result = isImageFile(path)
         ? loadedPreviewImagePath === path
-          ? await imagePreviewToAttachment(path, rawFileUrl(serverUrl, path, authToken))
+          ? await imagePreviewToAttachment(path, rawFileUrl(serverUrl, path, authToken, state.previewRevision))
           : null
           : isPdfFile(path)
           ? // A PDF never reaches "loaded" — the text preview refuses it as binary.
             // Its own viewer says when it displayed, and only then is it attachable.
-            loadedPreviewPdfPath === path
+            loadedPreviewPdf?.path === path && loadedPreviewPdf.revision === state.previewRevision
             ? pdfPreviewToAttachment(path)
             : null
           : toolReadableBinary
@@ -247,7 +255,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     return () => {
       cancelled = true;
     };
-  }, [state.openFile, serverUrl, authToken, loadedPreviewImagePath, loadedPreviewPdfPath]);
+  }, [state.openFile, state.previewRevision, serverUrl, authToken, loadedPreviewImagePath, loadedPreviewPdf]);
 
   function closePreview() {
     activePreviewPathRef.current = null;
@@ -425,6 +433,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             gitFiles={state.gitStatus?.files}
             attachedPaths={attachedPaths}
             onExpand={listDirectory}
+            onRefresh={refreshFileTree}
             onSelectFile={(path) => {
               setDiffOnOpen(false);
               readFile(path);
@@ -512,7 +521,8 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               serverUrl={serverUrl}
               token={authToken}
               onImageLoad={setLoadedPreviewImagePath}
-              onPdfLoad={setLoadedPreviewPdfPath}
+              onPdfLoad={(path) => setLoadedPreviewPdf({ path, revision: state.previewRevision })}
+              rawRevision={state.previewRevision}
             />
           )}
           {state.gitFileHistory && (

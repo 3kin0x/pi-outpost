@@ -48,6 +48,16 @@ interface TreeProps {
   onSelectDiff?: (path: string) => void;
   /** Attach the file to the composer as an `@path` reference, or drop it if already attached. */
   onToggleAttachPath?: (path: string) => void;
+  /**
+   * Re-list every directory the tree is holding.
+   *
+   * Offered whatever the server is doing about watching: `fs.watch` is
+   * best-effort by contract, and a filesystem that reports nothing — a network
+   * mount, a spent inotify budget, watching switched off — looks exactly like a
+   * workspace that did not change. A fallback that only appears once the primary
+   * is known to have failed is one nobody can reach.
+   */
+  onRefresh?: () => void;
   /** Create an empty file at this path. Absent = no creation affordance at all. */
   onCreateFile?: (path: string) => void;
   /** Create one directory at this path. */
@@ -579,15 +589,34 @@ export function FileTree(props: TreeProps) {
           {props.fileOperation.message}
         </p>
       )}
-      {creation && rootWritable && (
-        <button
-          type="button"
-          onClick={() => creation.start("")}
-          aria-label="New file or folder in the workspace root"
-          className="mb-1 rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-400"
-        >
-          + new
-        </button>
+      {((creation && rootWritable) || props.onRefresh) && (
+        <div className="mb-1 flex items-center">
+          {creation && rootWritable && (
+            <button
+              type="button"
+              onClick={() => creation.start("")}
+              aria-label="New file or folder in the workspace root"
+              className="rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-400"
+            >
+              + new
+            </button>
+          )}
+          {props.onRefresh && (
+            <button
+              type="button"
+              onClick={props.onRefresh}
+              title="Refresh the file tree"
+              aria-label="Refresh the file tree"
+              // Not hidden until hover like the row controls: those repeat on every
+              // row and would drown the tree, this one is a single control for the
+              // whole panel — and it is the way out of a tree that has gone stale,
+              // which is not a state you can see before you look for the way out.
+              className="ml-auto rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-400"
+            >
+              ↻
+            </button>
+          )}
+        </div>
       )}
       <DirChildren path="" depth={0} {...props} {...(creation ? { creation } : {})} {...(rename ? { rename } : {})} />
     </div>

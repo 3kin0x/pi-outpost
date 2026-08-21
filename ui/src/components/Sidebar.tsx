@@ -15,6 +15,8 @@ interface SidebarProps {
   /** Paths already referenced by the composer, so the tree can show the toggle as active. */
   attachedPaths?: string[];
   onExpand: (path: string) => void;
+  /** Re-list every directory the tree is holding. */
+  onRefresh?: () => void;
   onSelectFile: (path: string) => void;
   onSelectDiff?: (path: string) => void;
   onToggleAttachPath?: (path: string) => void;
@@ -41,6 +43,7 @@ export function Sidebar({
   gitFiles,
   attachedPaths,
   onExpand,
+  onRefresh,
   onSelectFile,
   onSelectDiff,
   onToggleAttachPath,
@@ -79,6 +82,7 @@ export function Sidebar({
           gitFiles={gitFiles}
           attachedPaths={attachedPaths}
           onExpand={onExpand}
+          onRefresh={onRefresh}
           onSelectFile={onSelectFile}
           onSelectDiff={onSelectDiff}
           onToggleAttachPath={onToggleAttachPath}

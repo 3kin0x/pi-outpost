@@ -110,6 +110,19 @@ export interface PptxConfig {
 /** Default presentation ceiling — 25 MiB, matching the other three. */
 export const DEFAULT_PPTX_MAX_BYTES = 26_214_400;
 
+export interface FilesConfig {
+  /**
+   * Whether the server watches the directories the file browser has listed, so
+   * the tree follows the workspace whoever changed it. Default: true.
+   *
+   * Off is for hosts where a watch is a liability rather than a feature: a
+   * network mount or a container filesystem that emits no events anyway, or one
+   * whose inotify budget is spent elsewhere. Watching is best-effort by
+   * contract, which is why the tree's manual refresh exists either way.
+   */
+  watch: boolean;
+}
+
 export interface PdfConfig {
   /**
    * Largest PDF the raw-file route will serve, in bytes. Default: 25 MiB.
@@ -318,6 +331,8 @@ export interface AppConfig {
    */
   token?: string;
   branding: BrandingConfig;
+  /** File-browser behaviour (directory watching). */
+  files: FilesConfig;
   /** PDF handling (size ceiling for the raw-file route). */
   pdf: PdfConfig;
   /** Word handling (size ceiling for the extraction tool). */
@@ -502,6 +517,7 @@ export function loadConfig(
     host: "127.0.0.1",
     allowedOrigins: [],
     branding: {},
+    files: { watch: true },
     pdf: { maxBytes: DEFAULT_PDF_MAX_BYTES },
     docx: { maxBytes: DEFAULT_DOCX_MAX_BYTES },
     xlsx: { maxBytes: DEFAULT_XLSX_MAX_BYTES },
@@ -682,6 +698,16 @@ export function loadConfig(
     }
     config.allowedOrigins = origins;
     config.token = optionalString(server, "token");
+  }
+
+  if (raw.files !== undefined) {
+    const files = asObject(raw.files, "files");
+    if (files.watch !== undefined) {
+      if (typeof files.watch !== "boolean") {
+        fail(`"files.watch" must be a boolean`);
+      }
+      config.files.watch = files.watch;
+    }
   }
 
   if (raw.pdf !== undefined) {

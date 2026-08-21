@@ -78,7 +78,7 @@ export async function resolveWritableRoot(config: AppConfig, browserRoot: string
 }
 
 /** Resolve a client-supplied relative path against root, rejecting anything that escapes it. */
-async function resolveConfined(root: string, relPath: string): Promise<string> {
+export async function resolveConfined(root: string, relPath: string): Promise<string> {
   const target = path.resolve(root, relPath);
   const resolved = await realResolve(target);
   if (!isWithin(root, resolved)) {

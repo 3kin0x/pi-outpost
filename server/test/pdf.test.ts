@@ -57,6 +57,26 @@ describe("extractPdf", () => {
     assert.equal(await loadPdfjs(), await loadPdfjs());
   });
 
+  test("publishes the fake worker on globalThis instead of leaving pdf.js to import it", async () => {
+    await loadPdfjs();
+
+    // Left alone, pdf.js's "fake worker" setup reaches its own worker code with a
+    // *dynamic* `import("./pdf.worker.mjs")`, resolved next to the installed
+    // package. Bundled into a single-file SEA executable, no such sibling file
+    // exists and Node's SEA loader only resolves dynamic import() to built-in
+    // modules — every extraction then dies with "No such built-in module:
+    // ./pdf.worker.mjs". pdf.js checks `globalThis.pdfjsWorker` first, so
+    // publishing the worker module there ourselves — imported statically, so
+    // esbuild bundles it into the same output file — is what keeps that dynamic
+    // import from ever running. This test is the regression guard for that.
+    const published = (globalThis as { pdfjsWorker?: { WorkerMessageHandler?: unknown } }).pdfjsWorker;
+    assert.ok(published, "expected loadPdfjs() to publish globalThis.pdfjsWorker");
+    assert.ok(published.WorkerMessageHandler, "expected the published module to export WorkerMessageHandler");
+
+    const directWorkerImport = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    assert.equal(published.WorkerMessageHandler, directWorkerImport.WorkerMessageHandler);
+  });
+
   test("returns page-attributed text", async () => {
     const result = await extractPdf(await fixture("pdf-text"));
 

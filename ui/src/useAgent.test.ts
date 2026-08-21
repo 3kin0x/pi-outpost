@@ -1151,6 +1151,67 @@ describe("the file browser", () => {
     expect(result.current.state.fileTree["src"]).toHaveLength(1);
   });
 
+  it("ignores an older directory listing that arrives after its replacement", async () => {
+    const result = await connected();
+
+    act(() => result.current.listDirectory("docs"));
+    const olderRequestId = lastRequestId();
+    act(() => result.current.listDirectory("docs"));
+    const newerRequestId = lastRequestId();
+
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: newerRequestId,
+        path: "docs",
+        entries: [{ name: "new.txt", type: "file" }],
+      }),
+    );
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: olderRequestId,
+        path: "docs",
+        entries: [{ name: "stale.txt", type: "file" }],
+      }),
+    );
+
+    expect(result.current.state.fileTree["docs"]).toEqual([{ name: "new.txt", type: "file" }]);
+  });
+
+  it("ignores an old directory listing after the session root is replaced", async () => {
+    const result = await connected();
+    act(() => result.current.listDirectory("docs"));
+    const oldRequestId = lastRequestId();
+
+    act(() =>
+      mockWs!.receive({
+        type: "session_replaced",
+        sessionId: "sess_2",
+        branding: {},
+        model: "",
+        thinkingLevel: "off",
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        contextUsage: null,
+        gitAvailable: false,
+      }),
+    );
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: oldRequestId,
+        path: "docs",
+        entries: [{ name: "old-root.txt", type: "file" }],
+      }),
+    );
+
+    expect(result.current.state.sessionId).toBe("sess_2");
+    expect(result.current.state.fileTree["docs"]).toBeUndefined();
+  });
+
   it("refuses to submit a save while disconnected, since nothing would answer it", async () => {
     const result = await connected();
     act(() => mockWs!.receive({ type: "file_content", requestId: "x", path: "a.ts", content: "a", size: 1, mtimeMs: 1 }));
@@ -1378,5 +1439,150 @@ describe("commands on the wire", () => {
 
     act(() => result.current.dismissNotification(id));
     await waitFor(() => expect(result.current.state.notifications).toHaveLength(0));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Directory watching: the tree follows the disk, whoever moved it
+// ---------------------------------------------------------------------------
+describe("directory_changed", () => {
+  /** Expand `path` and answer the listing, so the tree is actually holding it. */
+  async function withExpanded(paths: string[]) {
+    const result = await connected();
+    for (const path of paths) {
+      act(() => result.current.listDirectory(path));
+      act(() =>
+        mockWs!.receive({
+          type: "directory_listing",
+          requestId: lastRequestId(),
+          path,
+          entries: [{ name: "existing.txt", type: "file" }],
+        }),
+      );
+    }
+    await waitFor(() => expect(result.current.state.fileTree[paths[paths.length - 1]!]).toBeDefined());
+    return result;
+  }
+
+  const sentSince = (from: number) => mockWs!.sent.slice(from).map((raw) => JSON.parse(raw) as Record<string, unknown>);
+
+  it("re-lists a directory the tree is holding", async () => {
+    const result = await withExpanded(["docs"]);
+    const before = mockWs!.sent.length;
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
+
+    expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "list_directory", path: "docs" }));
+  });
+
+  it("keeps a refreshed directory's entries on screen instead of blanking it", async () => {
+    // Regression, and one only the running app produced: dispatching "loading"
+    // here unmounts the directory's rows, and a row's expanded state is its own —
+    // so re-listing the root collapsed the whole tree and lost the user's place,
+    // while the wire traffic looked perfect. Entries stay until the new ones land.
+    const result = await withExpanded(["", "docs"]);
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "" }));
+    expect(result.current.state.fileTree[""]).toEqual([{ name: "existing.txt", type: "file" }]);
+
+    act(() => result.current.refreshFileTree());
+    expect(result.current.state.fileTree[""]).toEqual([{ name: "existing.txt", type: "file" }]);
+    expect(result.current.state.fileTree["docs"]).toEqual([{ name: "existing.txt", type: "file" }]);
+  });
+
+  it("does show loading when the directory has nothing to keep showing", async () => {
+    const result = await connected();
+    act(() => result.current.listDirectory("docs"));
+    act(() =>
+      mockWs!.receive({ type: "file_browser_error", requestId: lastRequestId(), path: "docs", message: "gone" }),
+    );
+    await waitFor(() => expect(result.current.state.fileTree["docs"]).toHaveProperty("error"));
+
+    // Retrying a directory that errored has no stale rows to preserve, so the
+    // placeholder is the honest thing to show.
+    act(() => result.current.refreshFileTree());
+    expect(result.current.state.fileTree["docs"]).toBe("loading");
+  });
+
+  it("ignores a directory the tree never expanded", async () => {
+    // The server watches every directory ever listed, including ones since
+    // collapsed — and it has no idea what this client is displaying. Deciding
+    // here is what keeps a collapsed branch from costing a round trip.
+    await withExpanded(["docs"]);
+    const before = mockWs!.sent.length;
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "never-opened" }));
+
+    expect(sentSince(before)).not.toContainEqual(expect.objectContaining({ type: "list_directory", path: "never-opened" }));
+  });
+
+  it("re-reads the open preview when its own directory changed", async () => {
+    const result = await connected();
+    act(() => result.current.readFile("docs/note.md"));
+    act(() =>
+      mockWs!.receive({ type: "file_content", requestId: lastRequestId(), path: "docs/note.md", content: "old", size: 3, mtimeMs: 1 }),
+    );
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("loaded"));
+    const before = mockWs!.sent.length;
+
+    // The watcher names the directory, not the entry, so the file the viewer is
+    // showing may well be the thing that moved.
+    act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
+
+    expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "read_file", path: "docs/note.md" }));
+  });
+
+  it("invalidates a raw PDF preview when its directory changed", async () => {
+    const result = await connected();
+    act(() => result.current.readFile("docs/report.pdf"));
+    act(() =>
+      mockWs!.receive({
+        type: "file_browser_error",
+        requestId: lastRequestId(),
+        path: "docs/report.pdf",
+        message: "Binary file — preview not supported",
+      }),
+    );
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("error"));
+    const before = result.current.state.previewRevision;
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
+
+    expect(result.current.state.previewRevision).toBe(before + 1);
+  });
+
+  it("leaves a preview alone when some other directory changed", async () => {
+    const result = await connected();
+    act(() => result.current.readFile("docs/note.md"));
+    act(() =>
+      mockWs!.receive({ type: "file_content", requestId: lastRequestId(), path: "docs/note.md", content: "old", size: 3, mtimeMs: 1 }),
+    );
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("loaded"));
+    const before = mockWs!.sent.length;
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "elsewhere" }));
+
+    expect(sentSince(before)).not.toContainEqual(expect.objectContaining({ type: "read_file" }));
+  });
+
+  it("re-lists every held directory on a manual refresh", async () => {
+    const result = await withExpanded(["", "docs", "docs/deep"]);
+    const before = mockWs!.sent.length;
+
+    act(() => result.current.refreshFileTree());
+
+    const sent = sentSince(before);
+    for (const path of ["", "docs", "docs/deep"]) {
+      expect(sent).toContainEqual(expect.objectContaining({ type: "list_directory", path }));
+    }
+  });
+
+  it("asks for nothing on refresh when the tree holds nothing", async () => {
+    const result = await connected();
+    const before = mockWs!.sent.length;
+
+    act(() => result.current.refreshFileTree());
+
+    expect(sentSince(before)).not.toContainEqual(expect.objectContaining({ type: "list_directory" }));
   });
 });

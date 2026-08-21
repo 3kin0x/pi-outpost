@@ -11,6 +11,7 @@ import { SplitDiffBlock } from "./DiffBlocks";
 import { diffLines } from "../util/diff";
 import { isImageFile, isPdfFile, rawFileUrl, resolveRelativeHref } from "../util/workspacePath";
 import { normalizeMathDelimiters } from "../util/markdownMath";
+import { MarkdownPre } from "./Mermaid";
 import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 
 // pdf.js is over a megabyte: a session that never opens a PDF must not load it.
@@ -47,6 +48,8 @@ interface FileViewerProps {
   onImageLoad: (path: string) => void;
   /** Confirms that a PDF actually rendered before it becomes a chat attachment. */
   onPdfLoad?: (path: string) => void;
+  /** Changes when raw bytes at the same workspace path must be fetched again. */
+  rawRevision?: number;
 }
 
 function isMarkdown(path: string): boolean {
@@ -91,6 +94,7 @@ export function FileViewer({
   token = null,
   onImageLoad,
   onPdfLoad,
+  rawRevision = 0,
 }: FileViewerProps) {
   const [showRaw, setShowRaw] = useState(false);
   const [showGitDiff, setShowGitDiff] = useState(initialShowGitDiff);
@@ -329,6 +333,7 @@ export function FileViewer({
                 path={file.path}
                 serverUrl={serverUrl}
                 token={token}
+                revision={rawRevision}
                 {...(onPdfLoad ? { onLoaded: onPdfLoad } : {})}
               />
             </Suspense>
@@ -337,7 +342,7 @@ export function FileViewer({
         {image && edit === null && !showGitDiff && (
           <div className="flex h-full items-center justify-center p-4">
             <img
-              src={rawFileUrl(serverUrl, file.path, token)}
+              src={rawFileUrl(serverUrl, file.path, token, rawRevision)}
               alt={file.path}
               onLoad={() => onImageLoad(file.path)}
               className="max-h-full max-w-full rounded object-contain"
@@ -373,6 +378,9 @@ export function FileViewer({
               remarkPlugins={[remarkGfm, remarkMath]}
               rehypePlugins={[rehypeKatex]}
               components={{
+                // Same routing AssistantMessage uses: a ```mermaid fence renders as a
+                // diagram here too, instead of falling through to plain <pre> text.
+                pre: MarkdownPre,
                 // Relative links point at sibling files, not server routes: open them
                 // in the viewer instead of navigating the page (which 404s)
                 a: ({ href, children, ...rest }) => {

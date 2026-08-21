@@ -68,6 +68,17 @@ describe("FileViewer", () => {
       expect(screen.getByText("Binary file — preview not supported")).toBeInTheDocument();
     });
 
+    it("cache-busts an image when its raw preview revision changes", () => {
+      const file: OpenFile = { status: "error", path: "plot.png", message: "Binary file — preview not supported" };
+      const { rerenderWith } = setup({ file, rawRevision: 1 });
+      const first = screen.getByRole("img").getAttribute("src");
+
+      rerenderWith({ file, rawRevision: 2 });
+
+      expect(screen.getByRole("img")).toHaveAttribute("src", expect.stringContaining("v=2"));
+      expect(screen.getByRole("img").getAttribute("src")).not.toBe(first);
+    });
+
     it("offers a source toggle for markdown only", () => {
       const { rerenderWith } = setup({ file: loaded({ path: "notes.md", content: "# Title\n" }) });
       expect(button(/source/)).toBeInTheDocument();
@@ -370,5 +381,29 @@ describe("FileViewer", () => {
       setup({ file: { status: "error", path: "plot.png", message: "binary" }, token: "secret-token" });
       expect(screen.getByRole("img", { name: "plot.png" })).toHaveAttribute("src", expect.stringContaining("secret-token"));
     });
+  });
+});
+
+describe("a file that moved underneath the viewer", () => {
+  it("keeps an unsaved draft when the file is re-read from disk", () => {
+    // Directory watching re-reads the open file whenever its directory changes,
+    // which can land mid-edit. The draft is the user's; verified here rather than
+    // assumed, because "the buffer is local state so it must be safe" is exactly
+    // the kind of reasoning that ships a data-loss bug.
+    const { rerenderWith } = setup();
+    edit("my unsaved work\n");
+
+    rerenderWith({ file: loaded({ content: "changed by someone else\n", mtimeMs: 2000 }) });
+
+    expect(screen.getByRole("textbox")).toHaveValue("my unsaved work\n");
+  });
+
+  it("says so, rather than silently resolving it, once the bytes have moved", () => {
+    const { rerenderWith } = setup();
+    edit("my unsaved work\n");
+
+    rerenderWith({ file: loaded({ content: "changed by someone else\n", mtimeMs: 2000 }) });
+
+    expect(screen.getByText(/changed on disk/i)).toBeInTheDocument();
   });
 });

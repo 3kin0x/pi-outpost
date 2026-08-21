@@ -440,6 +440,30 @@ describe("loadConfig — resource path resolution", () => {
     }
   }
 
+  test("files.watch defaults to on and can be turned off", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      // On without being configured to: a workspace browser that silently lies
+      // about the workspace is worse than none, so the truthful setting is the
+      // one you get for free.
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).files.watch, true);
+
+      await writeFile(configPath, JSON.stringify({ files: { watch: false } }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).files.watch, false);
+    });
+  });
+
+  test("files.watch refuses a value that is not a boolean", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      for (const watch of ["yes", 1, null, {}]) {
+        await writeFile(configPath, JSON.stringify({ files: { watch } }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"files\.watch" must be a boolean/);
+      }
+    });
+  });
+
   test("pdf.maxBytes defaults to 25 MB and can be raised or lowered", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");

@@ -24,6 +24,7 @@ import type {
   WireImage,
 } from "@pi-outpost/shared";
 import { UPLOADS_DIRECTORY, UploadError } from "./uploads";
+import { isImageFile, isPdfFile } from "./util/workspacePath";
 
 type AssistantItem = Extract<ChatItem, { kind: "assistant" }>;
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
@@ -117,6 +118,12 @@ export interface GitFileDiffState {
   requestId: string;
 }
 
+/** The directory a browser-root-relative path sits in; "" for a path at the root. */
+function parentDirectory(path: string): string {
+  const lastSlash = path.lastIndexOf("/");
+  return lastSlash < 0 ? "" : path.slice(0, lastSlash);
+}
+
 /** Two revision pairs are the same request when both sides match, side for side. */
 function samePair(a: { base: GitRevision; target: GitRevision }, b: { base: GitRevision; target: GitRevision }): boolean {
   return a.base.rev === b.base.rev && a.base.path === b.base.path && a.target.rev === b.target.rev && a.target.path === b.target.path;
@@ -153,7 +160,11 @@ export interface AgentState {
   extensionTitle?: string;
   editorPrefill: { text: string; nonce: number } | null;
   fileTree: Record<string, DirState>;
+  /** Latest list request per directory; older replies must not restore stale entries. */
+  directoryRequests: Record<string, string>;
   openFile: OpenFile | null;
+  /** Cache-buster for raw image/PDF previews whose workspace path did not change. */
+  previewRevision: number;
   /** Writable zone in the file browser; see SessionSnapshot.writableRoot. */
   writableRoot?: string | null;
   /** Which providers can answer; drives the onboarding screen. Never carries a key. */
@@ -209,7 +220,9 @@ const initialState: AgentState = {
   widgets: {},
   editorPrefill: null,
   fileTree: {},
+  directoryRequests: {},
   openFile: null,
+  previewRevision: 0,
   fileSearch: null,
   createError: null,
   created: null,
@@ -235,7 +248,8 @@ type Action =
   | { type: "server"; message: ServerMessage }
   | { type: "dismiss_notification"; id: string }
   | { type: "dialog_answered" }
-  | { type: "dir_list_started"; path: string }
+  | { type: "dir_list_started"; path: string; requestId: string; preserveEntries?: boolean }
+  | { type: "raw_preview_changed"; path: string }
   | { type: "file_read_started"; path: string; requestId: string }
   | { type: "file_save_started"; path: string; requestId: string; content: string }
   | { type: "close_file_preview" }
@@ -315,6 +329,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     tree: null,
     // The file tree is cached per BROWSER_ROOT — a replaced session may have a different root.
     fileTree: {},
+    directoryRequests: {},
     fileOperation: null,
     writableRoot: message.writableRoot,
     gitAvailable: message.gitAvailable === true,
@@ -348,7 +363,19 @@ function reduce(state: AgentState, action: Action): AgentState {
   }
   if (action.type === "dialog_answered") return { ...state, dialogQueue: state.dialogQueue.slice(1) };
   if (action.type === "dir_list_started") {
-    return { ...state, fileTree: { ...state.fileTree, [action.path]: "loading" } };
+    const current = state.fileTree[action.path];
+    return {
+      ...state,
+      fileTree: {
+        ...state.fileTree,
+        [action.path]: action.preserveEntries && Array.isArray(current) ? current : "loading",
+      },
+      directoryRequests: { ...state.directoryRequests, [action.path]: action.requestId },
+    };
+  }
+  if (action.type === "raw_preview_changed") {
+    if (state.openFile?.path !== action.path) return state;
+    return { ...state, previewRevision: state.previewRevision + 1 };
   }
   if (action.type === "file_read_started") {
     return { ...state, openFile: { status: "loading", path: action.path, requestId: action.requestId } };
@@ -554,6 +581,9 @@ function reduce(state: AgentState, action: Action): AgentState {
     case "error":
       return { ...state, errors: [...state.errors, message.message] };
     case "directory_listing":
+      if (message.requestId.startsWith("dir:") && state.directoryRequests[message.path] !== message.requestId) {
+        return state;
+      }
       return {
         ...state,
         fileTree: { ...state.fileTree, [message.path]: message.entries },
@@ -621,6 +651,9 @@ function reduce(state: AgentState, action: Action): AgentState {
     }
     case "file_browser_error": {
       if (message.requestId.startsWith("dir:")) {
+        if (state.directoryRequests[message.path] !== message.requestId) {
+          return state;
+        }
         return { ...state, fileTree: { ...state.fileTree, [message.path]: { error: message.message } } };
       }
       if (message.requestId.startsWith("create:")) {
@@ -802,6 +835,15 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     }
   }, []);
 
+  const requestDirectory = useCallback(
+    (path: string, preserveEntries = false) => {
+      const requestId = `dir:${crypto.randomUUID()}`;
+      dispatch({ type: "dir_list_started", path, requestId, preserveEntries });
+      sendMessage({ type: "list_directory", path, requestId });
+    },
+    [sendMessage],
+  );
+
   // Git status refetches are event-driven (connect, file_changed, agent_end) and can
   // burst — coalesce to one in flight with a single trailing rerun.
   const gitAvailableRef = useRef(false);
@@ -823,6 +865,40 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       refreshGitStatus();
     }
   }, [refreshGitStatus]);
+
+  /**
+   * Re-list a directory — but only one the tree is actually holding.
+   *
+   * The server watches every directory that was ever listed, including ones the
+   * user has since collapsed. A directory nothing displays has nothing to
+   * refresh, so this is where that is decided rather than on the wire.
+   */
+  const relistDirectory = useCallback(
+    (path: string) => {
+      const held = fileTreeRef.current[path];
+      if (held === undefined) return;
+      // Only announce loading when there is nothing to keep showing. Blanking a
+      // directory that already has entries unmounts its rows, and a row's
+      // expanded state is the row's own — so re-listing the root would silently
+      // collapse every branch under it and throw away where the user was. The
+      // old entries stay on screen until the new ones land; the listing replaces
+      // them wholesale either way.
+      requestDirectory(path, true);
+    },
+    [requestDirectory],
+  );
+
+  /**
+   * Re-list everything the tree is holding, in one action.
+   *
+   * The manual counterpart to directory watching, and deliberately not
+   * conditional on it: `fs.watch` is best-effort by contract, and a filesystem
+   * that emits no events — a network mount, a spent inotify budget, watching
+   * turned off — is indistinguishable from a workspace that did not change.
+   */
+  const refreshFileTree = useCallback(() => {
+    for (const path of Object.keys(fileTreeRef.current)) relistDirectory(path);
+  }, [relistDirectory]);
 
   // Branding is pure config (no session dependency) and served as soon as the process
   // starts — fetch it directly instead of waiting on the WS "hello", which only arrives
@@ -879,16 +955,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           return;
         }
         if (message.type === "file_changed") {
-          const lastSlash = message.path.lastIndexOf("/");
-          const parentPath = lastSlash < 0 ? "" : message.path.slice(0, lastSlash);
-          console.log("[file_changed] path=", message.path, "parentPath=", parentPath, "fileTree keys=", Object.keys(fileTreeRef.current).join(","));
-          if (fileTreeRef.current[parentPath] !== undefined) {
-            console.log("[file_changed] parent found in fileTree, refreshing");
-            dispatch({ type: "dir_list_started", path: parentPath });
-            sendMessage({ type: "list_directory", path: parentPath, requestId: `dir:${crypto.randomUUID()}` });
-          } else {
-            console.log("[file_changed] parent NOT in fileTree, skipping refresh");
-          }
+          relistDirectory(parentDirectory(message.path));
           const openFile = openFileRef.current;
           if (openFile?.status === "loaded" && openFile.path === message.path) {
             const requestId = `file:${crypto.randomUUID()}`;
@@ -898,6 +965,29 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           // An open "± diff" pane for this file would silently go stale otherwise
           if (gitDiffPathRef.current === message.path) {
             sendMessage({ type: "git_diff", path: message.path, requestId: `gitdiff:${crypto.randomUUID()}` });
+          }
+          refreshGitStatus();
+          return;
+        }
+        if (message.type === "directory_changed") {
+          relistDirectory(message.path);
+          // The watcher reports the directory, not the entry, so anything living
+          // in it may be what moved. Re-reading the open file is one read and
+          // cannot lose work: the editor's draft is its own state, and a file
+          // that changed underneath an edit already surfaces as a save conflict.
+          const openFile = openFileRef.current;
+          if (openFile !== null && parentDirectory(openFile.path) === message.path) {
+            if (isImageFile(openFile.path) || isPdfFile(openFile.path)) {
+              dispatch({ type: "raw_preview_changed", path: openFile.path });
+            } else if (openFile.status === "loaded") {
+              const requestId = `file:${crypto.randomUUID()}`;
+              dispatch({ type: "file_read_started", path: openFile.path, requestId });
+              sendMessage({ type: "read_file", path: openFile.path, requestId });
+            }
+          }
+          const gitDiffPath = gitDiffPathRef.current;
+          if (gitDiffPath !== null && parentDirectory(gitDiffPath) === message.path) {
+            sendMessage({ type: "git_diff", path: gitDiffPath, requestId: `gitdiff:${crypto.randomUUID()}` });
           }
           refreshGitStatus();
           return;
@@ -926,9 +1016,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         dispatch({ type: "server", message });
         // A replaced session may have a different sandbox root — reload the root listing
         if (message.type === "session_replaced") {
-          const requestId = `dir:${crypto.randomUUID()}`;
-          dispatch({ type: "dir_list_started", path: "" });
-          sendMessage({ type: "list_directory", path: "", requestId });
+          requestDirectory("");
         }
       };
       socket.onclose = (event) => {
@@ -963,7 +1051,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       socketRef.current = null;
       socket?.close();
     };
-  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, authNonce]);
+  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, relistDirectory, requestDirectory, authNonce]);
 
   return {
     state,
@@ -1008,10 +1096,9 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     },
     dismissNotification: (id: string) => dispatch({ type: "dismiss_notification", id }),
     /** List a directory's children (path is relative to the browser root; "" = root). */
-    listDirectory: (path: string) => {
-      dispatch({ type: "dir_list_started", path });
-      sendMessage({ type: "list_directory", path, requestId: `dir:${crypto.randomUUID()}` });
-    },
+    listDirectory: (path: string) => requestDirectory(path),
+    /** Re-list every directory the tree is holding (the tree's manual refresh). */
+    refreshFileTree,
     /** Open a file's read-only preview. */
     readFile: (path: string) => {
       const requestId = `file:${crypto.randomUUID()}`;

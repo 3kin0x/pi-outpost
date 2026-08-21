@@ -10,6 +10,14 @@ vi.mock("./useAgent", () => ({
   useAgent: (...args: unknown[]) => mockUseAgent(...args),
 }));
 
+vi.mock("./components/PdfViewer", () => ({
+  default: ({ path, onLoaded }: { path: string; onLoaded?: (path: string) => void }) => (
+    <button type="button" onClick={() => onLoaded?.(path)}>
+      Confirm PDF render
+    </button>
+  ),
+}));
+
 // Mock useTheme to avoid matchMedia / message listeners
 vi.mock("./theme/useTheme", () => ({
   useTheme: () => ({ theme: "dark" as const, toggle: vi.fn(), setTheme: vi.fn() }),
@@ -42,7 +50,9 @@ function agentState(overrides: Record<string, unknown> = {}) {
     widgets: {},
     editorPrefill: null,
     fileTree: {},
+    directoryRequests: {},
     openFile: null,
+    previewRevision: 0,
     credentials: null,
     fileSearch: null,
     extensionPaths: [],
@@ -392,6 +402,78 @@ describe("App — attachments", () => {
 
     await waitFor(() => expect(screen.getByText("Binary file — preview not supported")).toBeInTheDocument());
     expect(screen.queryByTitle(/archive\.zip — sent as a reference/)).not.toBeInTheDocument();
+  });
+
+  it("drops stale preview bytes when an image refresh fails", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchPreview = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/png" },
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      })
+      .mockResolvedValueOnce({ ok: false, headers: { get: () => null } });
+    globalThis.fetch = fetchPreview;
+    try {
+      const path = "plot.png";
+      const firstApi = agentApi(
+        agentState({
+          openFile: { status: "error", path, message: "Binary file — preview not supported" },
+          previewRevision: 1,
+        }),
+      );
+      mockUseAgent.mockReturnValue(firstApi);
+      const view = render(<App />);
+      fireEvent.load(screen.getByRole("img", { name: path }));
+      await waitFor(() => expect(within(screen.getByRole("contentinfo")).getByText(path)).toBeInTheDocument());
+
+      const refreshedApi = agentApi(
+        agentState({
+          openFile: { status: "error", path, message: "Binary file — preview not supported" },
+          previewRevision: 2,
+        }),
+      );
+      mockUseAgent.mockReturnValue(refreshedApi);
+      view.rerender(<App />);
+
+      await waitFor(() => expect(fetchPreview).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(within(screen.getByRole("contentinfo")).queryByText(path)).not.toBeInTheDocument());
+      const box = screen.getByRole("textbox");
+      fireEvent.change(box, { target: { value: "describe it" } });
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(refreshedApi.prompt).toHaveBeenCalledWith("describe it", undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("requires the current PDF revision to render before attaching it", async () => {
+    const path = "report.pdf";
+    const firstApi = agentApi(
+      agentState({
+        openFile: { status: "error", path, message: "Binary file — preview not supported" },
+        previewRevision: 1,
+      }),
+    );
+    mockUseAgent.mockReturnValue(firstApi);
+    const view = render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm PDF render" }));
+    await waitFor(() => expect(within(screen.getByRole("contentinfo")).getByText(path)).toBeInTheDocument());
+
+    mockUseAgent.mockReturnValue(
+      agentApi(
+        agentState({
+          openFile: { status: "error", path, message: "Binary file — preview not supported" },
+          previewRevision: 2,
+        }),
+      ),
+    );
+    view.rerender(<App />);
+
+    await waitFor(() => expect(within(screen.getByRole("contentinfo")).queryByText(path)).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Confirm PDF render" }));
+    await waitFor(() => expect(within(screen.getByRole("contentinfo")).getByText(path)).toBeInTheDocument());
   });
 
   it("sends the prompt and clears what was attached to it", () => {

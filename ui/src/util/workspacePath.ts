@@ -52,7 +52,8 @@ export function hasPathExtractionTool(path: string): boolean {
  * the WebSocket URL). `serverUrl` is the embed widget's backend origin, "" when
  * same-origin.
  */
-export function rawFileUrl(serverUrl: string, path: string, token: string | null): string {
+export function rawFileUrl(serverUrl: string, path: string, token: string | null, revision?: number): string {
   const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
-  return `${serverUrl}/files/raw?path=${encodeURIComponent(path)}${tokenParam}`;
+  const revisionParam = revision === undefined ? "" : `&v=${encodeURIComponent(String(revision))}`;
+  return `${serverUrl}/files/raw?path=${encodeURIComponent(path)}${tokenParam}${revisionParam}`;
 }

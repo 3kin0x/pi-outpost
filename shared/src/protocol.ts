@@ -434,6 +434,18 @@ export type ServerMessage =
       reason?: FileBrowserErrorReason;
     }
   | { type: "file_changed"; path: string }
+  /**
+   * A watched directory's entries changed on disk, whatever caused it — this
+   * server, the agent through bash, or nothing in this process at all.
+   *
+   * Distinct from `file_changed` on purpose: that one names a file the server
+   * knows it touched, while a watcher's honest unit of observation is the
+   * directory (`fs.watch` reports the entry name only sometimes, and on a rename
+   * names one of the two sides). The client decides what a changed directory
+   * implies — re-list it if the tree holds it, re-read the preview if the open
+   * file lives there.
+   */
+  | { type: "directory_changed"; path: string }
   | { type: "file_search_results"; requestId: string; query: string; results: FileSearchEntry[] }
   | { type: "tree"; roots: TreeNode[] }
   | { type: "editor_prefill"; text: string }
