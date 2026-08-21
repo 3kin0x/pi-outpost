@@ -1,5 +1,6 @@
 /**
- * The resource-path browser: directories only, from `/`, no workspace confinement.
+ * The resource-path browser: directories only, from the filesystem root, with no
+ * workspace confinement.
  *
  * The confinement tests live in fileBrowser.test.ts and must keep passing — this
  * boundary is deliberately a different one (see serverDirectories.ts), and these
@@ -11,6 +12,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
 import { listServerDirectories, normalizeServerPath, ServerDirectoryError } from "../src/serverDirectories.ts";
+
+/**
+ * The top of the tree, spelled the way this platform spells it: "/" on POSIX, and
+ * the current drive's root ("C:\\") on Windows, which is what `path.resolve` on an
+ * absolute path yields there. The browser has no drive switcher — a deployment
+ * serves one filesystem, and the paths it points settings at are on it.
+ */
+const FS_ROOT = path.parse(process.cwd()).root;
 
 async function tree(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "pi-outpost-dirs-"));
@@ -24,14 +33,14 @@ describe("listServerDirectories", () => {
   test("walks from the filesystem root down to a mounted directory", async () => {
     const root = await tree();
     try {
-      const top = await listServerDirectories("/");
-      assert.equal(top.path, "/");
+      const top = await listServerDirectories(FS_ROOT);
+      assert.equal(top.path, FS_ROOT);
       assert.equal(top.parent, null, "the root has nowhere to go back to");
       assert.ok(top.entries.length > 0);
 
       // Every step down is reachable, including the parts outside any workspace.
-      let current = "/";
-      for (const segment of path.relative("/", path.join(root, "mnt")).split(path.sep)) {
+      let current = FS_ROOT;
+      for (const segment of path.relative(FS_ROOT, path.join(root, "mnt")).split(path.sep)) {
         const listing = await listServerDirectories(current);
         const next = listing.entries.find((entry) => entry.name === segment);
         assert.ok(next, `"${segment}" must be listed under ${current}`);
@@ -111,7 +120,8 @@ describe("listServerDirectories", () => {
     }
   });
 
-  test("refuses a directory it cannot read", async () => {
+  test("refuses a directory it cannot read", async (t) => {
+    if (process.platform === "win32") return t.skip("chmod 000 does not deny a read here");
     const root = await tree();
     const locked = path.join(root, "locked");
     try {
@@ -131,16 +141,17 @@ describe("listServerDirectories", () => {
 
 describe("normalizeServerPath", () => {
   test("an empty request is the filesystem root", () => {
-    assert.equal(normalizeServerPath(""), "/");
-    assert.equal(normalizeServerPath("   "), "/");
+    assert.equal(normalizeServerPath(""), FS_ROOT);
+    assert.equal(normalizeServerPath("   "), FS_ROOT);
   });
 
   test("a relative path is anchored at the root, not at the server's cwd", () => {
-    assert.equal(normalizeServerPath("etc"), "/etc");
-    assert.equal(normalizeServerPath("../../etc"), "/etc");
+    assert.equal(normalizeServerPath("etc"), path.join(FS_ROOT, "etc"));
+    // Climbing above the root lands on the root, never in the process's cwd.
+    assert.equal(normalizeServerPath("../../etc"), path.join(FS_ROOT, "etc"));
   });
 
   test("collapses traversal inside an absolute path", () => {
-    assert.equal(normalizeServerPath("/usr/local/../share"), "/usr/share");
+    assert.equal(normalizeServerPath(path.join(FS_ROOT, "usr", "local", "..", "share")), path.join(FS_ROOT, "usr", "share"));
   });
 });

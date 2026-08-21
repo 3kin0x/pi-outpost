@@ -39,10 +39,14 @@ export class ServerDirectoryError extends Error {
 }
 
 /**
- * Normalize a client-supplied path to an absolute one. Anchored at `/` rather
- * than the process cwd: a relative path from a browser is not a path relative to
- * wherever the server happens to have been started, and treating it as one would
- * make the same request mean different things on two deployments.
+ * Normalize a client-supplied path to an absolute one. Anchored at the filesystem
+ * root rather than the process cwd: a relative path from a browser is not a path
+ * relative to wherever the server happens to have been started, and treating it as
+ * one would make the same request mean different things on two deployments.
+ *
+ * On Windows that root is the current drive's (`C:\`), since that is what
+ * resolving an absolute path yields there. There is no drive switcher: a
+ * deployment serves one filesystem, and what its settings point at is on it.
  */
 export function normalizeServerPath(requested: string): string {
   return path.resolve("/", requested.trim() === "" ? "/" : requested.trim());

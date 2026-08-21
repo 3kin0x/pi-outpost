@@ -171,7 +171,8 @@ describe("persistEditableSettings", () => {
     }
   });
 
-  test("reports a file it cannot write, and changes nothing", async () => {
+  test("reports a file it cannot write, and changes nothing", async (t) => {
+    if (process.platform === "win32") return t.skip("a read-only directory still accepts writes here");
     const { dir, file } = await workspace({ skillPaths: [] });
     try {
       const before = await readFile(file, "utf8");
@@ -206,7 +207,8 @@ describe("persistEditableSettings", () => {
     }
   });
 
-  test("keeps the file's permissions", async () => {
+  test("keeps the file's permissions", async (t) => {
+    if (process.platform === "win32") return t.skip("POSIX permission bits are not meaningful here");
     const { dir, file } = await workspace({ skillPaths: [], server: { token: "s3cret" } });
     try {
       await chmod(file, 0o600);
