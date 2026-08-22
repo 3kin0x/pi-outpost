@@ -131,7 +131,7 @@ A source checkout SHALL NOT be compared against the registry at startup, because
 
 The system SHALL query the package registry the host is configured to use, rather than a fixed public address. It SHALL take the registry from the package manager's own configuration when one is set, SHALL accept an explicit override in pi-outpost's configuration, and SHALL fall back to the public registry when neither names one.
 
-An installation performed by the command SHALL go through the package manager, so it uses that same configured registry without pi-outpost restating it.
+An installation performed by the command SHALL go through the package manager. Where the registry came from the package manager's own configuration, the command SHALL NOT restate it. Where pi-outpost's configuration overrode it, the command SHALL name that registry to the installer, so that the registry an update is announced from is the one it is installed from.
 
 #### Scenario: UsesThePackageManagerRegistry
 - **GIVEN** the package manager is configured with an internal registry proxy
@@ -142,6 +142,11 @@ An installation performed by the command SHALL go through the package manager, s
 - **GIVEN** pi-outpost's configuration names a registry
 - **WHEN** an update check runs
 - **THEN** that address is used in preference to the package manager's
+
+#### Scenario: TheInstallUsesTheRegistryTheCheckUsed
+- **GIVEN** pi-outpost's configuration names a registry the package manager does not
+- **WHEN** the command installs a newer version
+- **THEN** the installer is pointed at that same registry, rather than resolving a different one
 
 #### Scenario: FallsBackToThePublicRegistry
 - **GIVEN** neither the package manager nor pi-outpost names a registry

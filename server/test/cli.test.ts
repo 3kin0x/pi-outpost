@@ -262,6 +262,27 @@ describe("build-exe and the browser flags", () => {
     assert.throws(() => parseCli(["--open", "--no-open"]), CliError);
   });
 
+  test("the update subcommand and --check are recognised", () => {
+    const parsed = parseCli(["update", "--check"]);
+    assert.equal(parsed.command, "update");
+    assert.equal(parsed.update.check, true);
+    assert.equal(parseCli(["update"]).update.check, false);
+  });
+
+  test("help lists update and its flag", () => {
+    const help = helpText();
+    assert.match(help, /pi-outpost update/);
+    assert.match(help, /--check/);
+  });
+
+  test("--check outside update is an error, not silence", () => {
+    // Silently starting a server because --check was ignored is the worse outcome:
+    // the operator asked a question and got a running process instead of an answer.
+    assert.throws(() => parseCli(["--check"]), CliError);
+    assert.throws(() => parseCli(["init", "--check"]), CliError);
+    assert.throws(() => parseCli(["build-exe", "--check"]), CliError);
+  });
+
   test("neither flag leaves the decision to configuration", () => {
     assert.equal(parseCli([]).open, undefined);
     assert.equal(parseCli(["--open"]).open, true);

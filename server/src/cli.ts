@@ -53,6 +53,7 @@ Usage
   pi-outpost login --provider <name>
                                  store an API key for a provider in <agentDir>/auth.json
   pi-outpost build-exe [options] build a standalone executable from this installation
+  pi-outpost update [--check]    move to the newest published version, or just look
 
 Options
   --config <path>    configuration file to use
@@ -77,6 +78,14 @@ login options
 build-exe options
   --out <path>       where to write it (default: ./pi-outpost, ./pi-outpost.exe on Windows)
   --force            replace an existing file at that path
+
+update options
+  --check            report what is available and install nothing
+
+Nothing installs on its own: the server may say a newer version exists, and only
+"pi-outpost update" acts on that. What it does depends on how this copy was
+installed — a global package is upgraded in place, a checkout, a one-off npx run
+and a standalone executable are each told what to do instead.
 
 The executable carries the server and the web UI and needs nothing installed to run.
 Released builds are attached to https://github.com/laurentftech/pi-outpost/releases —
@@ -148,17 +157,18 @@ Agent runtime
 export class CliError extends Error {}
 
 export interface ParsedCli {
-  command: "serve" | "init" | "config" | "login" | "build-exe" | "help" | "version";
+  command: "serve" | "init" | "config" | "login" | "build-exe" | "update" | "help" | "version";
   flags: CliOptions;
   init: { global: boolean; force: boolean };
   login: { provider?: string };
   buildExe: { out?: string; force: boolean };
+  update: { check: boolean };
   /** undefined when neither --open nor --no-open was given, so config still decides. */
   open?: boolean;
 }
 
-type Command = "init" | "config" | "login" | "build-exe";
-const COMMANDS: readonly string[] = ["init", "config", "login", "build-exe"] satisfies Command[];
+type Command = "init" | "config" | "login" | "build-exe" | "update";
+const COMMANDS: readonly string[] = ["init", "config", "login", "build-exe", "update"] satisfies Command[];
 
 function integerFlag(value: string | undefined, name: string): number | undefined {
   if (value === undefined) return undefined;
@@ -187,6 +197,7 @@ export function parseCli(argv: string[]): ParsedCli {
         force: { type: "boolean", default: false },
         provider: { type: "string" },
         out: { type: "string" },
+        check: { type: "boolean", default: false },
         open: { type: "boolean", default: false },
         "no-open": { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
@@ -213,6 +224,9 @@ export function parseCli(argv: string[]): ParsedCli {
   // told the flag has an owner.
   if (values.out !== undefined && command !== "build-exe") {
     throw new CliError('"--out" belongs to "pi-outpost build-exe" — see "pi-outpost --help"');
+  }
+  if (values.check && command !== "update") {
+    throw new CliError('"--check" belongs to "pi-outpost update" — see "pi-outpost --help"');
   }
   if (values.provider !== undefined && command !== "login") {
     throw new CliError('"--provider" belongs to "pi-outpost login" — see "pi-outpost --help"');
@@ -242,6 +256,7 @@ export function parseCli(argv: string[]): ParsedCli {
     init: { global: values.global, force: values.force },
     login: { provider: values.provider },
     buildExe: { out: values.out, force: values.force },
+    update: { check: values.check },
     // Left undefined unless asked for, so configuration still has its say.
     ...(values.open ? { open: true } : values["no-open"] ? { open: false } : {}),
   };

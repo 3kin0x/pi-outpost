@@ -125,6 +125,7 @@ pi-outpost login --provider <name>
                               store an API key in <agentDir>/auth.json
 pi-outpost build-exe [options]
                               build a standalone executable from this installation
+pi-outpost update [--check]   move to the newest published version, or just look
 ```
 
 > **Upgrading from a pre-`0.1.0` clone?** Three behaviours changed. The server now **refuses to start without a configuration file** (it used to fall back to a plain local pi: your launch directory as workspace, full toolset, bash enabled) — run `pi-outpost init`. `PI_OUTPOST_PORT`/`PORT` now **override** `server.port` instead of being overridden by it, in line with `PI_OUTPOST_TOKEN`, which always won. And `PI_CWD` is now `PI_OUTPOST_CWD`.
@@ -143,6 +144,39 @@ pi-outpost build-exe [options]
 | `--open` / `--no-open` | Open the interface in your browser once listening (default: wherever a desktop session exists) |
 | `build-exe --out <path>` | Where to write the executable (default `./pi-outpost`, `.exe` on Windows) |
 | `build-exe --force` | Replace an existing file at that path |
+| `update` | Move this installation to the newest published version |
+| `update --check` | Report what is available and install nothing |
+
+### Staying up to date
+
+The server checks once a day whether a newer version has been published, and says so
+in one line if there is. **It never installs anything on its own** — `pi-outpost
+update` is the only thing that installs, and only when you run it without `--check`.
+
+What `update` does depends on how this copy was installed, which it works out rather
+than asking:
+
+| How you run it | What `update` does |
+|------|------|
+| Global npm install | Prints `npm install -g pi-outpost@latest`, runs it, reports the version it moved to |
+| Source checkout | Refuses, and tells you to `git pull` — installing would put a *second* copy elsewhere and leave the one you are running untouched |
+| `npx pi-outpost` | Explains that your next `npx` already fetches the newest version |
+| Standalone executable | Refuses to overwrite itself, and points at the [releases](https://github.com/laurentftech/pi-outpost/releases) |
+
+A check that fails is never reported as "up to date": `update --check` says it could
+not check, and why, and exits non-zero.
+
+Two settings control it, and they are separate from `offline` on purpose:
+
+| Key | Effect |
+|------|------|
+| `updateCheck` | `false` disables checking entirely. `true` enables it **even under `offline`**. Unset, `offline` decides |
+| `updateRegistry` | The registry to query, when npm's own configuration does not name the right one |
+
+`offline` means "remote model catalogs are unreachable", which is not the same network
+as a package registry — a host air-gapped from the former can still reach an internal
+npm proxy, and that is exactly the deployment where knowing a release exists matters.
+So `offline` is a default for update checking, not a veto.
 
 There is deliberately **no `--token` flag**: a secret on the command line is readable by anyone who can list processes. Use `PI_OUTPOST_TOKEN` or the file's `server.token`.
 

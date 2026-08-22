@@ -440,6 +440,60 @@ describe("loadConfig — resource path resolution", () => {
     }
   }
 
+  test("updateCheck stays a tri-state, so offline can still decide", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      // Unset must stay *unset*, not become false: the whole point is that `offline`
+      // gets to decide when nobody has said otherwise, and a stored default would
+      // make "not mentioned" indistinguishable from "explicitly off".
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).updateCheck, undefined);
+
+      await writeFile(configPath, JSON.stringify({ updateCheck: true }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).updateCheck, true);
+
+      await writeFile(configPath, JSON.stringify({ updateCheck: false }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).updateCheck, false);
+    });
+  });
+
+  test("updateCheck refuses a value that is not a boolean", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      for (const updateCheck of ["yes", 1, null, {}]) {
+        await writeFile(configPath, JSON.stringify({ updateCheck }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"updateCheck" must be a boolean/);
+      }
+    });
+  });
+
+  test("updateRegistry is optional and taken as given", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).updateRegistry, undefined);
+
+      await writeFile(configPath, JSON.stringify({ updateRegistry: "https://nexus.internal/repository/npm" }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).updateRegistry, "https://nexus.internal/repository/npm");
+    });
+  });
+
+  test("updateRegistry refuses anything that is not an http(s) URL", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      // Caught at load rather than at the first check: that check runs in the
+      // background and says nothing when it fails, so a bad address there would
+      // simply never be discovered.
+      for (const updateRegistry of ["nexus.internal", "not a url", 42, true]) {
+        await writeFile(configPath, JSON.stringify({ updateRegistry }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"updateRegistry"/);
+      }
+      // A URL, but not one that can be fetched.
+      await writeFile(configPath, JSON.stringify({ updateRegistry: "ftp://nexus.internal" }, null, 2));
+      assert.throws(() => loadConfig(dir, { config: configPath }), /"updateRegistry" must be an http or https URL/);
+    });
+  });
+
   test("files.watch defaults to on and can be turned off", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");
