@@ -154,6 +154,23 @@ export function resolveRegistry(configured?: string): string {
 const trimSlash = (url: string): string => url.replace(/\/+$/, "");
 
 /** npm's stored registry, or nothing if npm is absent or slow to answer. */
+/**
+ * The environment for a short-lived npm child, without the parent's coverage sink.
+ *
+ * Under `--experimental-test-coverage` node exports NODE_V8_COVERAGE, and any child
+ * that inherits it writes its own coverage file into the same directory. npm is a
+ * large program and these calls have a five-second ceiling, so a slow one is killed
+ * partway through writing — and the parent's reporter then dies on the truncated file
+ * with "failed to parse coverage". Every test passes and the job fails anyway, naming
+ * nothing. The same reasoning as server/test/harness.mjs, at the other spawn site.
+ *
+ * Nothing is lost: npm's own coverage was never attributable to this project.
+ */
+function envForNpm(): NodeJS.ProcessEnv {
+  const { NODE_V8_COVERAGE: _sink, ...rest } = process.env;
+  return rest;
+}
+
 let npmRegistryMemo: { value: string | undefined } | undefined;
 
 function npmConfiguredRegistry(): string | undefined {
@@ -172,6 +189,7 @@ function npmConfiguredRegistry(): string | undefined {
       timeout: 5_000,
       stdio: ["ignore", "pipe", "ignore"],
       shell: false,
+      env: envForNpm(),
     }).trim();
     // npm prints "undefined" rather than nothing when a key is unset.
     npmRegistryMemo.value = out && out !== "undefined" && out !== "null" ? out : undefined;
@@ -651,6 +669,7 @@ function globalNodeModules(): string | undefined {
       timeout: 5_000,
       stdio: ["ignore", "pipe", "ignore"],
       shell: false,
+      env: envForNpm(),
     }).trim();
     globalRootMemo.value = out && out !== "undefined" ? out : undefined;
     return globalRootMemo.value;
