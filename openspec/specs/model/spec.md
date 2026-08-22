@@ -369,6 +369,14 @@ This model is distinct from the context-window usage already on the protocol: th
 - **WHEN** that turn's usage is placed on the wire
 - **THEN** the cost field is absent rather than zero
 
+### Requirement: RuntimePathSelectionProtocol
+
+The client/server protocol SHALL carry requests and responses for browsing server directories and applying editable runtime resource paths.
+
+#### Scenario: Select a directory through the protocol
+- **WHEN** a connected client requests server-directory browsing and submits an updated user skill-path list
+- **THEN** the server returns the directory entries and acknowledges only a successfully persisted settings update
+
 ## Technical Notes
 
 - **Implementation**: `shared/src/protocol.ts`, `server/src/config.ts`, `server/src/convert.ts`

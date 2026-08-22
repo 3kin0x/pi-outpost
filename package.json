@@ -25,6 +25,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "check:css": "node scripts/check-web-css.mjs",
     "check:embed": "node scripts/check-embed-package.mjs",
+    "check:cli": "node scripts/check-cli-package.mjs",
     "build:e2e-host": "vite build --config e2e/vite.config.ts",
     "test:e2e": "npm run build:e2e-host && playwright test --config e2e/playwright.config.ts",
     "bench": "tsx scripts/embed-bench.mts"

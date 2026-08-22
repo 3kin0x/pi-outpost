@@ -80,11 +80,17 @@ export function openBrowser(url: string, platform: NodeJS.Platform = process.pla
   return new Promise((resolve) => {
     try {
       const child = spawn(command, args, { detached: true, stdio: "ignore" });
-      child.on("error", () => resolve(false));
-      // Unref'd, or a browser the OS keeps as a child would hold the server open
-      // past Ctrl-C — which is how "the process will not die" bugs are born.
-      child.unref();
-      resolve(true);
+      // Both outcomes are events, and `spawn` is the one that says the child actually
+      // started. Resolving straight after the call instead would always report success:
+      // `error` fires on the next tick, by which time the promise has already settled,
+      // so a missing opener looked exactly like a browser that opened.
+      child.once("error", () => resolve(false));
+      child.once("spawn", () => {
+        // Unref'd, or a browser the OS keeps as a child would hold the server open
+        // past Ctrl-C — which is how "the process will not die" bugs are born.
+        child.unref();
+        resolve(true);
+      });
     } catch {
       resolve(false);
     }

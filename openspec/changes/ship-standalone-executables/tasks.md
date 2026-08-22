@@ -56,16 +56,42 @@
 
 ## 6. Landing it
 
-- [ ] 6.1 Build an executable and run it: it starts, serves the interface, and opens the browser
-      from a double-click as well as from a terminal. **Blocked locally**: this machine's Node
-      26.7 (macOS 15.7 x64, official build) produces `--build-sea` executables that segfault —
-      a one-line hello-world reproduces it, and the blob+postject path runs on the same runtime.
-      The proof comes from the matrix job, run from this branch via workflow_dispatch.
-- [ ] 6.6 Decide the blob's `mainFormat`: shipped without it (the issue #14 fix) the injected
-      executable runs the ESM bundle as CommonJS and dies on its first `import`; shipped with it
-      an older node asserts on the format byte. Both are observed. Needs a decision, not a guess
-- [ ] 6.2 Scenario-to-test matrix for both delta specs; nothing `partial` or `uncovered`
-- [ ] 6.3 `npm run typecheck`, `npm run lint`, the suites, `npm run test:e2e`
-- [ ] 6.4 `openspec validate ship-standalone-executables --strict`
-- [ ] 6.5 Reconcile with `add-cli-update-command` — both modify `CliFlags` and the argument
-      parser, so whichever lands second folds in the other rather than overwriting it
+- [x] 6.1 Build an executable and run it: it starts, serves the interface, and opens the browser
+      from a double-click as well as from a terminal. **Done locally on 2026-08-22**, via the
+      fallback: this machine's Node 26.7 (macOS x64) still produces `--build-sea` executables that
+      segfault — a one-line hello-world reproduces it — and `build-exe`'s smoke test catches that
+      and injects `sea-prep.blob` instead. The result runs, reports the released version, serves
+      the UI from 190 embedded assets in a directory holding nothing but a config, and opens the
+      browser with no TTY attached. The direct `--build-sea` path remains unproven on this host.
+- [x] 6.6 Decide the blob's `mainFormat`: **keep it, and gate the fallback on Node >= 26.**
+      The blob carries `mainFormat: "module"` because the bundle is ESM and without it the
+      runtime loads it as CommonJS and dies on its first `import`; a node that predates the
+      field asserts on it instead. Both were observed, and there is no version left where
+      injecting this blob into an older node produces something that runs. So `buildExe.ts`
+      now refuses before injecting when Node < 26, naming the version, rather than logging a
+      note and handing over a binary that asserts — which is what `ARuntimeTooOldToBuild`'s
+      "leaves nothing broken behind" requires. The fallback keeps its real purpose: a >= 26
+      runtime whose `--build-sea` is broken, which is exactly this machine. Covered by
+      "too old a Node refuses even with a blob, rather than injecting one it will reject".
+- [x] 6.2 Scenario-to-test matrix for both delta specs; nothing `partial` or `uncovered`.
+      `scenario-test-matrix.md`: **26 of 26 covered**. Two gaps found and closed:
+      `TheTarballCarriesWhatABuildNeeds` (new `npm run check:cli` asserts the tarball carries
+      both build inputs, wired into `release.yml` between the blob copy and publish) and
+      `AFailedOpenIsNotAFailedStart` (new `open-browser-failure.test.mjs` boots a real server
+      with the opener guaranteed to fail). The second exposed a **defect in shipped code**:
+      `openBrowser` resolved `true` synchronously after `spawn`, before the `error` event
+      could fire, so every failed open reported success and "could not open a browser" was
+      unreachable — task 3.3's "report failure" could not happen. Now resolved from the
+      `spawn`/`error` events.
+- [x] 6.3 `npm run typecheck`, `npm run lint`, the suites, `npm run test:e2e`
+- [x] 6.4 `openspec validate ship-standalone-executables --strict`
+- [x] 6.5 Reconcile with `add-cli-update-command` — both modify `CliFlags` and the argument
+      parser, so whichever lands second folds in the other rather than overwriting it.
+      **Assessed 2026-08-22: nothing was overwritten.** This change landed first in
+      `server/src/cli.ts`; `add-cli-update-command` never wired its subcommand in (no `update`
+      in the parser, and `server/src/update.ts` + `test/update.test.ts` are still untracked).
+      **Handed off deliberately**: once this change syncs its `cli` delta, that change's own
+      `cli` delta goes stale — its MODIFIED `CliFlags` block reproduces the pre-`build-exe`
+      text, so syncing it as-is would drop this change's paragraph and the
+      `HelpDocumentsTheBuildCommand` scenario. Folding that in is `add-cli-update-command`'s
+      job as the second lander, which is what design.md decided. Not pre-folded here.

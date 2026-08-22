@@ -293,8 +293,19 @@ export function buildExecutable(options: BuildOptions = {}): BuildResult {
         `install Node ${MINIMUM_DIRECT_BUILD_MAJOR} or newer and the executable is built directly, with no injection at all`,
     );
   }
+  // The blob carries `mainFormat: "module"`, because the bundle is ESM and without the
+  // field the runtime loads it as CommonJS and dies on its first `import`. A node that
+  // predates the field asserts on it at startup instead — issue #14, from the other
+  // direction. So the blob wants the same version `--build-sea` does, and there is no
+  // version left where injecting it produces something that runs: refuse here rather
+  // than hand over a binary that asserts, which is what "leaves nothing broken behind"
+  // means when the fallback cannot help either.
   if (!canBuildDirectly(version)) {
-    log(`[build-exe] node ${version} is older than ${MINIMUM_DIRECT_BUILD_MAJOR} — injecting sea-prep.blob instead`);
+    throw new BuildExeError(
+      `node ${version} cannot build a standalone executable: --build-sea needs ${MINIMUM_DIRECT_BUILD_MAJOR} or newer, ` +
+        `and sea-prep.blob declares a module format that a node older than that rejects at startup — ` +
+        `install Node ${MINIMUM_DIRECT_BUILD_MAJOR} or newer`,
+    );
   }
   fs.copyFileSync(process.execPath, target);
   // The copy inherits the mode, and a packaged node is commonly r-xr-xr-x — not
