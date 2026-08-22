@@ -30,7 +30,7 @@ The server SHALL look for its configuration file in this order, and SHALL use th
 
 ### Requirement: ConfigPrecedence
 
-For every setting that can come from more than one place, the server SHALL apply: command-line flag, then environment variable, then config file, then built-in default — the first one present wins. The `PI_OUTPOST_PORT` environment variable SHALL fall back to `PORT` when unset, so that a platform-injected `PORT` is honoured.
+For every setting that can come from more than one place, the server SHALL apply: command-line flag, then environment variable, then config file, then built-in default — the first one present wins, except editable runtime settings accepted through Settings. An accepted Settings update SHALL become the effective value for its managed sandbox and skill-path fields and SHALL take precedence over startup flags and environment variables for those fields. The `PI_OUTPOST_PORT` environment variable SHALL fall back to `PORT` when unset, so that a platform-injected `PORT` is honoured.
 
 #### Scenario: EnvOverridesFile
 - **GIVEN** a config file with `server.port` set to 3141
@@ -41,6 +41,11 @@ For every setting that can come from more than one place, the server SHALL apply
 - **GIVEN** `PI_OUTPOST_PORT=8080` in the environment
 - **WHEN** the server starts with `--port 9000`
 - **THEN** it listens on 9000
+
+#### Scenario: SettingsOverrideStartupSources
+- **GIVEN** a startup flag or environment variable overrides an editable runtime setting
+- **WHEN** the user applies a replacement value in Settings
+- **THEN** the replacement value is effective immediately and after the next server restart
 
 #### Scenario: TokenNeverComesFromArgv
 - **WHEN** the CLI is invoked with an unknown `--token` flag
@@ -165,3 +170,38 @@ runtime SHALL fail at configuration load with an error naming both settings.
 - **GIVEN** a configuration selecting `rpc` together with a sandbox
 - **WHEN** the configuration is loaded
 - **THEN** startup fails naming both settings rather than running the child with unconfined tools
+
+### Requirement: DurableInteractiveConfiguration
+
+The server SHALL preserve unrelated keys and formatting-compatible JSON data when it persists editable runtime settings to its loaded configuration file.
+
+#### Scenario: Persist an interactive skill-path update
+- **WHEN** an accepted settings update adds a skill path
+- **THEN** the loaded configuration file contains that path under its user skill-path key and retains unrelated configuration values, including the file's own `skillPaths`
+
+### Requirement: FileWatchSetting
+
+The configuration SHALL support a setting that turns file-browser directory watching on or off.
+It SHALL default to on, so a workspace browser tells the truth about the workspace without being
+configured to.
+
+It SHALL be settable to off, for hosts where watching is a liability rather than a feature — a
+filesystem that emits no events, or one whose watch budget is spent elsewhere.
+
+An invalid value SHALL make startup fail with an error naming the setting, like every other
+configuration error.
+
+#### Scenario: WatchingOnByDefault
+- **GIVEN** a configuration that does not mention file watching
+- **WHEN** the configuration is loaded
+- **THEN** watching is enabled
+
+#### Scenario: WatchingExplicitlyDisabled
+- **GIVEN** a configuration that sets file watching to false
+- **WHEN** the configuration is loaded
+- **THEN** watching is disabled
+
+#### Scenario: InvalidWatchSetting
+- **GIVEN** a configuration whose file-watching setting is not a boolean
+- **WHEN** the configuration is loaded
+- **THEN** loading fails with an error naming the setting
