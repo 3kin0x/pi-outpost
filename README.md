@@ -91,7 +91,22 @@ npm run dev
 npm run test --workspace server        # integration tests: no model auth needed, no tokens spent
 npm run test --workspace ui            # component unit tests (vitest, jsdom, testing-library)
 npm run test:live --workspace server   # drives real agent turns (needs model auth, costs tokens)
+npm run test:linux                     # the server suite on Linux, non-root, the way CI runs it
 ```
+
+`test:linux` needs Docker and exists for one class of bug that a macOS or Windows
+checkout cannot see, because it does not fail there — it *passes* there. A test asserting
+"this path cannot be written" by naming `/proc/...` succeeds instantly where there is no
+`/proc`, and on Linux the write never returns; the runner then reports every test as
+passing and prints no summary, because a test file that never exits never reports. Run it
+before pushing anything that touches paths, permissions, signals, or file watching.
+
+It runs as a non-root user on purpose: as root, every "refuses an unwritable path"
+assertion in this repository passes for the wrong reason. Dependencies are cached in a
+Docker volume and reinstalled only when `package-lock.json` changes, so a second run costs
+about what a local one does. `--fresh` ignores that cache; `--shell` drops you into the
+same container; any other arguments replace the command (`npm run test:linux -- npm test
+--workspace ui`).
 
 Server integration tests boot a real server against a throwaway workspace (isolated `agentDir` — your
 sessions and extensions are never touched) and talk to it over HTTP/WebSocket. See `server/test/README.md`.
