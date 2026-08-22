@@ -62,9 +62,18 @@ function recorder() {
   };
 }
 
-/** Long enough that a coalescing window has certainly closed. */
+/**
+ * Long enough that a coalescing window has certainly closed.
+ *
+ * Generously so, and deliberately not `COALESCE_MS * 4`. That was 100 ms, which is
+ * ample on an idle laptop and not always ample on a CI runner doing three other
+ * things: a setup-era announcement then arrives *after* the drain and lands in the
+ * next assertion, which reads as the watcher announcing something it should not.
+ * Waiting longer costs a few hundred milliseconds across this file and removes a
+ * failure mode that looks exactly like a real defect.
+ */
 function settle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, COALESCE_MS * 4));
+  return new Promise((resolve) => setTimeout(resolve, Math.max(COALESCE_MS * 12, 300)));
 }
 
 describe("createDirectoryWatcher", () => {
@@ -159,14 +168,27 @@ describe("createDirectoryWatcher", () => {
   test("collapses a burst into one announcement", async () => {
     const root = await workspace();
     const log = recorder();
-    const burstWindowMs = 100;
+    // Wide enough that forty writes provably finish inside it, on a loaded CI runner
+    // as well as here. The window opens on the first event and is never extended, so
+    // a burst that outlives it opens a second one — correctly, and the spec says so:
+    // "at most one notification for that directory *and that window*". With 100 ms
+    // the writes themselves straddled the boundary on Windows, and the test failed
+    // for the one reason that is not a defect.
+    const burstWindowMs = 2_000;
     const watcher = createDirectoryWatcher({ root, onChange: log.onChange, coalesceMs: burstWindowMs });
     try {
       await watcher.watch("");
       // One `npm install` is thousands of these. The client's reaction is to
       // re-list, which is idempotent, so collapsing them costs nothing.
+      const began = Date.now();
       await Promise.all(Array.from({ length: 40 }, (_, i) => writeFile(path.join(root, `f${i}.txt`), "x")));
-      await new Promise((resolve) => setTimeout(resolve, burstWindowMs * 4));
+      const writing = Date.now() - began;
+      assert.ok(
+        writing < burstWindowMs,
+        `the burst took ${writing} ms, which is not inside a ${burstWindowMs} ms window — this test proves nothing`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, burstWindowMs + 500));
       assert.deepEqual(log.seen, [""], `expected one announcement, got ${log.seen.length}`);
     } finally {
       watcher.close();
