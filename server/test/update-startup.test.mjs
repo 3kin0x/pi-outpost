@@ -25,6 +25,12 @@ import { startServer } from "./harness.mjs";
 
 const SERVER_SRC = fileURLToPath(new URL("../src", import.meta.url));
 
+/** The parent's environment, minus the coverage sink a child must not write into. */
+function envWithoutCoverageSink() {
+  const { NODE_V8_COVERAGE: _sink, ...rest } = process.env;
+  return rest;
+}
+
 /**
  * A registry that accepts and never answers, for the duration of one test.
  *
@@ -121,7 +127,12 @@ describe("a check still in flight", () => {
           const child = execFile(
             process.execPath,
             ["--import", "tsx/esm", "--input-type=module", "--eval", script],
-            { cwd: path.dirname(SERVER_SRC), timeout: 9_000 },
+            // NODE_V8_COVERAGE dropped for the reason harness.mjs drops it: a child
+            // that inherits it writes a coverage file the parent's reporter then has
+            // to parse, and a child killed partway through writing one fails the job
+            // with every test passing. This file is not in the coverage glob today;
+            // the guard is here so that stops being load-bearing.
+            { cwd: path.dirname(SERVER_SRC), timeout: 9_000, env: envWithoutCoverageSink() },
             (error) => {
               if (error && error.killed)
                 reject(
