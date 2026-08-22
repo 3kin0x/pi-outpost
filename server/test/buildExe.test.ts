@@ -6,7 +6,7 @@
  * not execute, a path silently overwritten.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
@@ -152,6 +152,29 @@ describe("refusing rather than shipping something broken", () => {
           }),
         (error: unknown) => error instanceof BuildExeError && /26/.test((error as Error).message),
       );
+    });
+  });
+
+  test("too old a Node refuses even with a blob, rather than injecting one it will reject", () => {
+    withTempDir((dir) => {
+      const target = path.join(dir, "pi-outpost");
+      writeFileSync(path.join(dir, "pi-outpost.sea.mjs"), "// a bundle");
+      // The blob is right there, and it is still the wrong answer: it declares a module
+      // format a node this old asserts on, so injecting it produces a binary that dies
+      // at startup. Naming the version is the only useful thing left to say.
+      writeFileSync(path.join(dir, "sea-prep.blob"), "a blob that declares mainFormat");
+      assert.throws(
+        () =>
+          buildExecutable({
+            out: target,
+            cwd: dir,
+            inputsFrom: dir,
+            nodeVersion: "v24.9.0",
+          }),
+        (error: unknown) => error instanceof BuildExeError && /26/.test((error as Error).message),
+      );
+      // and nothing broken is left behind for someone to find and try to run
+      assert.equal(existsSync(target), false);
     });
   });
 });
