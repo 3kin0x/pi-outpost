@@ -60,9 +60,17 @@ describe("where the browser is sent", () => {
 
 describe("launching it", () => {
   test("an opener that is not there answers false rather than throwing", async () => {
-    // Asked for the Linux opener on a machine that has none: the caller must get a
-    // verdict it can print, not an exception that would take the server down with it.
-    const opened = await openBrowser("http://127.0.0.1:3141/", "linux");
-    assert.equal(typeof opened, "boolean");
+    // Asked for an opener no machine has: the caller must get a verdict it can print,
+    // not an exception that would take the server down with it. Asserted as `false`
+    // and not merely as a boolean, because the first version of this resolved `true`
+    // synchronously after `spawn` — before the `error` event could fire — so every
+    // failed open reported success and the "open it yourself" line was unreachable.
+    // The opener asked for is the one this host cannot have: `cmd` does not exist on a
+    // unix box, and `xdg-open` does not exist on Windows. Naming a platform directly
+    // would be flaky in the other direction — a Linux runner may well have xdg-open,
+    // and the open would succeed.
+    const absentHere: NodeJS.Platform = process.platform === "win32" ? "linux" : "win32";
+    const opened = await openBrowser("http://127.0.0.1:3141/", absentHere);
+    assert.equal(opened, false);
   });
 });
