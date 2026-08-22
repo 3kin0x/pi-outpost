@@ -19,7 +19,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, describe, test } from "node:test";
 import { startServer } from "./harness.mjs";
 
@@ -79,9 +79,13 @@ describe("a check still in flight", () => {
     // show this either way. A process whose *only* pending work is the check exits
     // immediately when that work cannot hold the loop, and waits out the full
     // registry timeout when it can — which is the regression this guards.
+    //
+    // The module is named as a file:// URL, not a path. A Windows path is not a valid
+    // ESM specifier — `D:\a\...` fails to resolve — so the child exited 1 in under
+    // 200 ms and the timing assertion below happily agreed the process had not lingered.
     const agentDir = await mkdtemp(path.join(tmpdir(), "pi-outpost-unref-"));
     const script = `
-      import { runStartupUpdateNotice } from ${JSON.stringify(path.join(SERVER_SRC, "update.ts"))};
+      import { runStartupUpdateNotice } from ${JSON.stringify(pathToFileURL(path.join(SERVER_SRC, "update.ts")).href)};
       void runStartupUpdateNotice({
         version: "0.8.0",
         agentDir: ${JSON.stringify(agentDir)},
@@ -108,7 +112,10 @@ describe("a check still in flight", () => {
       });
 
       const elapsed = Date.now() - began;
-      assert.equal(code, 0);
+      // Checked before the timing, and with the child's own output when it fails: a
+      // process that died on its own error also "did not linger", so the exit code is
+      // what separates the property under test from a broken fixture.
+      assert.equal(code, 0, `the probe process exited ${code}`);
       // Generous, because it starts a runtime and a TypeScript loader. What it has
       // to separate from is a full 10s registry timeout.
       assert.ok(elapsed < 8_000, `the process lingered ${elapsed} ms for a pending check`);
