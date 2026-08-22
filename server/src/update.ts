@@ -235,7 +235,22 @@ export interface RegistryResponse {
   json: () => Promise<unknown>;
 }
 
-export type RegistryFetch = (url: string, options: { signal: AbortSignal }) => Promise<RegistryResponse>;
+export type RegistryFetch = (
+  url: string,
+  options: {
+    signal: AbortSignal;
+    /**
+     * Whether the request may be the reason this process stays alive.
+     *
+     * False for a check somebody asked for — `update --check` has nothing else
+     * pending, so a request that cannot hold the loop open lets the process drain
+     * before the answer arrives: no output, and node exits 13 complaining about an
+     * unsettled top-level await. True only for the background notice, which nobody
+     * asked for and which must never delay a shutdown.
+     */
+    unref: boolean;
+  },
+) => Promise<RegistryResponse>;
 
 /**
  * One GET, with a socket that cannot hold the process open.
@@ -247,8 +262,13 @@ export type RegistryFetch = (url: string, options: { signal: AbortSignal }) => P
  * invisible against a registry that refuses fast, which is every registry until the
  * one that hangs.
  *
- * So the request is made through `node:https` and its socket is unref'd. No new
+ * So the request is made through `node:https` and its socket can be unref'd. No new
  * dependency either way; what changes is that there is something to unref.
+ *
+ * Whether it *is* unref'd is the caller's to say. Unconditionally unref'ing was a bug
+ * with no failing test: `update --check` awaits this at top level with nothing else
+ * pending, so the loop emptied and the process exited 13 without printing a verdict.
+ * Every test injected a fake, so the real request was never on the path being asserted.
  */
 const registryRequest: RegistryFetch = async (url, options) => {
   const target = new URL(url);
@@ -278,12 +298,12 @@ const registryRequest: RegistryFetch = async (url, options) => {
           });
         });
         // The response body is a handle too, and it arrives after the socket one.
-        response.socket?.unref();
+        if (options.unref) response.socket?.unref();
       },
     );
     // The reason this function exists. `socket` fires once the connection is assigned,
     // which is the earliest point there is anything to unref.
-    request.on("socket", (socket) => socket.unref());
+    if (options.unref) request.on("socket", (socket) => socket.unref());
     request.on("error", reject);
     options.signal.addEventListener("abort", () => request.destroy(new Error("aborted")), { once: true });
     request.end();
@@ -300,17 +320,34 @@ const registryRequest: RegistryFetch = async (url, options) => {
  */
 export async function fetchLatestVersion(
   running: string,
-  options: { fetchImpl?: RegistryFetch; timeoutMs?: number; registry?: string } = {},
+  options: {
+    fetchImpl?: RegistryFetch;
+    timeoutMs?: number;
+    registry?: string;
+    /**
+     * Nobody asked for this check, so it may not hold the process open — the socket
+     * and the timeout are both unref'd. Defaults to false, which is the safe way
+     * round: an answer that arrives late costs a caller some seconds, where an
+     * answer that never arrives costs it the answer.
+     */
+    background?: boolean;
+  } = {},
 ): Promise<VersionCheck> {
   const doFetch = options.fetchImpl ?? registryRequest;
   const registry = resolveRegistry(options.registry);
+  const background = options.background ?? false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? REGISTRY_TIMEOUT_MS);
-  // The timer is unref'd for the same reason the socket is: neither may be why a
-  // process that wants to exit does not.
-  timer.unref?.();
+  // Unref'd for the same reason the socket is, and under the same condition: for a
+  // background check neither may be why a process that wants to exit does not. For a
+  // command, this timer is what turns a registry that hangs into a reported failure
+  // rather than a silent exit.
+  if (background) timer.unref?.();
   try {
-    const response = await doFetch(`${registry}/${PACKAGE_NAME}/latest`, { signal: controller.signal });
+    const response = await doFetch(`${registry}/${PACKAGE_NAME}/latest`, {
+      signal: controller.signal,
+      unref: background,
+    });
     if (!response.ok) return { status: "failed", running, reason: `the registry answered ${response.status}` };
     const body: unknown = await response.json();
     const latest = (body as { version?: unknown } | null)?.version;
@@ -393,6 +430,9 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
     return 1;
   }
 
+  // Not a background check: this one was asked for, and it is the only thing the
+  // process has left to do. Nothing here may be unref'd, or the loop empties before
+  // the registry answers and the command prints nothing at all.
   const check = await fetchLatestVersion(options.version, {
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.registry ? { registry: options.registry } : {}),
@@ -762,6 +802,7 @@ export async function runStartupUpdateNotice(options: StartupNoticeOptions): Pro
   }
 
   const check = await fetchLatestVersion(options.version, {
+    background: true,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.registry ? { registry: options.registry } : {}),
   });
