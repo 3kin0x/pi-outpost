@@ -1370,8 +1370,13 @@ describe("commands on the wire", () => {
     ],
     [
       "updateConfig",
-      (api) => api.updateConfig({ root: "/w", allowWrite: true, allowBash: false }),
-      { type: "update_config", sandbox: { root: "/w", allowWrite: true, allowBash: false } },
+      (api) => api.updateConfig({ sandbox: { root: "/w", allowWrite: true, allowBash: false }, userSkillPaths: ["/mnt/skills"] }),
+      { type: "update_config", sandbox: { root: "/w", allowWrite: true, allowBash: false }, userSkillPaths: ["/mnt/skills"] },
+    ],
+    [
+      "browseServerDirectory",
+      (api) => api.browseServerDirectory("/mnt"),
+      { type: "browse_server_directory", path: "/mnt" },
     ],
   ];
 
@@ -1584,5 +1589,137 @@ describe("directory_changed", () => {
     act(() => result.current.refreshFileTree());
 
     expect(sentSince(before)).not.toContainEqual(expect.objectContaining({ type: "list_directory" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Settings: server-directory browsing and the apply that must be persisted
+// ---------------------------------------------------------------------------
+describe("server path browsing", () => {
+  it("holds the listing the server answered with", async () => {
+    const result = await connected();
+    act(() => result.current.browseServerDirectory("/mnt"));
+    expect(result.current.state.serverBrowse?.status).toBe("loading");
+
+    act(() =>
+      mockWs!.receive({
+        type: "server_directory",
+        requestId: lastRequestId(),
+        path: "/mnt",
+        parent: "/",
+        entries: [{ name: "skills", path: "/mnt/skills" }],
+      }),
+    );
+
+    expect(result.current.state.serverBrowse).toMatchObject({
+      status: "loaded",
+      path: "/mnt",
+      parent: "/",
+      entries: [{ name: "skills", path: "/mnt/skills" }],
+    });
+  });
+
+  it("ignores an answer to a browse the user has moved past", async () => {
+    const result = await connected();
+    act(() => result.current.browseServerDirectory("/mnt"));
+    const stale = lastRequestId();
+    act(() => result.current.browseServerDirectory("/srv"));
+    const current = lastRequestId();
+
+    act(() =>
+      mockWs!.receive({ type: "server_directory", requestId: stale, path: "/mnt", parent: "/", entries: [{ name: "old", path: "/mnt/old" }] }),
+    );
+
+    // Still waiting on the browse the user actually asked for.
+    expect(result.current.state.serverBrowse).toMatchObject({ status: "loading", requestId: current });
+    expect(result.current.state.serverBrowse?.entries).toEqual([]);
+
+    act(() =>
+      mockWs!.receive({ type: "server_directory", requestId: current, path: "/srv", parent: "/", entries: [{ name: "new", path: "/srv/new" }] }),
+    );
+    expect(result.current.state.serverBrowse).toMatchObject({ status: "loaded", path: "/srv" });
+  });
+
+  it("keeps the directory on screen when the next one cannot be read", async () => {
+    const result = await connected();
+    act(() => result.current.browseServerDirectory("/"));
+    act(() =>
+      mockWs!.receive({
+        type: "server_directory",
+        requestId: lastRequestId(),
+        path: "/",
+        parent: null,
+        entries: [{ name: "private", path: "/private" }],
+      }),
+    );
+    act(() => result.current.browseServerDirectory("/private"));
+    act(() =>
+      mockWs!.receive({
+        type: "server_directory_error",
+        requestId: lastRequestId(),
+        path: "/private",
+        message: 'Cannot list "/private": permission denied',
+      }),
+    );
+
+    expect(result.current.state.serverBrowse?.status).toBe("error");
+    expect(result.current.state.serverBrowse?.error).toMatch(/permission denied/);
+    expect(result.current.state.serverBrowse?.entries).toEqual([{ name: "private", path: "/private" }]);
+    // Path and entries stay the same directory: otherwise "Use this directory"
+    // would offer the path the server just refused to read.
+    expect(result.current.state.serverBrowse?.path).toBe("/");
+  });
+
+  it("drops the listing when the picker is closed", async () => {
+    const result = await connected();
+    act(() => result.current.browseServerDirectory("/"));
+    act(() => result.current.closeServerBrowser());
+    expect(result.current.state.serverBrowse).toBeNull();
+  });
+});
+
+describe("applying settings", () => {
+  it("stays in flight until the server acknowledges a persisted change", async () => {
+    const result = await connected();
+    act(() => result.current.updateConfig({ userSkillPaths: ["/mnt/skills"] }));
+    expect(result.current.state.settingsApply).toEqual({ status: "applying" });
+
+    act(() =>
+      mockWs!.receive({
+        type: "update_config_ack",
+        sessionId: "sess_2",
+        branding: {},
+        model: "",
+        thinkingLevel: "off",
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        userSkillPaths: ["/mnt/skills"],
+      }),
+    );
+
+    expect(result.current.state.settingsApply).toBeNull();
+    expect(result.current.state.userSkillPaths).toEqual(["/mnt/skills"]);
+  });
+
+  it("carries the server's refusal back to the settings menu", async () => {
+    const result = await connected();
+    act(() => result.current.updateConfig({ userSkillPaths: ["/mnt/skills"] }));
+    act(() => mockWs!.receive({ type: "error", message: "cannot save /etc/pi.json: read-only file system" }));
+
+    expect(result.current.state.settingsApply).toEqual({
+      status: "error",
+      message: "cannot save /etc/pi.json: read-only file system",
+    });
+    // The configured paths are still the server's — nothing was applied.
+    expect(result.current.state.userSkillPaths).toEqual([]);
+  });
+
+  it("leaves an unrelated error alone when no apply is waiting", async () => {
+    const result = await connected();
+    act(() => mockWs!.receive({ type: "error", message: "something else broke" }));
+    expect(result.current.state.settingsApply).toBeNull();
+    expect(result.current.state.errors).toEqual(["something else broke"]);
   });
 });

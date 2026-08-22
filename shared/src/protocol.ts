@@ -198,6 +198,16 @@ export interface DirEntry {
   type: "file" | "directory" | "symlink-file" | "symlink-directory" | "other";
 }
 
+/**
+ * One directory on the server host, for the settings path picker. Carries its
+ * absolute path as well as its name: the picker selects a server-side path, and
+ * rebuilding one by joining names client-side would guess at the separator.
+ */
+export interface ServerDirEntry {
+  name: string;
+  path: string;
+}
+
 /** Failure kinds of file-browser operations; carried on file_browser_error. */
 export type FileBrowserErrorReason =
   | "outside-root"
@@ -311,6 +321,18 @@ export interface SessionSnapshot {
   credentials?: CredentialStatus;
   /** Absolute paths of loaded extension files. */
   extensionPaths?: string[];
+  /**
+   * Skill paths from the server's configuration file. Shown by the settings menu,
+   * never editable there: they belong to the deployment, and an apply must not be
+   * able to take one away from everyone who connects.
+   */
+  skillPaths?: string[];
+  /**
+   * Skill paths added through Settings — the editable list. Built-in skills are
+   * in neither list: they are inventory, and arrive as `commands` with source
+   * `"skill"`.
+   */
+  userSkillPaths?: string[];
   /** Tools the active agent session can call; `active` means the model receives it in its prompt. */
   tools?: { name: string; active: boolean }[];
   /**
@@ -459,7 +481,18 @@ export type ServerMessage =
   /** Both revisions are echoed so the client can drop a reply its selection has moved past. */
   | { type: "git_file_diff"; requestId: string; base: GitRevision; target: GitRevision; beforeText: string; afterText: string }
   | { type: "git_error"; requestId: string; message: string }
-  /** Sandbox config was updated — carries the full new snapshot after session replacement. */
+  /**
+   * Directories immediately beneath one server-side path, for a settings path
+   * picker. Unrelated to `directory_listing`: that one is confined to the
+   * workspace and lists files too, this one starts at `/` and lists directories.
+   */
+  | { type: "server_directory"; requestId: string; path: string; parent: string | null; entries: ServerDirEntry[] }
+  | { type: "server_directory_error"; requestId: string; path: string; message: string }
+  /**
+   * Editable runtime settings were persisted and the session rebuilt from them —
+   * carries the full new snapshot. Sent only after a successful write: a client
+   * that gets this may tell the user the change survived a restart.
+   */
   | ({ type: "update_config_ack" } & SessionSnapshot)
   | ExtensionUIRequest;
 
@@ -544,8 +577,24 @@ export type ClientMessage =
   | { type: "set_credential"; provider: string; apiKey: string }
   /** Declare an OpenAI-compatible endpoint (a corporate gateway, vLLM, Ollama…). */
   | { type: "declare_provider"; provider: string; baseUrl: string; apiKey: string; models: string[]; compat?: ProviderCompat }
-  /** Update the sandbox config at runtime — server will replace the session with the new settings. */
-  | { type: "update_config"; sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } }
+  /** List the directories under one server-side path (absolute; `/` is the top). */
+  | { type: "browse_server_directory"; path: string; requestId: string }
+  /**
+   * Update the editable runtime settings — the server persists them to the
+   * configuration file it loaded, then replaces the session so the new toolset
+   * and skills take effect. Each field is optional: a deployment with no sandbox
+   * can still change its skill paths.
+   */
+  | {
+      type: "update_config";
+      sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
+      /**
+       * The Settings-managed skill paths, replacing that list. Absent leaves it
+       * untouched. The configuration file's own `skillPaths` are not addressable
+       * from here — they cannot be rewritten or removed by a client.
+       */
+      userSkillPaths?: string[];
+    }
   | ExtensionUIResponse;
 
 /**

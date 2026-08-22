@@ -3,6 +3,12 @@
  *
  * One rule, everywhere: **flag > environment variable > config file > default**.
  *
+ * With one deliberate exception: settings the user changes in the interface are
+ * written back into the file (see `persistEditableSettings`) as explicit values,
+ * and explicit values are exactly what a flag or a variable can no longer move —
+ * a sandbox root chosen in Settings must not be silently relocated by an
+ * inherited PI_OUTPOST_CWD on the next start.
+ *
  * The file itself is searched for in four places, and the first one found is the
  * only one read (see `findConfigFile`) — configs are never merged, so the file
  * you are looking at is the configuration that is running. Without any file the
@@ -272,8 +278,19 @@ export interface AppConfig {
    * the git root — neither is scoped by agentDir.
    */
   noSkills: boolean;
-  /** Explicit skill paths to load (SKILL.md files or skill directories). */
+  /**
+   * Explicit skill paths from the configuration file — the operator's own list.
+   * The interface may show these but never rewrite or remove them: they are the
+   * deployment's, not a user's, and a settings apply must not be able to take a
+   * skill away from everyone who connects.
+   */
   skillPaths: string[];
+  /**
+   * Skill paths added through Settings. Held apart from `skillPaths` for exactly
+   * that reason — this is the list the interface owns, adds to, and removes from.
+   * Both lists are loaded; see `allSkillPaths`.
+   */
+  userSkillPaths: string[];
   /**
    * Skip auto-discovering prompt templates entirely (both agentDir and the
    * project's cwd/.pi/prompts). Like noSkills, cwd doubles as both the
@@ -490,6 +507,7 @@ export function loadConfig(
   launchDir: string,
   flags: CliOptions = {},
   env: NodeJS.ProcessEnv = process.env,
+  options: { quiet?: boolean } = {},
 ): AppConfig {
   const filePath = findConfigFile(launchDir, flags, env);
 
@@ -508,6 +526,7 @@ export function loadConfig(
     extensionScripts: [],
     noSkills: false,
     skillPaths: [],
+    userSkillPaths: [],
     noPromptTemplates: false,
     promptPaths: [],
     appendSystemPrompt: [],
@@ -580,6 +599,7 @@ export function loadConfig(
       allowBash,
       readExceptions: [
         ...(optionalStringArray(raw, "skillPaths") ?? []).map(resolve),
+        ...(optionalStringArray(raw, "userSkillPaths") ?? []).map(resolve),
         ...(optionalStringArray(raw, "promptPaths") ?? []).map(resolve),
         ...(optionalStringArray(raw, "extensionPaths") ?? []).map(resolve),
         ...(optionalStringArray(raw, "extensionScripts") ?? []).map(resolve),
@@ -659,6 +679,7 @@ export function loadConfig(
   config.extensionScripts = (optionalStringArray(raw, "extensionScripts") ?? []).map(resolve);
   config.noSkills = optionalBoolean(raw, "noSkills", false);
   config.skillPaths = (optionalStringArray(raw, "skillPaths") ?? []).map(resolve);
+  config.userSkillPaths = (optionalStringArray(raw, "userSkillPaths") ?? []).map(resolve);
   config.noPromptTemplates = optionalBoolean(raw, "noPromptTemplates", false);
   config.promptPaths = (optionalStringArray(raw, "promptPaths") ?? []).map(resolve);
   config.allowedModels = optionalModelList(raw, "allowedModels");
@@ -768,10 +789,16 @@ export function loadConfig(
   applyRuntime(config, flags, env);
   requireTokenOffLoopback(config);
 
-  console.log(`[config] loaded ${filePath}`);
+  // `quiet` is for the validation load in persistEditableSettings: it reads a
+  // temporary file that is not the running configuration, and announcing it as
+  // one would name a path that exists for a few milliseconds.
+  const announce = (line: string) => {
+    if (!options.quiet) console.log(line);
+  };
+  announce(`[config] loaded ${filePath}`);
   // The runtime decides what actually executes on this host, so say it every start —
   // with the command redacted, since an argument vector can carry an API key.
-  console.log(
+  announce(
     config.agentRuntime.mode === "rpc"
       ? `[config] agent runtime rpc: ${redactRpcCommand(config.agentRuntime)}`
       : `[config] agent runtime embedded`,
@@ -781,9 +808,9 @@ export function loadConfig(
   if (config.sandbox) {
     const { root, allowWrite, writableRoot, allowBash } = config.sandbox;
     const write = allowWrite ? (writableRoot ?? root) : "none";
-    console.log(`[config] sandbox root=${root} write=${write} bash=${allowBash}`);
+    announce(`[config] sandbox root=${root} write=${write} bash=${allowBash}`);
   } else {
-    console.log(`[config] no sandbox: full toolset in ${config.cwd}`);
+    announce(`[config] no sandbox: full toolset in ${config.cwd}`);
   }
   return config;
 }
@@ -855,4 +882,129 @@ export function applyRuntime(config: AppConfig, flags: CliOptions, env: NodeJS.P
 
   if (flags.port !== undefined) config.port = flags.port;
   if (flags.host !== undefined) config.host = flags.host;
+}
+
+// --- Persisting what the interface changed ---------------------------------------------
+
+/**
+ * The runtime settings the Settings menu may change, in the shape the protocol
+ * carries them. Deliberately narrow: this is the projection of `AppConfig` that
+ * an authenticated browser client is allowed to write back to disk.
+ */
+export interface EditableSettings {
+  sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
+  /**
+   * Skill paths the interface manages (absolute). Absent leaves them untouched.
+   * The operator's `skillPaths` are never written here and never removed.
+   */
+  userSkillPaths?: string[];
+}
+
+/**
+ * Every explicit skill path the session should load: the deployment's, then the
+ * ones added from Settings. Order matters — the loader keeps the first skill it
+ * meets under a given name, so the configuration file wins a name collision
+ * against a directory someone added from the interface.
+ */
+export function allSkillPaths(config: AppConfig): string[] {
+  return [...config.skillPaths, ...config.userSkillPaths];
+}
+
+/** A settings write that never happened — the loaded configuration file is unchanged. */
+export class ConfigWriteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigWriteError";
+  }
+}
+
+/**
+ * Write accepted settings back to the configuration file the server loaded, so a
+ * restart finds them.
+ *
+ * Three properties the callers depend on:
+ *
+ * - **Unrelated keys survive.** The file is re-read and the managed keys are
+ *   replaced in the parsed object, rather than a fresh object being serialized
+ *   from `AppConfig` — which would silently drop everything the loader turns
+ *   into defaults (`branding`, `server`, an operator's comments-as-keys) and
+ *   rewrite every relative path as absolute.
+ * - **The merged file is validated before it replaces anything.** A configuration
+ *   that cannot load is a server that will not start on next boot, and the user
+ *   who caused it has closed the settings menu by then. The candidate is loaded
+ *   through `loadConfig` itself — not a lookalike check — so the boot that matters
+ *   is the one that was rehearsed.
+ * - **The replacement is atomic.** The candidate is written beside the target and
+ *   renamed over it, so a crash mid-write leaves the previous file, not half of
+ *   the new one.
+ *
+ * Paths are written absolute: they were chosen against the server's filesystem,
+ * and a relative path in the file means "relative to the file", which is a
+ * different place as soon as the config moves.
+ */
+export function persistEditableSettings(
+  config: AppConfig,
+  update: EditableSettings,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const target = config.configFile;
+  let raw: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(target, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`its top level is not an object`);
+    }
+    raw = parsed as Record<string, unknown>;
+  } catch (error) {
+    throw new ConfigWriteError(
+      `cannot read ${target}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (update.sandbox) {
+    const existing =
+      typeof raw.sandbox === "object" && raw.sandbox !== null && !Array.isArray(raw.sandbox)
+        ? { ...(raw.sandbox as Record<string, unknown>) }
+        : {};
+    // `root` is always written, even when it equals the current effective value:
+    // an absent root falls back to `cwd`, which PI_OUTPOST_CWD and --cwd can move.
+    // Writing it is what makes an accepted Settings change outrank those on the
+    // next start (see ConfigPrecedence) instead of quietly following them.
+    existing.root = path.resolve(update.sandbox.root);
+    existing.allowWrite = update.sandbox.allowWrite;
+    existing.allowBash = update.sandbox.allowBash;
+    if (update.sandbox.writableRoot === undefined) delete existing.writableRoot;
+    else existing.writableRoot = path.resolve(update.sandbox.writableRoot);
+    raw.sandbox = existing;
+  }
+  // Written under its own key: `skillPaths` belongs to whoever wrote the file, and
+  // an apply must never be able to drop one of theirs.
+  if (update.userSkillPaths) raw.userSkillPaths = update.userSkillPaths.map((p) => path.resolve(p));
+
+  const serialized = `${JSON.stringify(raw, null, 2)}\n`;
+  const candidate = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
+  try {
+    // Keep the target's permissions: a config file holding a token is often 0600,
+    // and a rename carries the *candidate's* mode onto it.
+    let mode: number | undefined;
+    try {
+      mode = fs.statSync(target).mode & 0o777;
+    } catch {
+      mode = undefined;
+    }
+    fs.writeFileSync(candidate, serialized, mode === undefined ? undefined : { mode });
+    // Rehearse the next boot. `--config` outranks every other way of finding a
+    // file, so this loads the candidate and nothing else.
+    loadConfig(config.cwd, { config: candidate }, env, { quiet: true });
+    fs.renameSync(candidate, target);
+  } catch (error) {
+    try {
+      fs.rmSync(candidate, { force: true });
+    } catch {
+      // The stale candidate is noise, not a failure to report over the one below.
+    }
+    throw new ConfigWriteError(
+      `cannot save ${target}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }

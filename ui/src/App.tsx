@@ -109,6 +109,8 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     setCredential,
     declareProvider,
     updateConfig,
+    browseServerDirectory,
+    closeServerBrowser,
   } = useAgent(serverUrl, token, embedded);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -492,7 +494,12 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             tools={state.tools}
             commands={state.commands}
             sandbox={state.sandbox}
+            userSkillPaths={state.userSkillPaths}
+            serverBrowse={state.serverBrowse}
+            settingsApply={state.settingsApply}
             versions={state.versions}
+            onBrowseServerPath={browseServerDirectory}
+            onCloseServerBrowser={closeServerBrowser}
             onUpdateConfig={updateConfig}
             onFetchGitLog={fetchGitLog}
             onShowCommit={fetchGitShow}

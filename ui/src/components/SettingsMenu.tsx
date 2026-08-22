@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useClickOutside } from "../util/clickOutside";
+import { ServerPathPicker } from "./ServerPathPicker";
+import type { ServerBrowseState, SettingsApplyState } from "../useAgent";
 
 interface SandboxConfig {
   root: string;
@@ -9,26 +11,57 @@ interface SandboxConfig {
   locks?: { root?: boolean; allowWrite?: boolean; allowBash?: boolean; writableRoot?: boolean };
 }
 
+/** Which path field the directory picker is currently open for. */
+type PickerField = "root" | "writableRoot" | "skill";
+
 interface SettingsMenuProps {
   extensionPaths: string[];
   tools: { name: string; active: boolean }[];
   commands: { name: string; source: string }[];
   sandbox: SandboxConfig | null;
+  /**
+   * Skill paths added through Settings — the only ones this menu shows. The
+   * configuration file's own `skillPaths` are the deployment's business: they
+   * load either way, their skills appear in the inventory above, and they are
+   * neither listed nor removable here.
+   */
+  userSkillPaths: string[];
+  /** The open server-directory listing, or null when no picker is open. */
+  serverBrowse: ServerBrowseState | null;
+  /** In-flight apply, so the menu can stay open and say why one was refused. */
+  applyState: SettingsApplyState | null;
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
-  onUpdateConfig: (sandbox: SandboxConfig) => void;
+  onBrowseServerPath: (path: string) => void;
+  onCloseServerBrowser: () => void;
+  onUpdateConfig: (update: { sandbox?: SandboxConfig; userSkillPaths?: string[] }) => void;
 }
 
-export function SettingsMenu({ extensionPaths, tools, commands, sandbox, versions, onUpdateConfig }: SettingsMenuProps) {
+export function SettingsMenu({
+  extensionPaths,
+  tools,
+  commands,
+  sandbox,
+  userSkillPaths,
+  serverBrowse,
+  applyState,
+  versions,
+  onBrowseServerPath,
+  onCloseServerBrowser,
+  onUpdateConfig,
+}: SettingsMenuProps) {
   const [open, setOpen] = useState(false);
   const [sandboxRoot, setSandboxRoot] = useState("");
   const [sandboxWritableRoot, setSandboxWritableRoot] = useState("");
   const [sandboxAllowWrite, setSandboxAllowWrite] = useState(false);
   const [sandboxAllowBash, setSandboxAllowBash] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const ref = useClickOutside(() => setOpen(false));
+  const [draftSkillPaths, setDraftSkillPaths] = useState<string[]>(userSkillPaths);
+  const [picking, setPicking] = useState<PickerField | null>(null);
+  const ref = useClickOutside(() => close());
   const activeTools = tools.filter((tool) => tool.active);
   const inactiveTools = tools.filter((tool) => !tool.active);
   const skills = commands.filter((command) => command.source === "skill");
+  const applying = applyState?.status === "applying";
+  const applyError = applyState?.status === "error" ? applyState.message : null;
 
   // Sync local state when sandbox config changes (e.g. after apply ack)
   useEffect(() => {
@@ -40,25 +73,67 @@ export function SettingsMenu({ extensionPaths, tools, commands, sandbox, version
     }
   }, [sandbox]);
 
+  // Same for the skill paths this menu owns: the server's list is the truth, and a
+  // refused apply leaves it exactly as it was — which is what the draft resets to.
+  useEffect(() => {
+    setDraftSkillPaths(userSkillPaths);
+  }, [userSkillPaths]);
+
+  // Close on a *successful* apply only. A refusal keeps the menu up with the
+  // server's reason on it — the previous version closed on send, so the one
+  // message explaining why nothing happened landed behind a closed menu.
+  const wasApplying = useRef(false);
+  useEffect(() => {
+    if (wasApplying.current && applyState === null) close();
+    wasApplying.current = applying;
+  }, [applyState, applying]);
+
   function close() {
     setOpen(false);
-    setApplying(false);
+    setPicking(null);
+    onCloseServerBrowser();
+  }
+
+  /** Open the picker for one field, starting from whatever that field points at. */
+  function startPicking(field: PickerField, from: string) {
+    setPicking(field);
+    onBrowseServerPath(from.trim() || "/");
+  }
+
+  function handlePicked(path: string) {
+    if (picking === "root") setSandboxRoot(path);
+    else if (picking === "writableRoot") setSandboxWritableRoot(path);
+    else if (picking === "skill" && !draftSkillPaths.includes(path)) setDraftSkillPaths([...draftSkillPaths, path]);
+    setPicking(null);
+    onCloseServerBrowser();
   }
 
   function handleApply() {
-    if (!sandbox) return;
-    setApplying(true);
-    // Always send all fields; the server enforces locks, so skipping locked
+    // Always send all sandbox fields; the server enforces locks, so skipping locked
     // fields here would fail server-side validation (typeof check on missing bools).
-    const payload: SandboxConfig = {
-      root: sandboxRoot,
-      allowWrite: sandboxAllowWrite,
-      allowBash: sandboxAllowBash,
-      writableRoot: sandboxWritableRoot.trim() || undefined,
-    };
-    onUpdateConfig(payload);
-    close();
+    const payload: SandboxConfig | undefined = sandbox
+      ? {
+          root: sandboxRoot,
+          allowWrite: sandboxAllowWrite,
+          allowBash: sandboxAllowBash,
+          writableRoot: sandboxWritableRoot.trim() || undefined,
+        }
+      : undefined;
+    onUpdateConfig({ ...(payload ? { sandbox: payload } : {}), userSkillPaths: draftSkillPaths });
   }
+
+  const picker = picking !== null && (
+    <ServerPathPicker
+      label={picking === "skill" ? "Choose a skills directory" : picking === "root" ? "Choose the sandbox root" : "Choose the writable root"}
+      browse={serverBrowse}
+      onBrowse={onBrowseServerPath}
+      onSelect={handlePicked}
+      onCancel={() => {
+        setPicking(null);
+        onCloseServerBrowser();
+      }}
+    />
+  );
 
   return (
     <div className="relative" ref={ref}>
@@ -88,8 +163,49 @@ export function SettingsMenu({ extensionPaths, tools, commands, sandbox, version
               </details>}
               {skills.length === 0 ? <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">No skills loaded</p> : <details className="mt-2">
                 <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">{skills.length} skills loaded</summary>
+                {/* Inventory, not settings: this lists what the session actually has,
+                    built-in skills included, and offers no way to remove any of them.
+                    What can be added and removed is the path list below. */}
                 <ul className="mt-2 space-y-1">{skills.map((skill) => <li key={skill.name} className="rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{skill.name}</li>)}</ul>
               </details>}
+
+              <div className="mt-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-zinc-600 dark:text-zinc-400">User skill paths</span>
+                  <button
+                    type="button"
+                    onClick={() => startPicking("skill", draftSkillPaths[draftSkillPaths.length - 1] ?? "/")}
+                    className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
+                  >
+                    Add directory…
+                  </button>
+                </div>
+                {draftSkillPaths.length === 0 ? (
+                  <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">No skill directories added</p>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {draftSkillPaths.map((skillPath) => (
+                      <li
+                        key={skillPath}
+                        className="flex items-center justify-between gap-2 rounded bg-zinc-50 px-2 py-1 dark:bg-zinc-800"
+                      >
+                        <span className="truncate font-mono text-xs text-zinc-600 dark:text-zinc-400" title={skillPath}>
+                          {skillPath}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${skillPath}`}
+                          onClick={() => setDraftSkillPaths(draftSkillPaths.filter((entry) => entry !== skillPath))}
+                          className="shrink-0 text-xs text-zinc-500 hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400"
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {picking === "skill" && <div className="mt-2">{picker}</div>}
+              </div>
             </section>
             {/* Extensions section */}
             <section className="mb-4">
@@ -120,27 +236,51 @@ export function SettingsMenu({ extensionPaths, tools, commands, sandbox, version
                       <span className="text-xs text-zinc-600 dark:text-zinc-400">
                         Root {sandbox.locks?.root ? <span className="text-zinc-400">(locked)</span> : null}
                       </span>
-                      <input
-                        type="text"
-                        value={sandboxRoot}
-                        onChange={(e) => setSandboxRoot(e.target.value)}
-                        disabled={sandbox.locks?.root}
-                        className="mt-1 w-full rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm outline-none focus:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:focus:border-zinc-500"
-                      />
+                      <div className="mt-1 flex gap-2">
+                        <input
+                          type="text"
+                          value={sandboxRoot}
+                          onChange={(e) => setSandboxRoot(e.target.value)}
+                          disabled={sandbox.locks?.root}
+                          className="w-full rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm outline-none focus:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:focus:border-zinc-500"
+                        />
+                        <button
+                          type="button"
+                          aria-label="Browse for sandbox root"
+                          disabled={sandbox.locks?.root}
+                          onClick={() => startPicking("root", sandboxRoot)}
+                          className="shrink-0 rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-600 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
+                        >
+                          Browse…
+                        </button>
+                      </div>
                     </label>
+                    {picking === "root" && picker}
                     <label className="block">
                       <span className="text-xs text-zinc-600 dark:text-zinc-400">
                         Writable root (optional) {sandbox.locks?.writableRoot ? <span className="text-zinc-400">(locked)</span> : null}
                       </span>
-                      <input
-                        type="text"
-                        value={sandboxWritableRoot}
-                        onChange={(e) => setSandboxWritableRoot(e.target.value)}
-                        disabled={sandbox.locks?.writableRoot}
-                        placeholder="Same as root"
-                        className="mt-1 w-full rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
-                      />
+                      <div className="mt-1 flex gap-2">
+                        <input
+                          type="text"
+                          value={sandboxWritableRoot}
+                          onChange={(e) => setSandboxWritableRoot(e.target.value)}
+                          disabled={sandbox.locks?.writableRoot}
+                          placeholder="Same as root"
+                          className="w-full rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
+                        />
+                        <button
+                          type="button"
+                          aria-label="Browse for writable root"
+                          disabled={sandbox.locks?.writableRoot}
+                          onClick={() => startPicking("writableRoot", sandboxWritableRoot || sandboxRoot)}
+                          className="shrink-0 rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-600 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
+                        >
+                          Browse…
+                        </button>
+                      </div>
                     </label>
+                    {picking === "writableRoot" && picker}
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
@@ -165,23 +305,33 @@ export function SettingsMenu({ extensionPaths, tools, commands, sandbox, version
                         Allow bash {sandbox.locks?.allowBash ? <span className="text-zinc-400">(locked)</span> : null}
                       </span>
                     </label>
-                  <button
-                    type="button"
-                    disabled={applying || !sandboxRoot.trim()}
-                    onClick={handleApply}
-                    className="w-full rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-zinc-300"
-                  >
-                    {applying ? "Applying…" : "Apply & restart session"}
-                  </button>
-                  <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
-                    File browser paths update immediately. Agent tools (read/write/bash) use the new sandbox after a server restart.
-                  </p>
                 </div>
               </section>
             )}
             {!sandbox && (
               <p className="text-xs text-zinc-400 dark:text-zinc-500">No sandbox configured</p>
             )}
+
+            {/* One apply for every editable setting — a deployment with no sandbox
+                still has skill paths to change. */}
+            <div className="mt-4 space-y-2">
+              {applyError && (
+                <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                  {applyError}
+                </p>
+              )}
+              <button
+                type="button"
+                disabled={applying || (sandbox !== null && !sandboxRoot.trim())}
+                onClick={handleApply}
+                className="w-full rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                {applying ? "Applying…" : "Apply & restart session"}
+              </button>
+              <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+                Saved to the server's configuration file, then the session is rebuilt — the change survives a restart.
+              </p>
+            </div>
 
             {/* Versions section */}
             {versions && (

@@ -17,7 +17,7 @@
  */
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import type { AppConfig } from "./config.ts";
+import { allSkillPaths, type AppConfig } from "./config.ts";
 
 export interface RpcResourceContext {
   /** Skills shipped with pi-outpost, already filtered by `noSkills` upstream. */
@@ -108,7 +108,7 @@ export function rpcResourceArgs(config: AppConfig, context: RpcResourceContext):
   // The operator's paths come first for the same reason as in the embedded
   // runtime: the loader keeps the first skill under a given name, so theirs must
   // precede ours for an override to override anything.
-  each("--skill", [...config.skillPaths, ...context.bundledSkills]);
+  each("--skill", [...allSkillPaths(config), ...context.bundledSkills]);
 
   if (config.noPromptTemplates) args.push("--no-prompt-templates");
   each("--prompt-template", config.promptPaths);

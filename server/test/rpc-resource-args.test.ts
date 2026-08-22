@@ -20,6 +20,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     extensionScripts: [],
     noSkills: false,
     skillPaths: [],
+    userSkillPaths: [],
     noPromptTemplates: false,
     promptPaths: [],
     offline: false,
@@ -56,6 +57,16 @@ describe("rpcResourceArgs", () => {
     assert.ok(args.indexOf("--no-extensions") < args.indexOf("--extension"), "the switch must precede the path");
     assert.ok(args.indexOf("--no-skills") < args.indexOf("--skill"));
     assert.equal(after(args, "--skill"), "/skills/one");
+  });
+
+  test("forwards the user's own skill paths after the operator's", () => {
+    // Same rule as the embedded loader: the first skill under a given name wins, so
+    // a directory added from Settings must not be able to shadow the deployment's.
+    const args = rpcResourceArgs(config({ skillPaths: ["/deployment"], userSkillPaths: ["/mine"] }), {
+      bundledSkills: ["/bundled"],
+      appendSystemPrompt: [],
+    });
+    assert.deepEqual(args, ["--skill", "/deployment", "--skill", "/mine", "--skill", "/bundled"]);
   });
 
   test("puts the operator's skills before the bundled ones, so an override overrides", () => {

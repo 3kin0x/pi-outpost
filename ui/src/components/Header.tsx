@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode } from "@pi-outpost/shared";
-import type { GitStatusState, SessionSearch } from "../useAgent";
+import type { GitStatusState, ServerBrowseState, SessionSearch, SettingsApplyState } from "../useAgent";
 import { stripAnsi } from "../util/ansi";
 import { useClickOutside } from "../util/clickOutside";
 import { GitMenu } from "./GitMenu";
@@ -31,7 +31,18 @@ interface HeaderProps {
   commands?: { name: string; source: string }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
-  onUpdateConfig: (sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }) => void;
+  /** Skill paths added through Settings — editable there. */
+  userSkillPaths: string[];
+  /** Open server-directory listing behind the settings path picker. */
+  serverBrowse: ServerBrowseState | null;
+  /** In-flight settings apply, so a refusal can be shown where it was requested. */
+  settingsApply: SettingsApplyState | null;
+  onBrowseServerPath: (path: string) => void;
+  onCloseServerBrowser: () => void;
+  onUpdateConfig: (update: {
+    sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
+    userSkillPaths?: string[];
+  }) => void;
   onToggleSidebar: () => void;
   onToggleHideTools: () => void;
   onToggleTheme: () => void;
@@ -378,7 +389,12 @@ export function Header(props: HeaderProps) {
           tools={props.tools ?? []}
           commands={props.commands ?? []}
           sandbox={props.sandbox}
+          userSkillPaths={props.userSkillPaths}
+          serverBrowse={props.serverBrowse}
+          applyState={props.settingsApply}
           versions={props.versions}
+          onBrowseServerPath={props.onBrowseServerPath}
+          onCloseServerBrowser={props.onCloseServerBrowser}
           onUpdateConfig={props.onUpdateConfig}
         />
         <span
