@@ -336,6 +336,26 @@ export interface AppConfig {
    * answer for a deployment — a kiosk that must open, a service that must not.
    */
   openBrowser?: boolean;
+  /**
+   * Whether update checking may make a request. Tri-state on purpose.
+   *
+   * Left undefined it follows `offline`, which is the sensible default both ways: a
+   * host that cannot reach the network is not helped by a request that hangs.
+   *
+   * Set explicitly it beats `offline` in both directions, because the two settings
+   * name different networks. `offline` says remote *model catalogs* are unreachable,
+   * and a deployment can be air-gapped from those while still reaching a package
+   * registry through an internal proxy — which is exactly the host where knowing a
+   * release exists matters most, updated rarely and by hand.
+   */
+  updateCheck?: boolean;
+  /**
+   * The registry update checks query, for a deployment whose registry is an internal
+   * proxy. Unset, it is resolved from the package manager's own configuration and
+   * failing that from the public default — so this only exists for the case npm
+   * itself cannot answer.
+   */
+  updateRegistry?: string;
   port: number;
   host: string;
   /** Extra exact Origins allowed on the WebSocket (for embedding in another app). */
@@ -700,6 +720,27 @@ export function loadConfig(
   config.webContext = optionalBoolean(raw, "webContext", true);
   config.offline = optionalBoolean(raw, "offline", false);
   if (raw.openBrowser !== undefined) config.openBrowser = optionalBoolean(raw, "openBrowser", true);
+  // Read only when present, or the tri-state collapses: a stored `false` is
+  // indistinguishable from "not mentioned", and "not mentioned" is what lets
+  // `offline` decide.
+  if (raw.updateCheck !== undefined) config.updateCheck = optionalBoolean(raw, "updateCheck", true);
+  if (raw.updateRegistry !== undefined) {
+    const registry = optionalString(raw, "updateRegistry");
+    if (registry !== undefined) {
+      let parsed: URL;
+      try {
+        parsed = new URL(registry);
+      } catch {
+        fail(`"updateRegistry" must be a URL (got "${registry}")`);
+      }
+      // A registry that is not http(s) cannot be fetched, and finding that out at the
+      // first check — in the background, silently — is the worst time to learn it.
+      if (parsed!.protocol !== "http:" && parsed!.protocol !== "https:") {
+        fail(`"updateRegistry" must be an http or https URL (got "${registry}")`);
+      }
+      config.updateRegistry = registry;
+    }
+  }
 
   if (raw.server !== undefined) {
     const server = asObject(raw.server, "server");
