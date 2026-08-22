@@ -2,7 +2,7 @@
 
 Lets an operator find out that a newer pi-outpost exists and move to it, without having to know how their copy was installed or which command that installation needs.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: UpdateReportsWhatIsAvailable
 
@@ -23,6 +23,11 @@ It SHALL resolve the newest version from the package registry. When the registry
 #### Scenario: CheckCannotReachTheRegistry
 - **WHEN** the registry is unreachable
 - **THEN** the command reports that the check failed and why, and does not claim the installation is current
+
+#### Scenario: TheCheckOutlivesNothingButItselfIsNotCutShort
+- **GIVEN** the check is the only work the process has left, and the request is the real one rather than an injected fake
+- **WHEN** the registry answers, or fails to
+- **THEN** the command prints a verdict either way and exits with its own code — the process SHALL NOT drain while the check is in flight, which would produce no output and an exit code belonging to the runtime
 
 ### Requirement: UpdateActsOnTheRunningInstallation
 

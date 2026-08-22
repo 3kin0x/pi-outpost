@@ -74,3 +74,13 @@
 - [x] 5.4 Folded `ship-standalone-executables`' `CliFlags` paragraph and its
   `HelpDocumentsTheBuildCommand` scenario into this change's `cli` delta — this change lands
   second, which is the order design.md fixed.
+- [x] 5.5 The command printed nothing. `pi-outpost update --check` exited 13 — node's code for an
+  unsettled top-level await — with no verdict at all, so the feature did nothing while 35 of 35
+  scenarios were covered. The unref that 5.1 added is right for the background notice and wrong
+  for the command, which awaits it at top level with nothing else pending: the loop emptied before
+  the registry answered. The unref is now the caller's decision and defaults to off. Missed
+  because **every scenario injected a `fetchImpl`** — the real request was never on an asserted
+  path. Added `TheCheckOutlivesNothingButItselfIsNotCutShort` and
+  `server/test/update-command-process.test.mjs`, which drives the real socket from a child that
+  awaits the command the way index.ts does; both tests fail against the old code. Found by running
+  the binary while preparing the 0.12.0 release.

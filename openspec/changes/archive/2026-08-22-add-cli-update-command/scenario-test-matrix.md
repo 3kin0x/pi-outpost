@@ -4,7 +4,7 @@ Every `#### Scenario:` in the three delta specs, classified against the assertio
 would fail if the contract broke — not against test names.
 
 Enumerated with `rg '^#### Scenario:' openspec/changes/add-cli-update-command/specs/`
-(5 + 8 + 22 = 35).
+(5 + 8 + 23 = 36).
 
 Verified on 2026-08-22: `npm run typecheck` ✓, `npm run lint` ✓, server suite ✓,
 ui suite ✓, `openspec validate add-cli-update-command --strict` ✓.
@@ -55,6 +55,7 @@ replacing it — the order `design.md` fixed.
 | CheckFindsANewerVersion | covered | `server/test/update.test.ts` — "a newer version is reported with both numbers, and nothing is installed" |
 | CheckFindsNothingNewer | covered | `server/test/update.test.ts` — "being current says so and exits zero" |
 | CheckCannotReachTheRegistry | covered | `server/test/update.test.ts` — "a registry it cannot reach is a failure, never a claim of currency", which asserts the exit code *and* that no currency claim appears |
+| TheCheckOutlivesNothingButItselfIsNotCutShort | covered | `server/test/update-command-process.test.mjs` — both tests drive the real `registryRequest` against a real socket from a child that awaits `runUpdateCommand` at top level, as index.ts does. One asserts a verdict is printed and the exit code is 0; the other asserts a hanging registry becomes a reported failure and exit 1. Both fail without the fix, with exit 13 and no output |
 
 ### Requirement: UpdateActsOnTheRunningInstallation
 
@@ -107,8 +108,26 @@ is refused even when nothing is newer".
 
 ## Result
 
-**35 of 35 covered.** Several things were found on the way, both by writing a test the
+**36 of 36 covered.** Several things were found on the way, both by writing a test the
 spec asked for rather than by review.
+
+### The defect 35 of 35 did not find: the command printed nothing at all
+
+Found by running the binary while preparing the 0.12.0 release, not by any test.
+`pi-outpost update --check` printed no verdict and exited 13 — node's code for an
+unsettled top-level await. The whole feature did nothing, and every scenario was
+covered.
+
+`registryRequest` unref'd its socket unconditionally, which is right for the background
+notice and wrong for the command: the command awaits it at top level with nothing else
+pending, so the event loop emptied before the registry answered. The unref is now the
+caller's decision, defaulting to a ref'd request — an answer that arrives late costs
+some seconds, where an answer that never arrives costs the answer.
+
+The reason 35 scenarios missed it is one line: **every one of them injected a
+`fetchImpl`**. The real request was never on any asserted path. `TheCheckOutlives...`
+is the scenario that now says so, and its tests drive the real socket from a child
+process. A matrix is proof about the code the tests reach.
 
 ### The defect this found: a pending check held the process open
 
