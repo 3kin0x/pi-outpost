@@ -50,6 +50,7 @@ import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
+import { runStartupUpdateNotice, runUpdateCommand, updateCheckEnabled, whyCheckingDisabled } from "./update.ts";
 import { allSkillPaths, ConfigWriteError, type EditableSettings, loadConfig, NoConfigError, persistEditableSettings } from "./config.ts";
 import { listServerDirectories, ServerDirectoryError } from "./serverDirectories.ts";
 import {
@@ -176,6 +177,45 @@ if (cli.command === "build-exe") {
     complain(error);
     process.exit(1);
   }
+}
+
+// Like build-exe, before the configuration is loaded — but not *without* it. The
+// settings that can turn checking off live in that file, so a refusal has to be able
+// to name them; equally, refusing to look for a newer version because the operator
+// has not written a config yet would be an obstacle invented for its own sake. So the
+// file is read when there is one, and its absence is simply no settings.
+if (cli.command === "update") {
+  const settings = (() => {
+    try {
+      const loaded = loadConfig(LAUNCH_DIR, cli.flags);
+      return {
+        updateCheck: loaded.updateCheck,
+        offline: loaded.offline,
+        registry: loaded.updateRegistry,
+        agentDir: loaded.agentDir,
+      };
+    } catch (error) {
+      // Only *absence* is tolerated, and only because refusing to say what the newest
+      // version is until the operator has written a config would be an obstacle
+      // invented for its own sake. Everything else is reported and stops here: a
+      // `--config` path that does not exist, or an invalid `updateCheck`, means the
+      // operator asked for settings this command would then have ignored — and
+      // ignoring them could mean making a request they had switched off.
+      if (error instanceof NoConfigError) return {};
+      complain(error);
+      process.exit(1);
+    }
+  })();
+
+  const enabled = updateCheckEnabled(settings);
+  process.exit(
+    await runUpdateCommand({
+      version: VERSION,
+      checkOnly: cli.update.check,
+      ...(enabled ? {} : { checkingDisabled: true, disabledReason: whyCheckingDisabled(settings) }),
+      ...(settings.registry !== undefined ? { registry: settings.registry } : {}),
+    }),
+  );
 }
 
 const config = (() => {
@@ -676,6 +716,22 @@ await app.listen({ port: PORT, host: HOST });
       if (!opened) console.log(`[server] could not open a browser — open ${url} yourself`);
     });
   }
+
+  // Scheduled rather than fired inline, and the timer is unref'd. Three separate
+  // things are being kept true: the check starts only after the server is answering,
+  // nothing on this path is awaited, and a request still in flight must not be the
+  // reason Ctrl-C leaves a process behind. The third is the one that only shows up in
+  // production, which is why it is a timer and not a bare call.
+  const noticeTimer = setTimeout(() => {
+    void runStartupUpdateNotice({
+      version: VERSION,
+      ...(config.agentDir !== undefined ? { agentDir: config.agentDir } : {}),
+      settings: { updateCheck: config.updateCheck, offline: config.offline },
+      ...(config.updateRegistry !== undefined ? { registry: config.updateRegistry } : {}),
+      log: (line) => console.log(line),
+    });
+  }, 0);
+  noticeTimer.unref?.();
 }
 
 // --- Agent session runtime ---------------------------------------------------
