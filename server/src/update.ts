@@ -154,7 +154,13 @@ export function resolveRegistry(configured?: string): string {
 const trimSlash = (url: string): string => url.replace(/\/+$/, "");
 
 /** npm's stored registry, or nothing if npm is absent or slow to answer. */
+let npmRegistryMemo: { value: string | undefined } | undefined;
+
 function npmConfiguredRegistry(): string | undefined {
+  // At most once per process. Each call is a child process with a five-second
+  // ceiling, and nothing about npm's configuration changes while this runs.
+  if (npmRegistryMemo !== undefined) return npmRegistryMemo.value;
+  npmRegistryMemo = { value: undefined };
   try {
     // `getBuiltinModule` rather than `require`, which does not exist in an ES
     // module, and rather than a dynamic import, which cannot be awaited here.
@@ -168,7 +174,8 @@ function npmConfiguredRegistry(): string | undefined {
       shell: false,
     }).trim();
     // npm prints "undefined" rather than nothing when a key is unset.
-    return out && out !== "undefined" && out !== "null" ? out : undefined;
+    npmRegistryMemo.value = out && out !== "undefined" && out !== "null" ? out : undefined;
+    return npmRegistryMemo.value;
   } catch {
     return undefined;
   }
@@ -594,12 +601,22 @@ function comparePrerelease(left: string, right: string): number {
 
 /** The evidence of the process running right now. */
 export function currentEvidence(version: string): ChannelEvidence {
+  const entryPath = process.argv[1];
+  const isSea = runningAsExecutable();
+  // Resolved only when it could change the answer. `detectChannel` decides a checkout
+  // from the version alone and an executable from the runtime, and neither needs to
+  // know where npm keeps its global packages — so asking eagerly would spend a child
+  // process, every time, on the two cases that never look at it. One of those is the
+  // startup notice on a developer's machine.
+  const needsGlobalRoot =
+    version !== "dev" && !isSea && entryPath !== undefined && segments(entryPath).includes("node_modules");
+  const root = needsGlobalRoot ? globalNodeModules() : undefined;
   return {
     version,
-    entryPath: process.argv[1],
+    entryPath,
     execPath: process.execPath,
-    isSea: runningAsExecutable(),
-    ...(globalNodeModules() !== undefined ? { globalRoot: globalNodeModules() } : {}),
+    isSea,
+    ...(root !== undefined ? { globalRoot: root } : {}),
   };
 }
 
@@ -615,9 +632,16 @@ export function currentEvidence(version: string): ChannelEvidence {
  * and prints what it saw. That is the right answer when the alternative is installing
  * into a directory this process only guessed at.
  */
+let globalRootMemo: { value: string | undefined } | undefined;
+
 function globalNodeModules(): string | undefined {
+  if (globalRootMemo !== undefined) return globalRootMemo.value;
+  globalRootMemo = { value: undefined };
   const prefix = process.env.npm_config_prefix?.trim();
-  if (prefix) return path.join(prefix, process.platform === "win32" ? "" : "lib", "node_modules");
+  if (prefix) {
+    globalRootMemo.value = path.join(prefix, process.platform === "win32" ? "" : "lib", "node_modules");
+    return globalRootMemo.value;
+  }
   try {
     const { execFileSync } = process.getBuiltinModule("node:child_process");
     const npm = process.env.npm_execpath;
@@ -628,7 +652,8 @@ function globalNodeModules(): string | undefined {
       stdio: ["ignore", "pipe", "ignore"],
       shell: false,
     }).trim();
-    return out && out !== "undefined" ? out : undefined;
+    globalRootMemo.value = out && out !== "undefined" ? out : undefined;
+    return globalRootMemo.value;
   } catch {
     return undefined;
   }

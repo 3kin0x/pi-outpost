@@ -366,7 +366,10 @@ async function runUpdate(
   const code = await runUpdateCommand({
     version: over.version ?? "0.8.0",
     checkOnly: over.checkOnly ?? false,
-    ...(over.channel ? { channel: over.channel } : {}),
+    // Always named, so `detectChannel` is never asked to work it out from this
+    // process — which would spawn `npm root -g` per call. What that resolution does
+    // is tested directly, next door.
+    channel: over.channel ?? "global",
     ...(over.checkingDisabled ? { checkingDisabled: true, disabledReason: over.disabledReason } : {}),
     fetchImpl: over.fetchImpl ?? stubRegistry(over.latest ?? "0.9.0"),
     // Named explicitly so resolveRegistry never shells out to `npm config get

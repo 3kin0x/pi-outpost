@@ -25,13 +25,23 @@ import { startServer } from "./harness.mjs";
 
 const SERVER_SRC = fileURLToPath(new URL("../src", import.meta.url));
 
-/** Accepts, holds the socket, answers nothing. */
+/**
+ * Accepts, holds the socket, answers nothing.
+ *
+ * Everything it owns is unref'd — the listener and every socket it accepts. A black
+ * hole that keeps its own test process alive is the same bug these tests are about,
+ * one level up: the assertions passed on CI and then the run sat for two minutes and
+ * was cancelled, because nothing was left to do and something was still holding the
+ * loop. `after` closes it too; the unrefs mean a mis-ordered teardown cannot hang.
+ */
 const sockets = new Set();
 const blackHole = net.createServer((socket) => {
+  socket.unref();
   sockets.add(socket);
   socket.on("close", () => sockets.delete(socket));
 });
 await new Promise((resolve) => blackHole.listen(0, "127.0.0.1", resolve));
+blackHole.unref();
 const BLACK_HOLE = `http://127.0.0.1:${blackHole.address().port}`;
 
 after(async () => {
