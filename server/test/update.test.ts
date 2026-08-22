@@ -305,7 +305,16 @@ describe("the remembered answer", () => {
 
   test("an unwritable location is survived silently", async () => {
     // The next start simply asks again; nothing here is worth failing over.
-    await writeCache(path.join("/proc", "definitely-not-writable"), { latest: "1.0.0", checkedAt: 5 });
+    //
+    // A regular file standing where a directory is needed, rather than a path under
+    // /proc. That one hung the whole Linux suite for five minutes and passed
+    // everywhere else, because macOS and Windows have no /proc to reach at all — so
+    // the test asserted "survived silently" on two platforms and blocked on the
+    // third. ENOTDIR arrives immediately, on every platform, for the same reason.
+    const root = await workspace();
+    const notADirectory = path.join(root, "in-the-way");
+    await writeFile(notADirectory, "");
+    await writeCache(path.join(notADirectory, "nested"), { latest: "1.0.0", checkedAt: 5 });
   });
 
   test("a fresh answer is used, a stale one is not", () => {
