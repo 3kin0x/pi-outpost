@@ -23,10 +23,17 @@
  * and the same kernel interfaces, which is what the failing class depends on, but not
  * a byte-for-byte runner image.
  *
+ * What runs by default is both of the ubuntu leg's server steps — the suite, and then
+ * the coverage run — with CI=true, as the runner sets it. The second step is not a
+ * formality. `main` went red on it with every test passing: npm children spawned by the
+ * code under test inherited `NODE_V8_COVERAGE`, were killed at their timeout mid-write,
+ * and the parent's reporter died on the truncated file. That step is ubuntu-only on CI,
+ * so it is only reachable from here; running `npm test` alone would reproduce nothing.
+ *
  * Usage:
- *   npm run test:linux                    # the server suite, as CI runs it
+ *   npm run test:linux                    # both server steps, as the ubuntu leg runs them
  *   npm run test:linux -- --shell         # a shell in the same container, to poke about
- *   npm run test:linux -- npm test --workspace ui
+ *   npm run test:linux -- npm test --workspace server   # one step, when iterating
  *   npm run test:linux -- --fresh         # ignore the dependency cache
  */
 import { execFileSync, spawnSync } from "node:child_process";
@@ -42,7 +49,10 @@ const argv = process.argv.slice(2);
 const fresh = argv.includes("--fresh");
 const shell = argv.includes("--shell");
 const rest = argv.filter((arg) => arg !== "--fresh" && arg !== "--shell");
-const command = rest.length > 0 ? rest.join(" ") : "npm test --workspace server";
+// The ubuntu leg of CI, in order: the suite, then coverage over the unit suites. Both,
+// because each has failed on its own while the other was green.
+const DEFAULT_COMMAND = "npm test --workspace server && npm run test:coverage --workspace server";
+const command = rest.length > 0 ? rest.join(" ") : DEFAULT_COMMAND;
 
 const die = (message, detail) => {
   console.error(`[test-linux] ${message}`);
@@ -94,10 +104,12 @@ id -u runner >/dev/null 2>&1 || useradd -m runner
 chown -R runner /w
 
 echo "[test-linux] running as: ${shell ? "an interactive shell" : command}"
+# CI=true is set the way the runner sets it: some code declines to open a browser
+# under it, and some tests assert exactly that.
 ${
   shell
-    ? 'exec su runner -s /bin/bash'
-    : `su runner -s /bin/bash -c ${JSON.stringify(`cd /w && ${command}`)}`
+    ? `exec su runner -s /bin/bash -c ${JSON.stringify("export CI=true; cd /w; exec bash")}`
+    : `su runner -s /bin/bash -c ${JSON.stringify(`cd /w && export CI=true && ${command}`)}`
 }
 `;
 
@@ -133,7 +145,7 @@ if (run.status === 124) {
     `the suite hung on Linux and was killed (${seconds}s).`,
     "A test file that never exits never reports, so the runner will have printed every\n" +
       "test as passing and no summary. The culprit is NOT the last file listed — that is\n" +
-      "merely the last one that finished. Re-run with a per-test timeout to name it:\n" +
+      "merely the last one that finished. Narrow it by running one step at a time:\n" +
       "  npm run test:linux -- npm test --workspace server",
   );
 }

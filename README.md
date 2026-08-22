@@ -91,7 +91,7 @@ npm run dev
 npm run test --workspace server        # integration tests: no model auth needed, no tokens spent
 npm run test --workspace ui            # component unit tests (vitest, jsdom, testing-library)
 npm run test:live --workspace server   # drives real agent turns (needs model auth, costs tokens)
-npm run test:linux                     # the server suite on Linux, non-root, the way CI runs it
+npm run test:linux                     # the ubuntu CI leg — suite then coverage — on Linux, non-root
 ```
 
 `test:linux` needs Docker and exists for one class of bug that a macOS or Windows
@@ -101,12 +101,19 @@ checkout cannot see, because it does not fail there — it *passes* there. A tes
 passing and prints no summary, because a test file that never exits never reports. Run it
 before pushing anything that touches paths, permissions, signals, or file watching.
 
+It runs both server steps of the ubuntu leg — `npm test` and then `npm run test:coverage` —
+because each has gone red on its own while the other was green, and coverage runs on no
+other platform. That step failed on `main` with 1250 tests passing and none failing: npm
+children spawned by the code under test inherited `NODE_V8_COVERAGE`, were killed at their
+timeout mid-write, and the parent's reporter died parsing the truncated file. Nothing short
+of running the real step would have shown it.
+
 It runs as a non-root user on purpose: as root, every "refuses an unwritable path"
 assertion in this repository passes for the wrong reason. Dependencies are cached in a
 Docker volume and reinstalled only when `package-lock.json` changes, so a second run costs
 about what a local one does. `--fresh` ignores that cache; `--shell` drops you into the
-same container; any other arguments replace the command (`npm run test:linux -- npm test
---workspace ui`).
+same container; any other arguments replace the command, which is how you run one step at a
+time while iterating (`npm run test:linux -- npm test --workspace server`).
 
 Server integration tests boot a real server against a throwaway workspace (isolated `agentDir` — your
 sessions and extensions are never touched) and talk to it over HTTP/WebSocket. See `server/test/README.md`.
