@@ -117,9 +117,11 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME#v}"
           publish=""
+          matched=""
           for pkg in cli embed; do
             version=$(node -p "require('./$pkg/package.json').version")
             if [ "$version" = "$tag" ]; then
+              matched="$matched $pkg"
               name=$(node -p "require('./$pkg/package.json').name")
               if npm view "$name@$tag" version > /dev/null 2>&1; then
                 echo "$name@$tag is already on npm — skipping"
@@ -128,9 +130,12 @@ jobs:
               fi
             fi
           done
-          if [ -z "$publish" ]; then
-            echo "::error::no package is at version $tag (or all are already published)"
+          if [ -z "$matched" ]; then
+            echo "::error::no package is at version $tag"
             exit 1
+          fi
+          if [ -z "$publish" ]; then
+            echo "All matching packages are already on npm — continuing to repair or refresh the GitHub Release"
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
@@ -195,7 +200,15 @@ jobs:
         with:
           path: executables
           merge-multiple: true
-      - name: Attach the executables to the release
+      - name: Create the release if needed and attach the executables
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" executables/* --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release upload "$GITHUB_REF_NAME" executables/* --clobber --repo "$GITHUB_REPOSITORY"

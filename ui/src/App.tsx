@@ -35,6 +35,7 @@ import { ModelBar } from "./components/ModelBar";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TokenGate } from "./components/TokenGate";
+import { WorkPlanPanel } from "./components/WorkPlanPanel";
 import { useAgent } from "./useAgent";
 
 export interface AppHandle {
@@ -146,6 +147,17 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
   }
   // Session analysis drawer: closed until asked for, from the model bar's usage indicator.
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [workPlanOpen, setWorkPlanOpen] = useState(true);
+  function toggleAnalysis() {
+    const next = !analysisOpen;
+    setAnalysisOpen(next);
+    if (next) setWorkPlanOpen(false);
+  }
+  function toggleWorkPlan() {
+    const next = !workPlanOpen;
+    setWorkPlanOpen(next);
+    if (next) setAnalysisOpen(false);
+  }
   const [attachmentErrors, setAttachmentErrors] = useState<string[]>([]);
   // Files being copied into the workspace right now — the composer shows one chip
   // each and refuses to send while any of them is outstanding.
@@ -509,6 +521,17 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               viewer, a commit view) stays below the header's menus no matter what
               z-index it asks for. */}
           <div className="relative z-0 flex min-h-0 flex-1 flex-col">
+          {state.workPlan && (
+            <WorkPlanPanel
+              plan={state.workPlan}
+              open={workPlanOpen}
+              onToggle={toggleWorkPlan}
+              onOpenWorkspace={(path) => {
+                setDiffOnOpen(false);
+                readFile(path);
+              }}
+            />
+          )}
           {state.openFile && (
             <FileViewer
               // Remount per file: edit drafts must never survive a switch to another path
@@ -557,7 +580,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           <main
             ref={mainRef}
             onScroll={handleScroll}
-            className={`flex-1 overflow-y-auto ${analysisOpen ? "md:pr-[26rem]" : ""}`}
+            className={`flex-1 overflow-y-auto ${analysisOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
           >
             <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-6">
               {state.items.length === 0 && (
@@ -698,7 +721,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
                 contextUsage={state.contextUsage}
                 sessionUsage={usage}
                 analysisOpen={analysisOpen}
-                onToggleAnalysis={() => setAnalysisOpen((open) => !open)}
+                onToggleAnalysis={toggleAnalysis}
                 isCompacting={state.isCompacting}
                 onSetModel={setModel}
                 onSetThinking={setThinking}

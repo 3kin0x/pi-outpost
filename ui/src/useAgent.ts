@@ -23,6 +23,7 @@ import type {
   ThinkingLevel,
   TreeNode,
   WireImage,
+  WorkPlan,
 } from "@pi-outpost/shared";
 import { UPLOADS_DIRECTORY, UploadError } from "./uploads";
 import { isImageFile, isPdfFile } from "./util/workspacePath";
@@ -178,6 +179,7 @@ export interface AgentState {
   tree: TreeNode[] | null;
   isStreaming: boolean;
   items: ChatItem[];
+  workPlan: WorkPlan | null;
   queue: { steering: string[]; followUp: string[] };
   errors: string[];
   contextUsage: ContextUsage | null;
@@ -250,6 +252,7 @@ const initialState: AgentState = {
   tree: null,
   isStreaming: false,
   items: [],
+  workPlan: null,
   queue: { steering: [], followUp: [] },
   errors: [],
   contextUsage: null,
@@ -360,6 +363,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     commands: message.commands,
     isStreaming: message.isStreaming,
     items: message.items,
+    workPlan: message.workPlan ?? null,
     queue: { steering: [], followUp: [] },
     errors: [],
     contextUsage: message.contextUsage ?? null,
@@ -538,6 +542,8 @@ function reduce(state: AgentState, action: Action): AgentState {
     }
     case "thinking_changed":
       return { ...state, thinkingLevel: message.level };
+    case "work_plan_changed":
+      return { ...state, workPlan: message.workPlan };
     case "user":
       return {
         ...state,

@@ -22,6 +22,7 @@ A Node server runs the agent — a pi `AgentSession` in its own process, or a su
 - [Model credentials](#model-credentials)
 - [Standalone configuration](#standalone-configuration)
 - [Embedding](#embedding)
+- [Work Plans](#work-plans)
 - [Architecture](#architecture)
 
 ## Features
@@ -33,6 +34,7 @@ A Node server runs the agent — a pi `AgentSession` in its own process, or a su
 - First-run setup in the browser: no credentials, no cryptic failure — paste an API key, or declare your own OpenAI-compatible endpoint (see [Model credentials](#model-credentials))
 - Sessions: list, resume, rename, delete, and full-text search across saved transcripts
 - Conversation tree: edit a past message to re-ask it, and the old exchange stays reachable as a branch you can navigate back to
+- Persistent Work Plans: for non-trivial work the agent maintains an explicit hierarchy of objectives, dependencies, resources, and verification state beside the conversation. It is working state that guides the work—not merely a progress report—and the initial UI is deliberately read-only
 - File browser: lazy-loaded tree, full-size viewer (syntax-highlighted, Markdown rendered) and an editor with save inside the writable zone — all confined to the same root the agent's own tools can see. A file with a rendering — a structured-exchange document, or Markdown — can be shown **beside** it: the editor in one half and the rendering in the other, following what is typed rather than what was last saved. Text under revision does not parse for most of the keystrokes that produce it, so the last rendering that was good stays put, marked as no longer matching the editor and saying why, instead of the picture vanishing on every `{`. Entries outside `sandbox.writableRoot` render dimmed, and truncated entries reveal their complete name on hover. Create a file or folder from the tree itself: `+` on a writable directory opens an input where the file will land (a trailing `/` makes it a folder), and a new file opens straight into the editor. Files can also be opened with the operating system's associated application, renamed, or deleted after confirmation. Drag a writable file onto a writable directory to move it, or drag a read-only file there to copy it
 - PDF: select one in the tree and it renders in the viewer (pages, zoom, keyboard paging); the agent reads its text and tables through a `pdf_extract` tool — no shell, no external binary, no OCR
 - Office documents: `docx_extract`, `xlsx_extract` and `pptx_extract` give the agent Word text and tables, one markdown table per spreadsheet sheet (values rendered from their number format), and slide structure with speaker notes. Same rules as `pdf_extract` — available wherever `read` is, never behind `allowBash`, confined to the sandbox root, each with its own size ceiling. Every extractor also takes `output_path`: write the whole document to a workspace file and get a summary back, instead of paging through it and then writing it out, which spends the context twice
@@ -330,6 +332,14 @@ iframeWindow.postMessage({ type: "pi-outpost:set-theme", theme: "light" }, "http
 Extensions using pi's [Custom UI](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui) (`ctx.ui.select/confirm/input/editor/notify/setStatus/setWidget/setTitle/setEditorText`) work in the web UI: dialogs render as a modal, `notify()` as a toast, `setStatus()` as a header badge, `setWidget()` above/below the composer. The bridge binds with `mode: "rpc"`, mirroring pi's own RPC-mode protocol — so `ctx.hasUI` is `true` and dialogs get real answers, but TUI-only features (`custom()`, custom footers/headers/editors, terminal input, themes) have no web equivalent and are no-ops, same as RPC mode.
 
 Custom messages (`pi.sendMessage()` with a `customType`, see [Message and Entry Rendering](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#message-and-entry-rendering)) show up too, but without the extension's `MessageRenderer` — that returns a terminal `Component`, which has no browser equivalent. Instead it falls back to pi's own default look (violet card, markdown-rendered content), with any `details` payload collapsed behind a toggle (never verbose JSON by default). Messages sent with `display: false` stay hidden, same as in the TUI.
+
+## Work Plans
+
+The Work Plan belongs to the agent. For non-trivial work it is the agent's explicit working-state representation: a persistent hierarchy used to decompose objectives, track execution and dependencies, record resources and blockers, and reconcile verification before declaring the work complete. It is not a second activity log or a ceremonial progress report; trivial interactions need no plan.
+
+Tasks use five states: `todo`, `in_progress`, `blocked`, `needs_review`, and `done`. A blocked or review state can carry a reason, and tasks can link to generic resources; workspace resources open directly in the file viewer. The companion panel is read-only in the initial release, so the conversation remains the user's control surface while the agent owns plan mutation through the atomic `work_plan` tool.
+
+Each plan is stored beside its session file. It is restored on reconnect and session resume, replaced when the active session changes, copied when a conversation is forked, and independent thereafter. Conversation compaction only summarizes conversational context: it does not remove, summarize, alter, or invalidate the sidecar, and the agent can still read the complete current plan directly without reconstructing it from the compacted summary. Sessions created before Work Plans remain valid and simply open without a panel.
 
 ## Architecture
 

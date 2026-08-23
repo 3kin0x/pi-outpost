@@ -1,10 +1,10 @@
 /**
  * pi-outpost's own tools, packaged as a pi extension so an RPC child has them.
  *
- * The embedded runtime hands these six tool definitions straight to the SDK
+ * The embedded runtime hands these seven tool definitions straight to the SDK
  * session (`customTools` in index.ts). A `pi --mode rpc` child is a separate
  * process and builds its own toolset from its own flags, so without this file the
- * agent would lose `present_structure` and the four document extractors the moment
+ * agent would lose `present_structure`, `work_plan`, and the document extractors the moment
  * an operator switched runtimes — including the bundled structured-exchange skill,
  * which instructs the model to call a tool that would not exist.
  *
@@ -31,6 +31,7 @@ import { createPptxExtractToolDefinition } from "./pptxTool.ts";
 import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
 import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
+import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
 
 /** What the parent must tell the child. Mirrors the fields index.ts uses embedded. */
 export interface PiOutpostToolsSettings {
@@ -81,6 +82,7 @@ export async function createPiOutpostTools(settings: PiOutpostToolsSettings): Pr
     createPptxExtractToolDefinition({ ...common, maxBytes: settings.maxBytes.pptx }),
     createStructuredExchangeFigureToolDefinition({ ...common, maxBytes: settings.maxBytes.structuredExchange }),
     createStructuredExchangeToolDefinition(),
+    createWorkPlanToolDefinition(),
   ];
 }
 
