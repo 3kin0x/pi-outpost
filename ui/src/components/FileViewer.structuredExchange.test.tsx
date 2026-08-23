@@ -193,3 +193,65 @@ describe("a structured-exchange document opened as a file", () => {
     expect(screen.getByRole("heading", { name: "Title" })).toBeInTheDocument();
   });
 });
+
+/**
+ * A figure referenced from Markdown.
+ *
+ * This is the last step of the whole feature and the one with the least code: the
+ * agent writes `figures/power.svg` and writes `![…](figures/power.svg)` beside it,
+ * and none of that is worth anything unless the viewer turns that relative
+ * reference into something it can actually fetch. Driven in a real browser during
+ * the change; asserted here, because a resolver that quietly stops resolving is
+ * invisible until someone opens a report.
+ */
+describe("a figure referenced from a document being read", () => {
+  it("resolves a relative reference against the file's own directory", () => {
+    setup("![Power train](figures/power.svg)\n", "reports/q3/vehicle.md");
+    const image = screen.getByRole("img", { name: "Power train" });
+    const source = new URL(image.getAttribute("src")!, "http://host");
+    // Through /files/raw, because the text protocol refuses binary — and rooted at
+    // the document's directory, not at the workspace.
+    expect(source.pathname).toBe("/files/raw");
+    expect(source.searchParams.get("path")).toBe("reports/q3/figures/power.svg");
+  });
+
+  it("carries the token, since an img cannot send a header", () => {
+    setup("![f](figures/power.svg)\n", "notes.md", { token: "secret-token" });
+    const source = new URL(screen.getByRole("img").getAttribute("src")!, "http://host");
+    expect(source.searchParams.get("token")).toBe("secret-token");
+  });
+
+  it("leaves an absolute reference exactly as written", () => {
+    // Someone else's server, named with a scheme or by leaving ours implied.
+    // Rewriting either would point it at a workspace path that does not exist.
+    // (A data: URI never reaches this code — react-markdown drops it upstream —
+    // so there is nothing here to assert about one.)
+    setup("![remote](https://example.test/a.png)\n\n![implied](//example.test/b.png)\n", "notes.md");
+    const [remote, implied] = screen.getAllByRole("img");
+    expect(remote.getAttribute("src")).toBe("https://example.test/a.png");
+    expect(implied.getAttribute("src")).toBe("//example.test/b.png");
+  });
+
+  it("opens a relative link in the viewer instead of navigating the page", () => {
+    // A relative href is a sibling file, not a server route: following it in the
+    // page 404s, which is how a document full of cross-references became a dead end.
+    const onReload = vi.fn();
+    setup("[the model](../models/vehicle.json)\n", "reports/q3/vehicle.md", { onReload });
+
+    fireEvent.click(screen.getByRole("link", { name: "the model" }));
+
+    expect(onReload).toHaveBeenCalledWith("reports/models/vehicle.json");
+  });
+
+  it("leaves an external link and an anchor to the browser", () => {
+    const onReload = vi.fn();
+    setup("[out](https://example.test/x)\n\n[here](#section)\n", "notes.md", { onReload });
+
+    fireEvent.click(screen.getByRole("link", { name: "out" }));
+    fireEvent.click(screen.getByRole("link", { name: "here" }));
+
+    expect(onReload).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "out" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "here" })).toHaveAttribute("href", "#section");
+  });
+});
