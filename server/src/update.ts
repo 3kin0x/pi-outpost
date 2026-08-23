@@ -32,7 +32,16 @@ export type InstallChannel =
 export interface ChannelEvidence {
   /** Build-time version, or "dev" when it was never substituted. */
   version: string;
-  /** `process.argv[1]` — the script node was asked to run, absent in a SEA. */
+  /**
+   * The script node was asked to run, absent in a SEA — with symlinks resolved.
+   *
+   * `process.argv[1]` is the path as typed, and npm's global install is reached
+   * through `<prefix>/bin/<name>`, a symlink into `<prefix>/lib/node_modules`.
+   * Classifying the link itself finds no `node_modules` segment and calls a
+   * perfectly ordinary global install "unknown", so the real file is what the
+   * rule sees. The unresolved path is still what the refusal prints: that is the
+   * one the user typed and can check.
+   */
   entryPath: string | undefined;
   /** `process.execPath` — node itself, or the self-contained binary. */
   execPath: string;
@@ -481,6 +490,12 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
     case "unknown":
       say(`[pi] cannot tell how this copy was installed, so nothing was changed`);
       say(`[pi]   entry: ${process.argv[1] ?? "(none)"}`);
+      // A command reached through a symlink is classified by what it points at, so
+      // the target belongs in the evidence whenever it is not the path itself.
+      {
+        const resolved = currentEvidence(options.version).entryPath;
+        if (resolved !== undefined && resolved !== process.argv[1]) say(`[pi]   resolves to: ${resolved}`);
+      }
       say(`[pi]   runtime: ${process.execPath}`);
       return 1;
     case "global": {
@@ -657,9 +672,24 @@ function comparePrerelease(left: string, right: string): number {
   return 0;
 }
 
+/**
+ * The entry as a real file, or as given when it cannot be resolved.
+ *
+ * A deleted or unreadable entry is not worth failing over: the unresolved path
+ * classifies exactly as it did before, which is "unknown" — refuse and print it.
+ */
+function resolveEntry(entryPath: string | undefined): string | undefined {
+  if (entryPath === undefined || entryPath === "") return entryPath;
+  try {
+    return process.getBuiltinModule("node:fs").realpathSync.native(entryPath);
+  } catch {
+    return entryPath;
+  }
+}
+
 /** The evidence of the process running right now. */
 export function currentEvidence(version: string): ChannelEvidence {
-  const entryPath = process.argv[1];
+  const entryPath = resolveEntry(process.argv[1]);
   const isSea = runningAsExecutable();
   // Resolved only when it could change the answer. `detectChannel` decides a checkout
   // from the version alone and an executable from the runtime, and neither needs to

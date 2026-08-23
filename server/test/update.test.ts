@@ -7,13 +7,14 @@
  * install a second copy elsewhere while the operator keeps running the first.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
 import {
   CHECK_INTERVAL_MS,
   cachePath,
+  currentEvidence,
   detectChannel,
   fetchLatestVersion,
   isFresh,
@@ -110,6 +111,38 @@ describe("detectChannel", () => {
 
   test("no entry path at all, and not a SEA, is unknown rather than a guess", () => {
     assert.equal(detectChannel(evidence({ entryPath: undefined })), "unknown");
+  });
+
+  /**
+   * The finding this exists for, from a real `npm install -g`: npm puts the
+   * command at `<prefix>/bin/<name>`, a symlink into `<prefix>/lib/node_modules`,
+   * and that is the path `process.argv[1]` carries. It has no `node_modules`
+   * segment, so an ordinary global install was refused with "cannot tell how this
+   * copy was installed" and `update` did nothing at all.
+   */
+  test("the bin symlink npm installs resolves to the global install behind it", async () => {
+    const prefix = await workspace();
+    const root = path.join(prefix, "lib", "node_modules");
+    const real = path.join(root, "pi-outpost", "dist", "pi-outpost.mjs");
+    await mkdir(path.dirname(real), { recursive: true });
+    await writeFile(real, "// entry\n");
+    await mkdir(path.join(prefix, "bin"), { recursive: true });
+    const link = path.join(prefix, "bin", "pi-outpost");
+    await symlink(real, link);
+
+    const argv = process.argv[1];
+    const envPrefix = process.env.npm_config_prefix;
+    process.argv[1] = link;
+    process.env.npm_config_prefix = prefix;
+    try {
+      const seen = currentEvidence("0.15.0");
+      assert.equal(seen.entryPath, await realpath(real));
+      assert.equal(detectChannel({ ...seen, globalRoot: await realpath(root) }), "global");
+    } finally {
+      process.argv[1] = argv;
+      if (envPrefix === undefined) delete process.env.npm_config_prefix;
+      else process.env.npm_config_prefix = envPrefix;
+    }
   });
 });
 
