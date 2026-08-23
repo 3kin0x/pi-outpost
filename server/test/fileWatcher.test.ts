@@ -198,21 +198,27 @@ describe("createDirectoryWatcher", () => {
   test("keeps reporting while a directory is written to continuously", async () => {
     const root = await workspace();
     const log = recorder();
-    const watcher = createDirectoryWatcher({ root, onChange: log.onChange, coalesceMs: COALESCE_MS });
+    // A wide window on purpose. The failure a resetting debounce produces is that
+    // writes never stop, so the window never closes, so the tree stays wrong for
+    // exactly as long as it is being made wrong — but with a 25 ms window the
+    // platform's own gaps between delivered events are wide enough to let a
+    // resetting timer fire anyway, and the regression goes unseen. Nothing here
+    // pauses for a quarter of a second, so only a window that opens on the first
+    // event and is never extended reaches a second announcement.
+    const windowMs = 250;
+    const watcher = createDirectoryWatcher({ root, onChange: log.onChange, coalesceMs: windowMs });
     try {
       await watcher.watch("");
-      // The failure a resetting debounce would produce: writes never stop, so the
-      // window never closes, so the tree stays wrong for exactly as long as it is
-      // being made wrong. The window here opens on the first event and is never
-      // extended, so announcements keep coming.
-      const until = Date.now() + COALESCE_MS * 8;
+      // Driven by what has been announced, not by the clock: how quickly a
+      // platform delivers the first event is not part of the contract, and on
+      // Windows it was slow enough to end the writes after a single window.
+      const deadline = Date.now() + windowMs * 40;
       let i = 0;
-      while (Date.now() < until) {
+      while (log.seen.length < 2 && Date.now() < deadline) {
         await writeFile(path.join(root, `busy${i++}.txt`), "x");
         await new Promise((resolve) => setTimeout(resolve, 2));
       }
-      await settle();
-      assert.ok(log.seen.length >= 2, `expected repeated announcements, got ${log.seen.length}`);
+      assert.ok(log.seen.length >= 2, `expected repeated announcements while writing, got ${log.seen.length}`);
     } finally {
       watcher.close();
     }
