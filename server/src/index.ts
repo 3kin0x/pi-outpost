@@ -33,10 +33,12 @@ import {
   THINKING_LEVELS,
   type TreeNode,
   type WireImage,
+  type WorkPlan,
   WORKTREE_REVISION,
 } from "@pi-outpost/shared";
 import { readStructuredExchangeDocument } from "@pi-outpost/shared/structured-exchange/document";
 import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
+import { validateWorkPlan } from "@pi-outpost/shared/work-plan";
 import {
   type AgentRuntime,
   type RuntimeEvent,
@@ -97,6 +99,8 @@ import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
 import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
+import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
+import { copyWorkPlan, deleteWorkPlan, loadWorkPlan } from "./workPlanStore.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createDirectoryWatcher, type DirectoryWatcher } from "./fileWatcher.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
@@ -286,6 +290,7 @@ if (cli.command === "login") {
  * other custom tool it is the same tool on both sides of the sandbox.
  */
 const structuredExchangeTool = createStructuredExchangeToolDefinition();
+const workPlanTool = createWorkPlanToolDefinition();
 
 let sandboxedTools = config.sandbox
   ? [
@@ -298,6 +303,7 @@ let sandboxedTools = config.sandbox
         config.structuredExchange.maxBytes,
       )),
       structuredExchangeTool,
+      workPlanTool,
     ]
   : undefined;
 let BROWSER_ROOT = await resolveBrowserRoot(config);
@@ -871,6 +877,7 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
                 writableRoot: await fs.realpath(cwd),
               }),
               structuredExchangeTool,
+              workPlanTool,
             ],
           }),
     })),
@@ -940,6 +947,46 @@ const runtime: AgentRuntime = await (async () => {
   }
 })();
 
+let activeWorkPlan: WorkPlan | null = await loadWorkPlan(runtime.snapshot().sessionFile);
+let activeWorkPlanSessionFile = runtime.snapshot().sessionFile;
+let workPlanSessionSync: Promise<void> = Promise.resolve();
+
+/**
+ * Session replacement events are synchronous, while their sidecar reads are not.
+ * Keep those reads ordered so a fork can wait for the replacement snapshot before
+ * copying and announcing its inherited plan. Without the queue, a late ENOENT read
+ * could overwrite the copied plan with null.
+ */
+function queueWorkPlanSessionSync(): Promise<void> {
+  const sessionFile = runtime.snapshot().sessionFile;
+  workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
+    let plan: WorkPlan | null = null;
+    try {
+      plan = await loadWorkPlan(sessionFile);
+    } catch (error) {
+      reportError(error);
+    }
+    if (runtime.snapshot().sessionFile !== sessionFile) return;
+    activeWorkPlan = plan;
+    activeWorkPlanSessionFile = sessionFile;
+    broadcast({ type: "session_replaced", ...snapshot() });
+    console.log(`[pi] session ${runtime.snapshot().sessionId}`);
+  });
+  workPlanSessionSync.catch(reportError);
+  return workPlanSessionSync;
+}
+
+function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
+  workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
+    const plan = await loadWorkPlan(sessionFile);
+    if (runtime.snapshot().sessionFile !== sessionFile) return;
+    activeWorkPlan = plan;
+    activeWorkPlanSessionFile = sessionFile;
+    if (changed) broadcast({ type: "work_plan_changed", workPlan: plan });
+  });
+  workPlanSessionSync.catch(reportError);
+}
+
 function modelName(): string {
   const model = runtime.snapshot().model;
   return model ? `${model.provider}/${model.id}` : "unknown";
@@ -1008,6 +1055,9 @@ function snapshot(): SessionSnapshot {
     models: availableModels(),
     commands: state.commands,
     contextUsage: state.contextUsage,
+    // A runtime replacement is synchronous but its sidecar read is not. Never
+    // combine the new transcript/session id with the previous session's plan.
+    workPlan: state.sessionFile === activeWorkPlanSessionFile ? activeWorkPlan : null,
     writableRoot: WRITABLE_ROOT,
     gitAvailable: GIT !== null,
     credentials: credentialStatus(),
@@ -1190,6 +1240,25 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       // Only announce once the write has actually landed on disk — the client
       // may otherwise refetch a directory/file before the change is visible.
       if (args !== undefined && !event.isError) void announceFileChange(args);
+      const workPlanDetails = event.details as
+        | { type?: unknown; sessionFile?: unknown; plan?: WorkPlan | null; changed?: unknown }
+        | undefined;
+      if (
+        event.toolName === "work_plan" &&
+        !event.isError &&
+        workPlanDetails?.type === "work_plan" &&
+        workPlanDetails.sessionFile === runtime.snapshot().sessionFile
+      ) {
+        try {
+          // Reject malformed tool details at the runtime boundary, then reload
+          // the sidecar: persistence, not an extension-supplied event payload,
+          // is the authoritative state that must survive resume/compaction.
+          if (workPlanDetails.plan !== null) validateWorkPlan(workPlanDetails.plan);
+          queueWorkPlanToolSync(workPlanDetails.sessionFile as string, workPlanDetails.changed === true);
+        } catch (error) {
+          reportError(new Error(`Ignoring invalid Work Plan tool result: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      }
       break;
     }
     case "queue":
@@ -1211,8 +1280,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       // The runtime has already rebound itself; renderers may belong to a new
       // extension runner, so refresh the HTML bridge before the snapshot goes out.
       refreshExtensionRender();
-      broadcast({ type: "session_replaced", ...snapshot() });
-      console.log(`[pi] session ${runtime.snapshot().sessionId}`);
+      void queueWorkPlanSessionSync();
       break;
     case "extension_ui_request":
       broadcast(event.request);
@@ -1249,7 +1317,8 @@ async function replaceSession(socket: WebSocket, action: () => Promise<{ cancell
   try {
     // The runtime rebinds and emits `session_replaced` itself; this only has to
     // decide whether a replacement happened at all.
-    await action();
+    const result = await action();
+    if (!result.cancelled) await workPlanSessionSync;
   } catch (error) {
     reportError(error);
     // The old session may be disposed — land on a fresh one instead. A runtime that
@@ -1454,14 +1523,18 @@ async function handleUpdateConfig(
     fileWatcher?.close();
     fileWatcher = buildFileWatcher();
     sandboxedTools = config.sandbox
-      ? await createSandboxedTools(
-          config.sandbox,
-          config.pdf.maxBytes,
-          config.docx.maxBytes,
-          config.xlsx.maxBytes,
-          config.pptx.maxBytes,
-          config.structuredExchange.maxBytes,
-        )
+      ? [
+          ...(await createSandboxedTools(
+            config.sandbox,
+            config.pdf.maxBytes,
+            config.docx.maxBytes,
+            config.xlsx.maxBytes,
+            config.pptx.maxBytes,
+            config.structuredExchange.maxBytes,
+          )),
+          structuredExchangeTool,
+          workPlanTool,
+        ]
       : undefined;
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
@@ -1638,6 +1711,7 @@ async function deleteSession(socket: WebSocket, path: string): Promise<void> {
     return;
   }
   await fs.unlink(path);
+  await deleteWorkPlan(path);
   invalidateSessionScan();
   await listSessions(socket);
 }
@@ -1944,9 +2018,17 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
     return;
   }
   let selectedText: string | undefined;
+  const sourceSessionFile = runtime.snapshot().sessionFile;
   await replaceSession(socket, async () => {
     const result = await runtime.fork(entryId);
     selectedText = result.selectedText;
+    if (!result.cancelled) {
+      await workPlanSessionSync;
+      await copyWorkPlan(sourceSessionFile, runtime.snapshot().sessionFile);
+      activeWorkPlan = await loadWorkPlan(runtime.snapshot().sessionFile);
+      activeWorkPlanSessionFile = runtime.snapshot().sessionFile;
+      broadcast({ type: "work_plan_changed", workPlan: activeWorkPlan });
+    }
     return result;
   });
   if (selectedText) send(socket, { type: "editor_prefill", text: selectedText });

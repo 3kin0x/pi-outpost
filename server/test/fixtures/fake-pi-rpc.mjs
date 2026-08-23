@@ -105,6 +105,7 @@ const DATA = {
 // --- reading ---------------------------------------------------------------
 
 const seen = [];
+const commandCounts = new Map();
 let pendingDialogCommand;
 
 function recordCommand(command) {
@@ -129,7 +130,10 @@ function handle(command) {
   recordCommand(command);
 
   const scripted = config.commands_ ?? {};
-  const script = scripted[type];
+  const configured = scripted[type];
+  const count = commandCounts.get(type) ?? 0;
+  commandCounts.set(type, count + 1);
+  const script = Array.isArray(configured) ? configured[Math.min(count, configured.length - 1)] : configured;
   const responseId = (config.omitResponseIdsFor ?? []).includes(type) ? {} : { id: command.id };
 
   if (config.stallCommand === type) return; // never answer: exercises the command timeout
@@ -162,6 +166,7 @@ function handle(command) {
   const data = script && "data" in script ? script.data : DATA[type]?.();
   emit({ ...responseId, type: "response", command: type, success: true, ...(data === undefined ? {} : { data }) });
 
+  for (const write of script?.writes ?? []) fs.writeFileSync(write.path, write.content);
   emitAll(script?.after);
   if (config.malformedAfter === type) emitRaw(`${config.malformedLine ?? "{not json"}\n`);
   if (config.exitAfter === type) process.exit(config.exitCode ?? 7);

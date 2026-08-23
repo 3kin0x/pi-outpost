@@ -163,6 +163,9 @@ export interface ContextUsage {
   percent: number | null;
 }
 
+export type { WorkPlan, WorkPlanResource, WorkPlanStatus, WorkPlanTask } from "./workPlan.ts";
+import type { WorkPlan } from "./workPlan.ts";
+
 /**
  * Extension "Custom UI" bridge (see pi's extensions.md#custom-ui). Mirrors the
  * shape of pi's own RPC-mode protocol (`RpcExtensionUIRequest`/Response) so the
@@ -309,6 +312,8 @@ export interface SessionSnapshot {
   models: ModelChoice[];
   commands: CommandInfo[];
   contextUsage?: ContextUsage;
+  /** Agent-owned, session-persistent plan; null when this session has none. */
+  workPlan?: WorkPlan | null;
   /**
    * File-browser writable zone, relative to the browser root (posix separators):
    * absent when no sandbox is configured (nothing to distinguish), `null` when the
@@ -428,6 +433,7 @@ export type ServerMessage =
     }
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "context_usage"; usage: ContextUsage }
+  | { type: "work_plan_changed"; workPlan: WorkPlan | null }
   | { type: "compaction_start" }
   | { type: "compaction_end"; errorMessage?: string }
   | { type: "error"; message: string }

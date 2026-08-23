@@ -219,6 +219,31 @@ describe("hello message handling", () => {
   });
 });
 
+describe("Work Plan synchronization", () => {
+  it("applies live changes and replaces the plan with the selected session snapshot", async () => {
+    const result = await connected();
+    const first = { version: 1, id: "first", title: "First", updatedAt: "2026-08-23T00:00:00.000Z", tasks: [] };
+    act(() => mockWs!.receive({ type: "work_plan_changed", workPlan: first }));
+    await waitFor(() => expect(result.current.state.workPlan?.id).toBe("first"));
+
+    act(() => mockWs!.receive({
+      type: "session_replaced",
+      sessionId: "sess_2",
+      branding: {},
+      model: "",
+      thinkingLevel: "off",
+      models: [],
+      commands: [],
+      isStreaming: false,
+      items: [],
+      workPlan: null,
+      gitAvailable: false,
+    }));
+    await waitFor(() => expect(result.current.state.sessionId).toBe("sess_2"));
+    expect(result.current.state.workPlan).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Streaming
 // ---------------------------------------------------------------------------

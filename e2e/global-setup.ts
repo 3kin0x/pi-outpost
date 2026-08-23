@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { access, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SEEDED_MESSAGES } from "./fixtures/seeded-transcript";
@@ -224,13 +224,116 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: fakeConfig } },
   );
 
+  // A fourth real app server drives the Work Plan lifecycle. Its RPC child is
+  // scripted because browser CI is offline, but it emits the same tool events
+  // and writes the same per-session sidecars as the real work_plan extension.
+  const planRoot = await makeWorkspace({ "readme.md": "# work plan\n" });
+  const planSessionDir = path.join(planRoot, ".pi-agent", "sessions");
+  await mkdir(planSessionDir, { recursive: true });
+  const sourceSession = path.join(planSessionDir, "2026-08-23T00-00-00-000Z_source.jsonl");
+  const otherSession = path.join(planSessionDir, "2026-08-23T00-01-00-000Z_other.jsonl");
+  const forkSession = path.join(planSessionDir, "2026-08-23T00-02-00-000Z_fork.jsonl");
+  const entry = {
+    id: "user-1",
+    parentId: null,
+    timestamp: "2026-08-23T00:00:01.000Z",
+    type: "message",
+    message: { role: "user", content: [{ type: "text", text: "Ship the release" }], timestamp: 1 },
+  };
+  const sessionText = (id: string, name: string) =>
+    `${JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-08-23T00:00:00.000Z", cwd: planRoot })}\n` +
+    `${JSON.stringify(entry)}\n` +
+    `${JSON.stringify({ type: "session_info", id: `${id}-name`, parentId: "user-1", timestamp: "2026-08-23T00:00:02.000Z", name })}\n`;
+  await writeFile(sourceSession, sessionText("source", "Release source"));
+  await writeFile(otherSession, sessionText("other", "Other work"));
+
+  const sourcePlan = (status: "in_progress" | "done") => ({
+    version: 1,
+    id: "release",
+    title: "Release plan",
+    updatedAt: "2026-08-23T00:00:03.000Z",
+    tasks: [{
+      id: "publish",
+      title: "Publish release",
+      description: "Build, verify, and publish the release.",
+      status,
+      dependsOn: [],
+      resources: [{ uri: "workspace:readme.md", label: "Release notes" }],
+    }],
+  });
+  const otherPlan = {
+    version: 1,
+    id: "other",
+    title: "Other plan",
+    updatedAt: "2026-08-23T00:00:03.000Z",
+    tasks: [{ id: "wait", title: "Wait", status: "todo", dependsOn: [], resources: [] }],
+  };
+  await writeFile(`${otherSession}.work-plan.json`, `${JSON.stringify(otherPlan, null, 2)}\n`);
+
+  const toolEnd = (sessionFile: string, workPlan: object, call: string) => ({
+    type: "tool_execution_end",
+    toolCallId: call,
+    toolName: "work_plan",
+    result: {
+      content: [{ type: "text", text: "Work Plan updated." }],
+      details: { type: "work_plan", sessionFile, plan: workPlan, changed: true },
+    },
+    isError: false,
+  });
+  const planFakeConfig = path.join(planRoot, "fake-rpc.json");
+  await writeFile(planFakeConfig, JSON.stringify({
+    state: { sessionId: "source", sessionFile: sourceSession },
+    entries: [entry],
+    tree: [{ entry, children: [] }],
+    leafId: "user-1",
+    commands_: {
+      prompt: [
+        {
+          replacement: { state: { isStreaming: false } },
+          writes: [{ path: `${sourceSession}.work-plan.json`, content: `${JSON.stringify(sourcePlan("in_progress"), null, 2)}\n` }],
+          after: [toolEnd(sourceSession, sourcePlan("in_progress"), "plan-create"), { type: "agent_settled" }],
+        },
+        {
+          replacement: { state: { isStreaming: false } },
+          writes: [{ path: `${sourceSession}.work-plan.json`, content: `${JSON.stringify(sourcePlan("done"), null, 2)}\n` }],
+          after: [toolEnd(sourceSession, sourcePlan("done"), "plan-update"), { type: "agent_settled" }],
+        },
+        {
+          replacement: { state: { isStreaming: false } },
+          writes: [{ path: `${forkSession}.work-plan.json`, content: `${JSON.stringify(sourcePlan("in_progress"), null, 2)}\n` }],
+          after: [toolEnd(forkSession, sourcePlan("in_progress"), "fork-update"), { type: "agent_settled" }],
+        },
+      ],
+      switch_session: [
+        { data: { cancelled: false }, replacement: { state: { sessionId: "other", sessionFile: otherSession }, entries: [entry], tree: [{ entry, children: [] }], leafId: "user-1" } },
+        { data: { cancelled: false }, replacement: { state: { sessionId: "source", sessionFile: sourceSession }, entries: [entry], tree: [{ entry, children: [] }], leafId: "user-1" } },
+      ],
+      fork: {
+        data: { cancelled: false, text: "Ship the release" },
+        replacement: { state: { sessionId: "fork", sessionFile: forkSession }, entries: [entry], tree: [{ entry, children: [] }], leafId: "user-1" },
+      },
+    },
+  }));
+  const plans = await startServer(
+    planRoot,
+    {
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")], startupTimeoutMs: 20_000 },
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: planFakeConfig } },
+  );
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_GUARDED_URL = guarded.base;
   process.env.PI_E2E_DIAGRAMS_URL = diagrams.base;
+  process.env.PI_E2E_PLANS_URL = plans.base;
+  process.env.PI_E2E_PLAN_SOURCE = sourceSession;
+  process.env.PI_E2E_PLAN_FORK = forkSession;
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await plans.stop();
     await diagrams.stop();
     await guarded.stop();
     await server.stop();
