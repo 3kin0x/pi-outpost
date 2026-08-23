@@ -42,6 +42,8 @@ export const WORK_PLAN_LIMITS = {
 export const WORK_PLAN_CREATE_MAX_DEPTH = 2;
 
 export interface WorkPlanDraftTask {
+  /** Optional caller-chosen identity; generated when omitted. */
+  id?: string;
   title: string;
   description?: string;
   status?: WorkPlanStatus;
@@ -219,6 +221,17 @@ export function normalizeWorkPlanDraft(
     }
     throw new Error("could not generate a unique Work Plan identifier");
   };
+  /**
+   * Models name their tasks: refusing a supplied id costs a repair round, and the
+   * union's validation message does not say which property was refused, so the
+   * repair guesses. Honour it instead — identity stays unique either way.
+   */
+  const claim = (value: unknown, field: string): string => {
+    const id = text(value, field, WORK_PLAN_LIMITS.title);
+    if (usedIds.has(id)) throw new Error(`duplicate task id: ${id}`);
+    usedIds.add(id);
+    return id;
+  };
 
   const planId = generate();
   const tasks: WorkPlanTask[] = [];
@@ -231,12 +244,12 @@ export function normalizeWorkPlanDraft(
     }
     for (const [index, item] of items.entries()) {
       const draft = object(item);
-      onlyFields(draft, ["title", "description", "status", "statusReason", "resources", "subtasks"], `tasks[${index}]`);
+      onlyFields(draft, ["id", "title", "description", "status", "statusReason", "resources", "subtasks"], `tasks[${index}]`);
       const status = draft.status ?? "todo";
       if (typeof status !== "string" || !WORK_PLAN_STATUSES.includes(status as WorkPlanStatus)) {
         throw new Error(`status must be one of ${WORK_PLAN_STATUSES.join(", ")}`);
       }
-      const id = generate();
+      const id = draft.id === undefined ? generate() : claim(draft.id, `tasks[${index}].id`);
       tasks.push({
         id,
         title: text(draft.title, "task.title", WORK_PLAN_LIMITS.title),

@@ -42,6 +42,10 @@ const normalizedPlanSchema = Type.Object({
 }, objectOptions);
 
 const creationTaskSchema = (depth: number): TSchema => Type.Object({
+  id: Type.Optional(boundedText(
+    WORK_PLAN_LIMITS.title,
+    "Optional identifier, unique across the plan; one is generated when omitted.",
+  )),
   title: titleSchema,
   description: Type.Optional(descriptionSchema),
   status: Type.Optional(statusSchema),
@@ -89,7 +93,7 @@ export function createWorkPlanToolDefinition(): ToolDefinition {
   return {
     name: "work_plan",
     label: "Work Plan",
-    description: "Read or atomically update the persistent Work Plan for this session. Use create for a compact two-level task hierarchy (500 tasks total, 64 KiB normalized plan), replace for a complete normalized version-1 document, and the task operations for precise later mutations.",
+    description: "Read or atomically update the persistent Work Plan for this session. Use create for a compact two-level task hierarchy (500 tasks total, 64 KiB normalized plan) whose tasks need only a title, replace for a complete normalized version-1 document, and the task operations for precise later mutations.",
     promptSnippet: "Create, inspect, and update the session's persistent Work Plan",
     parameters: workPlanParameters,
     executionMode: "sequential",

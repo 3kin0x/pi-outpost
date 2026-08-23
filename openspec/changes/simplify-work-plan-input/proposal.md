@@ -5,7 +5,8 @@ The Work Plan tool currently exposes the nested `plan`, `task`, and `changes` in
 ## What Changes
 
 - Add an ergonomic `create` operation that accepts a plan title and a bounded hierarchy of outcome-oriented tasks, reducing storage mechanics and repeated metadata in the model-authored payload.
-- During ergonomic creation, generate persistence mechanics such as plan/task identifiers, schema version, timestamps, default `todo` statuses, and empty dependency/resource collections on the server.
+- During ergonomic creation, generate persistence mechanics such as the plan identifier, schema version, timestamps, default `todo` statuses, and empty dependency/resource collections on the server.
+- Adopt a task identifier the agent supplies during creation, rejecting duplicates, and generate one for every task that omits it: models merge the neighbouring `add_task` shape into `create` and send identifiers unprompted, and a refusal costs a repair round the union's validation message cannot guide.
 - Expose action-specific, fully typed JSON Schema for every Work Plan operation instead of hiding nested contracts behind unconstrained objects.
 - Preserve the complete persisted Work Plan representation and the existing fine-grained operations used after creation, including task updates, moves, dependencies, resources, replacement, reading, and clearing.
 - Add one concise product-owned system-prompt reminder that tells agents when to create and maintain a Work Plan without requiring plans for trivial interactions; keep behavioral selection guidance out of the tool-owned prompt guidelines.

@@ -25,11 +25,29 @@ On 2026-08-23, `server/scripts/probe-work-plan-input.mjs` ran three interleaved 
 
 The probe emits every captured first-call payload as JSONL before its aggregate summary. The complete corrected run—including all 30 calls, no-call outcomes, model identity, thinking setting, and timestamps—is retained in [`evidence/mistral-work-plan-probe.json`](evidence/mistral-work-plan-probe.json).
 
+These arms measure only what their prompt asked for. It named the exact task counts and nesting, which suppressed the failure the running app later exposed (see below); the arms are evidence about schema legibility, not about an unconstrained request.
+
 Selection was tested separately from argument validity. Mistral used `create` reliably when asked to create a Work Plan, but did not spontaneously select the tool for two self-contained conceptual exercises. That model-policy behavior is not strengthened into a mandatory plan for every interaction here; operator skills can require a plan for workflows that need one.
 
 ## Running-app verification
 
-Against the development server at `127.0.0.1:3141`, Mistral with thinking disabled made `create` its first call for an explicitly non-trivial planned task. The running server normalized three top-level tasks plus two direct subtasks, generated one plan ID and five unique task IDs, persisted the exact document to the session sidecar, accepted a later `update_task` marking the selected task done, and returned the same authoritative plan after a new WebSocket client reconnected. Existing component and Playwright tests cover rendering that broadcast as a two-level hierarchy, but visible DOM confirmation in this particular running app remains outstanding because the in-app browser controller rejected localhost access.
+### The refusal the probe could not see
+
+Driven from a browser against the development server at `127.0.0.1:3141`, `mistral/mistral-medium-latest` with thinking disabled failed every first `create` call, in two independent sessions, for a reason no arm of the probe exhibited: it supplied an `id` on each task. The published parameters are a ten-branch root `anyOf` sent with `strict: false` — captured from the outgoing provider request, so the schema does reach the model intact and unconstrained — and `id` is a required property of the adjacent `add_task` and `replace` task shapes. The model merged them into `create`.
+
+Recovery then made it worse. A failed union reports `root: must not have additional properties` and `action: must be equal to constant` once per branch and never names the offending property, so the second session's repair deleted its `description` fields, which were valid, and then its entire second level; the first session's third attempt persisted a flat six-task plan with no hierarchy at all. The probe missed this because its prompt dictated the exact shape ("three top-level tasks; give the implementation task two direct subtasks") and its session exposed `work_plan` alone.
+
+The creation schema now accepts an optional task `id` and adopts it, rejecting a duplicate.
+
+### Confirmed behavior after the fix
+
+New session, same model and server, prompt asking only for main tasks and subtasks:
+
+- the **first** tool call is `create` and is accepted — no repair round;
+- the persisted plan holds 59 tasks, 47 of them with a `parentId`;
+- the panel renders that as `treeitem` elements at `[level=1]` and `[level=2]`, heading "Portage vers une architecture multi-utilisateurs", progress `0 / 59`;
+- asked to complete one subtask, the agent called `update_task` with `taskId: "audit_securite"` — an identity **it** chose — with no intervening `get`; the sidecar shows exactly that task `done` and the tree shows `Done Audit de sécurité` at `[level=2]`;
+- after a full page reload, the reconnecting client restores the same plan with the same task still `Done`.
 
 ## Scenario-to-test matrix
 
@@ -62,6 +80,8 @@ All scenarios in the delta specs and the applicable main `work-plan` and `agent`
 | delta work-plan / Clearing optional values is discoverable | covered | `server/test/work-plan.test.ts` — serialized update fields contain JSON `null`; mutation tests clear all supported values |
 | delta work-plan / Create a minimal plan | covered | `server/test/work-plan.test.ts` — compact draft normalizes to exact version-1 defaults and generated identities |
 | delta work-plan / Create direct subtasks | covered | `server/test/work-plan.test.ts` — two levels flatten to generated parent relationships |
+| delta work-plan / The agent names its own tasks | covered | `server/test/work-plan.test.ts` — “honours a task id the agent supplies and generates the rest” asserts adopted identity, generated siblings, parent wiring, and a later `update_task` on the supplied id; reproduced in the running app |
+| delta work-plan / Duplicate supplied identity is rejected atomically | covered | `server/test/work-plan.test.ts` — “rejects a duplicate supplied id without persisting anything” |
 | delta work-plan / Creation limits are discoverable and atomic | covered | `server/test/work-plan.test.ts` — schema ceilings plus depth, count, size, and no-sidecar assertions |
 | delta work-plan / Explicit task fields survive normalization | covered | `server/test/work-plan.test.ts` — exact status, description, reason, and resource preservation |
 | delta work-plan / Creation returns usable task identities | covered | `server/test/work-plan.test.ts` — tool result contains generated IDs and remains within 64 KiB plus bounded summary |

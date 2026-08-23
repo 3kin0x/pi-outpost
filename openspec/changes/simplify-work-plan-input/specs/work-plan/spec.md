@@ -18,7 +18,7 @@ The structured Work Plan interface SHALL expose an action-specific schema in whi
 - **THEN** its schema declares the accepted JSON `null` value for that field
 
 ### Requirement: Normalized hierarchical creation
-The Work Plan interface SHALL provide a creation operation that accepts a human-readable plan title, top-level tasks, and at most one level of direct subtasks. Each task collection SHALL declare a maximum of 500 items, while the existing limit of 500 total tasks and 64 KiB for the complete serialized plan SHALL remain authoritative. Each input task SHALL require only a human-readable title; description, status, status reason, resources, and direct subtasks SHALL be optional. Subtasks SHALL NOT themselves accept subtasks. The ergonomic input SHALL NOT accept plan or task identifiers. The server SHALL atomically normalize accepted input into the persisted Work Plan representation by generating unique stable plan and task identifiers, setting the unchanged plan version `1` and update timestamp, defaulting omitted statuses to `todo`, initializing omitted dependency and resource collections, and translating nesting into parent relationships.
+The Work Plan interface SHALL provide a creation operation that accepts a human-readable plan title, top-level tasks, and at most one level of direct subtasks. Each task collection SHALL declare a maximum of 500 items, while the existing limit of 500 total tasks and 64 KiB for the complete serialized plan SHALL remain authoritative. Each input task SHALL require only a human-readable title; description, status, status reason, resources, and direct subtasks SHALL be optional. Subtasks SHALL NOT themselves accept subtasks. Each input task MAY carry its own identifier; the operation SHALL adopt a supplied identifier as the task's stable identity, SHALL reject a collection whose supplied identifiers are not unique, and SHALL generate an identifier for every task that omits one. The ergonomic input SHALL NOT accept a plan identifier or any other persistence field. The server SHALL atomically normalize accepted input into the persisted Work Plan representation by generating the unique stable plan identifier and the omitted task identifiers, setting the unchanged plan version `1` and update timestamp, defaulting omitted statuses to `todo`, initializing omitted dependency and resource collections, and translating nesting into parent relationships.
 
 #### Scenario: Create a minimal plan
 - **WHEN** the agent creates a plan with a title and tasks that contain only titles
@@ -27,6 +27,15 @@ The Work Plan interface SHALL provide a creation operation that accepts a human-
 #### Scenario: Create direct subtasks
 - **WHEN** a creation input contains direct subtasks under top-level tasks
 - **THEN** the persisted plan preserves that two-level hierarchy with generated parent relationships
+
+#### Scenario: The agent names its own tasks
+- **WHEN** a creation input supplies an identifier for some of its tasks
+- **THEN** each supplied identifier becomes that task's stable identity, addressable by a later task operation without an intervening read
+- **AND** every task that omitted an identifier receives a generated one
+
+#### Scenario: Duplicate supplied identity is rejected atomically
+- **WHEN** a creation input supplies the same identifier for two tasks
+- **THEN** the operation is rejected and no plan becomes persisted
 
 #### Scenario: Creation limits are discoverable and atomic
 - **WHEN** the agent inspects or submits a creation input

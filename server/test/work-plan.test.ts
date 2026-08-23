@@ -103,8 +103,41 @@ describe("Work Plan contract", () => {
 
   it("rejects persistence fields in the ergonomic draft", () => {
     assert.throws(
-      () => normalizeWorkPlanDraft({ title: "No IDs", tasks: [{ id: "caller-id", title: "Task" }] }),
-      /tasks\[0\]\.id is not accepted/,
+      () => normalizeWorkPlanDraft({ title: "No graph edges", tasks: [{ title: "Task", dependsOn: [] }] }),
+      /tasks\[0\]\.dependsOn is not accepted/,
+    );
+    assert.throws(
+      () => normalizeWorkPlanDraft({ title: "No parents", tasks: [{ title: "Task", parentId: "other" }] }),
+      /tasks\[0\]\.parentId is not accepted/,
+    );
+  });
+
+  it("honours a task id the agent supplies and generates the rest", () => {
+    let next = 0;
+    const plan = normalizeWorkPlanDraft(
+      {
+        title: "Multi-user port",
+        tasks: [
+          { id: "auth", title: "Authentication", subtasks: [{ title: "Sessions" }, { id: "tokens", title: "Tokens" }] },
+          { title: "Storage" },
+        ],
+      },
+      { nextId: () => `id-${(next += 1)}`, now: () => "2026-08-23T19:00:00.000Z" },
+    );
+    assert.deepEqual(plan.tasks.map((task) => task.id), ["auth", "id-2", "tokens", "id-3"]);
+    assert.deepEqual(plan.tasks.map((task) => task.parentId), [undefined, "auth", "auth", undefined]);
+    // The identity it chose is the one later mutations address.
+    const updated = mutateWorkPlan(plan, { action: "update_task", taskId: "tokens", changes: { status: "done" } });
+    assert.equal(updated?.tasks.find((task) => task.id === "tokens")?.status, "done");
+  });
+
+  it("rejects a duplicate supplied id without persisting anything", () => {
+    assert.throws(
+      () => normalizeWorkPlanDraft({
+        title: "Collision",
+        tasks: [{ id: "same", title: "First" }, { id: "same", title: "Second" }],
+      }),
+      /duplicate task id: same/,
     );
   });
 
