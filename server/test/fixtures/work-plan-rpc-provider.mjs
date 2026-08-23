@@ -22,31 +22,70 @@ function message(model, content, stopReason) {
   };
 }
 
+function assertWorkPlanSchema(context) {
+  const tool = context.tools?.find((candidate) => candidate.name === "work_plan");
+  if (!tool) throw new Error("work_plan was not exposed to the provider");
+  const empty = [];
+  const walk = (value, at) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    if (Object.keys(value).length === 0) empty.push(at);
+    for (const [key, child] of Object.entries(value)) {
+      if (Array.isArray(child)) child.forEach((item, index) => walk(item, `${at}.${key}[${index}]`));
+      else walk(child, `${at}.${key}`);
+    }
+  };
+  walk(tool.parameters, "$parameters");
+  if (empty.length > 0) throw new Error(`unconstrained work_plan schemas reached provider: ${empty.join(", ")}`);
+  const actions = tool.parameters.anyOf?.map((branch) => branch.properties?.action?.const);
+  for (const action of ["get", "clear", "create", "replace", "add_task", "update_task", "move_task", "remove_task", "set_dependencies", "set_resources"]) {
+    if (!actions?.includes(action)) throw new Error(`work_plan provider schema has no ${action} branch`);
+  }
+}
+
+function assertWorkPlanGuidance(context) {
+  const prompt = String(context.systemPrompt ?? "");
+  for (const phrase of ["explicit working state", "Before resuming substantial work", "Skip a Work Plan for trivial interactions"]) {
+    if (!prompt.includes(phrase)) throw new Error(`work_plan system guidance did not reach provider: ${phrase}`);
+  }
+}
+
 function streamWorkPlan(model, context) {
+  assertWorkPlanSchema(context);
+  assertWorkPlanGuidance(context);
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
-    const afterTool = context.messages.at(-1)?.role === "toolResult";
-    if (afterTool) {
+    const results = context.messages.filter((item) => item.role === "toolResult" && item.toolName === "work_plan");
+    if (results.length >= 4) {
       const output = message(model, [{ type: "text", text: "Plan updated." }], "stop");
       stream.push({ type: "start", partial: output });
       stream.push({ type: "text_start", contentIndex: 0, partial: output });
       stream.push({ type: "text_end", contentIndex: 0, content: "Plan updated.", partial: output });
       stream.push({ type: "done", reason: "stop", message: output });
     } else {
+      const createdText = results[0]?.content?.find((item) => item.type === "text")?.text;
+      const createdPlan = createdText?.includes("\n") ? JSON.parse(createdText.slice(createdText.indexOf("\n") + 1)) : undefined;
+      const argumentsByStep = [
+        {
+          action: "create",
+          title: "RPC release",
+          tasks: [{ title: "Verify RPC" }],
+        },
+        {
+          action: "add_task",
+          task: { id: "release-note", title: "Write release note", status: "todo", dependsOn: [], resources: [] },
+        },
+        {
+          action: "update_task",
+          taskId: createdPlan?.tasks?.[0]?.id,
+          changes: { status: "done" },
+        },
+        { action: "get" },
+      ];
       const toolCall = {
         type: "toolCall",
-        id: "real-rpc-work-plan",
+        id: `real-rpc-work-plan-${results.length}`,
         name: "work_plan",
-        arguments: {
-          action: "replace",
-          plan: {
-            version: 1,
-            id: "rpc-release",
-            title: "RPC release",
-            updatedAt: "2026-08-23T00:00:00.000Z",
-            tasks: [{ id: "verify", title: "Verify RPC", status: "done", dependsOn: [], resources: [] }],
-          },
-        },
+        arguments: argumentsByStep[results.length],
       };
       const output = message(model, [toolCall], "toolUse");
       stream.push({ type: "start", partial: output });
