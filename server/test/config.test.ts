@@ -17,6 +17,7 @@ import {
   loadConfig,
 } from "../src/config.ts";
 import type { AppConfig, CliOptions } from "../src/config.ts";
+import { STRUCTURED_EXCHANGE_BYTES_CEILING } from "@pi-outpost/shared/structured-exchange/bounds";
 
 // ---------------------------------------------------------------------------
 // fail
@@ -588,6 +589,51 @@ describe("loadConfig — resource path resolution", () => {
       for (const maxBytes of ["25MB", 0, -1, 1.5]) {
         await writeFile(configPath, JSON.stringify({ pptx: { maxBytes } }, null, 2));
         assert.throws(() => loadConfig(dir, { config: configPath }), /"pptx.maxBytes" must be a positive integer/);
+      }
+    });
+  });
+
+  test("structuredExchange.maxBytes defaults to the contract's ceiling and can be tightened", async () => {
+    // The default is not a guess about what people open, the way the document
+    // ceilings above are: version 1 of the contract bounds a conforming document,
+    // and accepting more would promise something the schema does not.
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(
+        loadConfig(dir, { config: configPath }).structuredExchange.maxBytes,
+        STRUCTURED_EXCHANGE_BYTES_CEILING,
+      );
+
+      await writeFile(configPath, JSON.stringify({ structuredExchange: { maxBytes: 500_000 } }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).structuredExchange.maxBytes, 500_000);
+    });
+  });
+
+  test("structuredExchange.maxBytes cannot be raised past the contract ceiling", async () => {
+    // Clamped, not refused: a deployment may only be more careful than the
+    // published contract. Honouring a larger value would have the server serve a
+    // document the browser's own bound then refuses, leaving the reader with raw
+    // JSON and no explanation.
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({ structuredExchange: { maxBytes: 26_214_400 } }, null, 2));
+      assert.equal(
+        loadConfig(dir, { config: configPath }).structuredExchange.maxBytes,
+        STRUCTURED_EXCHANGE_BYTES_CEILING,
+      );
+    });
+  });
+
+  test("structuredExchange.maxBytes refuses a value that is not a positive integer", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      for (const maxBytes of ["4MB", 0, -1, 1.5]) {
+        await writeFile(configPath, JSON.stringify({ structuredExchange: { maxBytes } }, null, 2));
+        assert.throws(
+          () => loadConfig(dir, { config: configPath }),
+          /"structuredExchange.maxBytes" must be a positive integer/,
+        );
       }
     });
   });

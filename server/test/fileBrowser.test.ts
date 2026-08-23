@@ -35,6 +35,7 @@ import {
   searchFiles,
   writeFileFromBrowser,
 } from "../src/fileBrowser.ts";
+import { STRUCTURED_EXCHANGE_SCHEMA_V1 } from "@pi-outpost/shared/structured-exchange";
 import { realResolve } from "../src/sandbox.ts";
 
 /** The reason carried by a FileBrowserError, or the error itself when it is another kind. */
@@ -46,6 +47,36 @@ async function reasonOf(run: () => Promise<unknown>): Promise<string> {
     throw error;
   }
   throw new Error("expected the call to be refused, but it resolved");
+}
+
+/** The FileBrowserError itself, for assertions about what it says rather than only why. */
+async function errorOf(run: () => Promise<unknown>): Promise<FileBrowserError> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof FileBrowserError) return error;
+    throw error;
+  }
+  throw new Error("expected the call to be refused, but it resolved");
+}
+
+/** A document ceiling above the preview limit, the way a deployment configures one. */
+const DOCUMENT_CEILING = MAX_PREVIEW_BYTES * 4;
+
+/**
+ * A JSON file past the preview limit, optionally declaring itself a
+ * structured-exchange document. The pair differ in one field and in nothing else,
+ * so a test that separates them is testing the declaration and not the size.
+ */
+function oversizedDocument(declared: boolean): string {
+  const nodes = [];
+  for (let i = 0; nodes.length === 0 || JSON.stringify(nodes).length < MAX_PREVIEW_BYTES; i += 1) {
+    nodes.push({ id: `n${i}`, label: `node ${i} padded so the file grows quickly enough to matter` });
+  }
+  const document = declared
+    ? { schema: STRUCTURED_EXCHANGE_SCHEMA_V1, kind: "graph", data: { nodes, edges: [] } }
+    : { kind: "graph", data: { nodes, edges: [] } };
+  return JSON.stringify(document);
 }
 
 describe("file browser", () => {
@@ -80,6 +111,14 @@ describe("file browser", () => {
     write("src/nested/deep.txt", "deep\n");
     write("binary.bin", Buffer.from([0x68, 0x69, 0x00, 0x21]));
     write("big.txt", "x".repeat(MAX_PREVIEW_BYTES + 10));
+    // Past the preview limit and under a document ceiling: which of the two applies
+    // depends on what the file declares, which is the whole point of the pair.
+    write("big-document.json", oversizedDocument(true));
+    write("big-object.json", oversizedDocument(false));
+    write(
+      "small-document.json",
+      JSON.stringify({ schema: STRUCTURED_EXCHANGE_SCHEMA_V1, kind: "graph", data: { nodes: [{ id: "a" }], edges: [] } }),
+    );
     mkdirSync(path.join(root, "empty"), { recursive: true });
 
     // A symlink pointing out of the root: listed, but never followed. Creating one
@@ -199,6 +238,47 @@ describe("file browser", () => {
 
     test("refuses a file over the preview cap", async () => {
       assert.equal(await reasonOf(() => readFileForPreview(root, "big.txt")), "too-large");
+    });
+
+    test("measures a structured-exchange document against its own ceiling", async () => {
+      // Over the 1 MB preview limit and served anyway, because the document says
+      // what it is. This is the same arrangement PDFs have, decided by content
+      // rather than by extension — the file is named .json like any other.
+      const result = await readFileForPreview(root, "big-document.json", DOCUMENT_CEILING);
+      assert.ok(result.size > MAX_PREVIEW_BYTES);
+      assert.equal(JSON.parse(result.content).schema, STRUCTURED_EXCHANGE_SCHEMA_V1);
+    });
+
+    test("keeps the preview limit for JSON that declares nothing", async () => {
+      // Same size, same extension, no declaration: the document ceiling is not a
+      // ceiling for JSON, it is a ceiling for these documents.
+      assert.equal(await reasonOf(() => readFileForPreview(root, "big-object.json", DOCUMENT_CEILING)), "too-large");
+    });
+
+    test("applies a document ceiling tightened below the preview limit", async () => {
+      // The direction that silently did nothing: with the document limit set under
+      // 1 MB, a declared document between the two was served anyway, because the
+      // check only ever refused files that were *not* documents. A configured
+      // limit that refuses nothing is not a limit.
+      const size = statSync(path.join(root, "small-document.json")).size;
+      const error = await errorOf(() => readFileForPreview(root, "small-document.json", size - 1));
+      assert.equal(error.reason, "too-large");
+      assert.match(error.message, /structured-exchange document limit/);
+      // The same file under the same tightened setting, when it declares nothing,
+      // keeps the preview limit and is served — the ceiling belongs to documents.
+      assert.ok((await readFileForPreview(root, "readme.md", size - 1)).content.length > 0);
+    });
+
+    test("reports a document past its own ceiling as a size problem naming both limits", async () => {
+      // The refusal happens before anything is read, so it cannot know which of the
+      // two limits the file was going to be measured against — and a reader told
+      // only about the 1 MB one would conclude diagrams are capped there.
+      const ceiling = statSync(path.join(root, "big-document.json")).size - 1;
+      const error = await errorOf(() => readFileForPreview(root, "big-document.json", ceiling));
+      assert.equal(error.reason, "too-large");
+      assert.match(error.message, /1 MB preview limit/);
+      assert.match(error.message, /structured-exchange documents/);
+      assert.doesNotMatch(error.message, /invalid|schema does not/i);
     });
 
     test("refuses a directory", async () => {

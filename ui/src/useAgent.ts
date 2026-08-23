@@ -58,6 +58,13 @@ export type OpenFile =
       saveError?: { message: string; conflict: boolean };
       /** Created from the tree just now: the viewer opens straight into edit mode. */
       justCreated?: boolean;
+      /**
+       * Why this file failed the structured-exchange schema it declares, from the
+       * reference validator. Present only for a document that claims the contract
+       * and does not meet it; the browser's own check answers yes or no and has no
+       * reason to give.
+       */
+      documentIssues?: { rule: string; path: string; message: string }[];
     }
   | { status: "error"; path: string; message: string };
 
@@ -694,7 +701,14 @@ function reduce(state: AgentState, action: Action): AgentState {
       if (state.openFile?.status !== "loading" || state.openFile.requestId !== message.requestId) return state;
       return {
         ...state,
-        openFile: { status: "loaded", path: message.path, content: message.content, size: message.size, mtimeMs: message.mtimeMs },
+        openFile: {
+          status: "loaded",
+          path: message.path,
+          content: message.content,
+          size: message.size,
+          mtimeMs: message.mtimeMs,
+          ...(message.documentIssues === undefined ? {} : { documentIssues: message.documentIssues }),
+        },
       };
     case "file_written": {
       if (message.requestId.startsWith("create:")) {

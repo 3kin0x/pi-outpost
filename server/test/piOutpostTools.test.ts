@@ -5,8 +5,8 @@
  * child. The child builds its own toolset from `PI_OUTPOST_TOOLS`, so a missing
  * or malformed value must stop startup with a message that names the setting,
  * rather than an agent that silently runs with the wrong (or no) extractors.
- * The wiring test guards parity: the five tools the embedded runtime registers
- * are the same five the child gets, built the same way.
+ * The wiring test guards parity: the six tools the embedded runtime registers
+ * are the same six the child gets, built the same way.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -23,7 +23,7 @@ import piOutpostExtension, {
 
 const VALID: PiOutpostToolsSettings = {
   cwd: "/tmp",
-  maxBytes: { pdf: 10485760, docx: 5242880, xlsx: 5242880, pptx: 5242880 },
+  maxBytes: { pdf: 10485760, docx: 5242880, xlsx: 5242880, pptx: 5242880, structuredExchange: 4000000 },
 };
 
 describe("parseToolsSettings", () => {
@@ -137,15 +137,16 @@ describe("createPiOutpostTools", () => {
     await Promise.all(roots.map((r) => rm(r, { recursive: true, force: true })));
   });
 
-  test("returns the five tools the agent needs, in the documented order", async () => {
+  test("returns the six tools the agent needs, in the documented order", async () => {
     const tools = await createPiOutpostTools({ cwd: root, maxBytes: VALID.maxBytes });
-    assert.equal(tools.length, 5);
+    assert.equal(tools.length, 6);
     const names = tools.map((t) => t.name);
     assert.deepEqual(names, [
       "pdf_extract",
       "docx_extract",
       "xlsx_extract",
       "pptx_extract",
+      "write_structure_figure",
       "present_structure",
     ]);
   });
@@ -194,17 +195,24 @@ describe("default export (extension entry)", () => {
     });
   }
 
-  test("registers the five tools when the env var is set", async () => {
+  test("registers the six tools when the env var is set", async () => {
     await withEnv(JSON.stringify({ cwd: root, maxBytes: VALID.maxBytes }), async () => {
       const registered: ToolDefinition[] = [];
       const pi = { registerTool: (t: ToolDefinition) => void registered.push(t) } as unknown as ExtensionAPI;
 
       await piOutpostExtension(pi);
 
-      assert.equal(registered.length, 5);
+      assert.equal(registered.length, 6);
       assert.deepEqual(
         registered.map((t) => t.name),
-        ["pdf_extract", "docx_extract", "xlsx_extract", "pptx_extract", "present_structure"],
+        [
+          "pdf_extract",
+          "docx_extract",
+          "xlsx_extract",
+          "pptx_extract",
+          "write_structure_figure",
+          "present_structure",
+        ],
       );
     });
   });

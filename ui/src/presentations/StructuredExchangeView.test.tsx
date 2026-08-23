@@ -904,7 +904,12 @@ describe("labels the producer wrote on two lines", () => {
     const { container } = renderBody(withStructured(twoLine));
 
     const first = [...container.querySelectorAll("[data-element-role]")][0];
-    const lines = [...first.querySelectorAll("tspan")].map((line) => line.textContent);
+    // One `text` per line, each at its own baseline. It was one `text` of `tspan`s
+    // until the figure became a list of shapes a serializer can also draw: a tspan
+    // positioned by x and y renders identically to a text positioned the same way,
+    // and a flat list is what both renderers can walk. The contract asserted here —
+    // that a newline the producer wrote stays two lines — is unchanged.
+    const lines = [...first.querySelectorAll("text")].map((line) => line.textContent);
     expect(lines).toEqual(["Batterie HV", "400-800V"]);
   });
 

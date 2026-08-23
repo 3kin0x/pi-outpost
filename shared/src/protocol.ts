@@ -432,7 +432,26 @@ export type ServerMessage =
   | { type: "compaction_end"; errorMessage?: string }
   | { type: "error"; message: string }
   | { type: "directory_listing"; requestId: string; path: string; entries: DirEntry[] }
-  | { type: "file_content"; requestId: string; path: string; content: string; size: number; mtimeMs: number }
+  /**
+   * A file the browser asked to read.
+   *
+   * `documentIssues` is present only when the content declares a supported
+   * structured-exchange schema and does not satisfy it. It carries the reference
+   * validator's diagnosis — the browser's own check is a verdict without a reason
+   * (deliberately: the diagnostics are 22 KB it does not otherwise need), and the
+   * one person able to tell the producer what is wrong is the reader looking at
+   * the file. Shaped like `StructuredExchangeIssue`, restated here because this
+   * module deliberately imports nothing.
+   */
+  | {
+      type: "file_content";
+      requestId: string;
+      path: string;
+      content: string;
+      size: number;
+      mtimeMs: number;
+      documentIssues?: { rule: string; path: string; message: string }[];
+    }
   | { type: "file_written"; requestId: string; path: string; size: number; mtimeMs: number }
   /**
    * An upload landed. `path` is what the server actually wrote, which is not

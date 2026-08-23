@@ -10,6 +10,15 @@
     "./structured-exchange/schema-node": "./src/structuredExchangeSchemaNode.ts",
     "./schemas/*": "./schemas/*",
     "./structured-exchange/bounds": "./src/structuredExchangeBounds.ts",
-    "./structured-exchange/schema-browser": "./src/structuredExchangeSchemaBrowser.ts"
+    "./structured-exchange/schema-browser": "./src/structuredExchangeSchemaBrowser.ts",
+    "./structured-exchange/model": "./src/structuredExchangeModel.ts",
+    "./structured-exchange/palette": "./src/structuredExchangePalette.ts",
+    "./structured-exchange/text": "./src/structuredExchangeText.ts",
+    "./structured-exchange/figure": "./src/structuredExchangeFigure.ts",
+    "./structured-exchange/document": "./src/structuredExchangeDocument.ts",
+    "./structured-exchange/export": "./src/structuredExchangeExport.ts"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.1"
   }
 }

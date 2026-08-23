@@ -114,12 +114,34 @@ describe("createSandboxedTools", () => {
   describe("which tools the model gets", () => {
     test("read-only by default", async () => {
       const tools = await createSandboxedTools(config({ root }));
-      assert.deepEqual(names(tools), ["docx_extract", "find", "grep", "ls", "pdf_extract", "pptx_extract", "read", "xlsx_extract"]);
+      assert.deepEqual(names(tools), [
+        "docx_extract",
+        "find",
+        "grep",
+        "ls",
+        "pdf_extract",
+        "pptx_extract",
+        "read",
+        "write_structure_figure",
+        "xlsx_extract",
+      ]);
     });
 
     test("adds edit and write only when writing is allowed", async () => {
       const tools = await createSandboxedTools(config({ root, allowWrite: true }));
-      assert.deepEqual(names(tools), ["docx_extract", "edit", "find", "grep", "ls", "pdf_extract", "pptx_extract", "read", "write", "xlsx_extract"]);
+      assert.deepEqual(names(tools), [
+        "docx_extract",
+        "edit",
+        "find",
+        "grep",
+        "ls",
+        "pdf_extract",
+        "pptx_extract",
+        "read",
+        "write",
+        "write_structure_figure",
+        "xlsx_extract",
+      ]);
     });
 
     test("hands over the document readers with no shell and no writes", async () => {
