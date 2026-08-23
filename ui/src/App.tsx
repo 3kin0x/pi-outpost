@@ -580,7 +580,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           <main
             ref={mainRef}
             onScroll={handleScroll}
-            className={`flex-1 overflow-y-auto ${analysisOpen ? "md:pr-[26rem]" : ""} ${state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
+            className={`flex-1 overflow-y-auto ${analysisOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
           >
             <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-6">
               {state.items.length === 0 && (

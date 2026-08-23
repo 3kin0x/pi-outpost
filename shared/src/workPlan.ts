@@ -27,7 +27,9 @@ export interface WorkPlan {
 }
 
 export const WORK_PLAN_LIMITS = {
-  serializedBytes: 500_000,
+  // `action=get` returns the complete plan to the model after resume/compaction.
+  // Keep that recovery state useful without letting it refill an entire context.
+  serializedBytes: 64 * 1024,
   tasks: 500,
   title: 200,
   description: 4_000,
@@ -42,7 +44,7 @@ export type WorkPlanMutation =
   | { action: "replace"; plan: unknown }
   | { action: "add_task"; task: unknown }
   | { action: "update_task"; taskId: string; changes: unknown }
-  | { action: "move_task"; taskId: string; parentId?: string }
+  | { action: "move_task"; taskId: string; parentId?: string | null }
   | { action: "remove_task"; taskId: string }
   | { action: "set_dependencies"; taskId: string; dependsOn: unknown }
   | { action: "set_resources"; taskId: string; resources: unknown };
@@ -75,13 +77,17 @@ function ids(value: unknown, field: string): string[] {
 function resources(value: unknown): WorkPlanResource[] {
   if (!Array.isArray(value)) throw new Error("resources must be an array");
   if (value.length > WORK_PLAN_LIMITS.resourcesPerTask) throw new Error("too many resources");
-  return value.map((item, index) => {
+  const result = value.map((item, index) => {
     const raw = object(item);
     return {
       uri: text(raw.uri, `resources[${index}].uri`, WORK_PLAN_LIMITS.uri),
       ...(raw.label === undefined ? {} : { label: text(raw.label, `resources[${index}].label`, WORK_PLAN_LIMITS.title) }),
     };
   });
+  if (new Set(result.map((resource) => resource.uri)).size !== result.length) {
+    throw new Error("resources contains a duplicate resource URI");
+  }
+  return result;
 }
 
 function task(value: unknown): WorkPlanTask {
@@ -95,7 +101,9 @@ function task(value: unknown): WorkPlanTask {
     title: text(raw.title, "task.title", WORK_PLAN_LIMITS.title),
     ...(raw.description === undefined ? {} : { description: optionalText(raw.description, "task.description", WORK_PLAN_LIMITS.description) }),
     status: status as WorkPlanStatus,
-    ...(raw.parentId === undefined ? {} : { parentId: text(raw.parentId, "task.parentId", WORK_PLAN_LIMITS.title) }),
+    ...(raw.parentId === undefined || raw.parentId === null
+      ? {}
+      : { parentId: text(raw.parentId, "task.parentId", WORK_PLAN_LIMITS.title) }),
     dependsOn: raw.dependsOn === undefined ? [] : ids(raw.dependsOn, "task.dependsOn"),
     resources: raw.resources === undefined ? [] : resources(raw.resources),
     ...(raw.statusReason === undefined ? {} : { statusReason: optionalText(raw.statusReason, "task.statusReason", WORK_PLAN_LIMITS.reason) }),
@@ -177,7 +185,12 @@ export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutat
       break;
     }
     case "move_task":
-      tasks[index] = { ...tasks[index], ...(mutation.parentId === undefined ? { parentId: undefined } : { parentId: text(mutation.parentId, "parentId", WORK_PLAN_LIMITS.title) }) };
+      tasks[index] = {
+        ...tasks[index],
+        ...(mutation.parentId === undefined || mutation.parentId === null
+          ? { parentId: undefined }
+          : { parentId: text(mutation.parentId, "parentId", WORK_PLAN_LIMITS.title) }),
+      };
       break;
     case "remove_task": {
       const removed = new Set<string>([mutation.taskId]);

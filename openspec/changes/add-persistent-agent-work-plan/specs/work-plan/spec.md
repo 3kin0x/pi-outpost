@@ -59,6 +59,11 @@ The system SHALL provide a persistent or readily accessible Work Plan view along
 - **WHEN** a session has completed, active, blocked, and review tasks
 - **THEN** the overview makes every state and the current focus distinguishable
 
+#### Scenario: Preview a collapsed plan
+- **GIVEN** the Work Plan detail panel is collapsed
+- **WHEN** the user hovers or focuses its progress control
+- **THEN** a compact summary shows task lines and completion boxes, and selecting the control opens the full detail panel
+
 #### Scenario: Navigate a resource
 - **GIVEN** a task references a resource the system can resolve
 - **WHEN** the user selects that resource

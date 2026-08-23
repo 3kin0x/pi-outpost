@@ -100,7 +100,7 @@ import { createPptxExtractToolDefinition } from "./pptxTool.ts";
 import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
 import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
-import { copyWorkPlan, deleteWorkPlan, loadWorkPlan } from "./workPlanStore.ts";
+import { copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile } from "./workPlanStore.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createDirectoryWatcher, type DirectoryWatcher } from "./fileWatcher.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
@@ -950,6 +950,7 @@ const runtime: AgentRuntime = await (async () => {
 let activeWorkPlan: WorkPlan | null = await loadWorkPlan(runtime.snapshot().sessionFile);
 let activeWorkPlanSessionFile = runtime.snapshot().sessionFile;
 let workPlanSessionSync: Promise<void> = Promise.resolve();
+let workPlanInheritanceSource: string | undefined;
 
 /**
  * Session replacement events are synchronous, while their sidecar reads are not.
@@ -960,16 +961,21 @@ let workPlanSessionSync: Promise<void> = Promise.resolve();
 function queueWorkPlanSessionSync(): Promise<void> {
   const sessionFile = runtime.snapshot().sessionFile;
   workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
+    const inheritanceSource = workPlanInheritanceSource;
+    const inherited =
+      inheritanceSource !== undefined && !sameSessionFile(inheritanceSource, sessionFile);
     let plan: WorkPlan | null = null;
     try {
+      if (inherited) await copyWorkPlan(inheritanceSource, sessionFile);
       plan = await loadWorkPlan(sessionFile);
     } catch (error) {
       reportError(error);
     }
-    if (runtime.snapshot().sessionFile !== sessionFile) return;
+    if (!sameSessionFile(runtime.snapshot().sessionFile, sessionFile)) return;
     activeWorkPlan = plan;
     activeWorkPlanSessionFile = sessionFile;
     broadcast({ type: "session_replaced", ...snapshot() });
+    if (inherited) broadcast({ type: "work_plan_changed", workPlan: plan });
     console.log(`[pi] session ${runtime.snapshot().sessionId}`);
   });
   workPlanSessionSync.catch(reportError);
@@ -978,8 +984,14 @@ function queueWorkPlanSessionSync(): Promise<void> {
 
 function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
   workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
-    const plan = await loadWorkPlan(sessionFile);
-    if (runtime.snapshot().sessionFile !== sessionFile) return;
+    let plan: WorkPlan | null;
+    try {
+      plan = await loadWorkPlan(sessionFile);
+    } catch (error) {
+      reportError(error);
+      return;
+    }
+    if (!sameSessionFile(runtime.snapshot().sessionFile, sessionFile)) return;
     activeWorkPlan = plan;
     activeWorkPlanSessionFile = sessionFile;
     if (changed) broadcast({ type: "work_plan_changed", workPlan: plan });
@@ -1057,7 +1069,7 @@ function snapshot(): SessionSnapshot {
     contextUsage: state.contextUsage,
     // A runtime replacement is synchronous but its sidecar read is not. Never
     // combine the new transcript/session id with the previous session's plan.
-    workPlan: state.sessionFile === activeWorkPlanSessionFile ? activeWorkPlan : null,
+    workPlan: sameSessionFile(state.sessionFile, activeWorkPlanSessionFile) ? activeWorkPlan : null,
     writableRoot: WRITABLE_ROOT,
     gitAvailable: GIT !== null,
     credentials: credentialStatus(),
@@ -1247,7 +1259,8 @@ function onRuntimeEvent(event: RuntimeEvent): void {
         event.toolName === "work_plan" &&
         !event.isError &&
         workPlanDetails?.type === "work_plan" &&
-        workPlanDetails.sessionFile === runtime.snapshot().sessionFile
+        typeof workPlanDetails.sessionFile === "string" &&
+        sameSessionFile(workPlanDetails.sessionFile, runtime.snapshot().sessionFile)
       ) {
         try {
           // Reject malformed tool details at the runtime boundary, then reload
@@ -1539,6 +1552,7 @@ async function handleUpdateConfig(
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
     await rebuildTools.call(runtime);
+    await workPlanSessionSync;
     // Only now: the settings are on disk and the session in front of the user was
     // built from them.
     send(socket, { type: "update_config_ack", ...snapshot() });
@@ -2019,18 +2033,27 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
   }
   let selectedText: string | undefined;
   const sourceSessionFile = runtime.snapshot().sessionFile;
-  await replaceSession(socket, async () => {
-    const result = await runtime.fork(entryId);
-    selectedText = result.selectedText;
-    if (!result.cancelled) {
-      await workPlanSessionSync;
-      await copyWorkPlan(sourceSessionFile, runtime.snapshot().sessionFile);
-      activeWorkPlan = await loadWorkPlan(runtime.snapshot().sessionFile);
-      activeWorkPlanSessionFile = runtime.snapshot().sessionFile;
-      broadcast({ type: "work_plan_changed", workPlan: activeWorkPlan });
-    }
-    return result;
-  });
+  let ownsInheritance = false;
+  try {
+    await replaceSession(socket, async () => {
+      // `replaceSession` calls this action only after acquiring the global
+      // replacement lock. A concurrent rejected fork must never clear the
+      // inheritance marker owned by this invocation.
+      workPlanInheritanceSource = sourceSessionFile;
+      ownsInheritance = true;
+      try {
+        const result = await runtime.fork(entryId);
+        selectedText = result.selectedText;
+        return result;
+      } catch (error) {
+        workPlanInheritanceSource = undefined;
+        ownsInheritance = false;
+        throw error;
+      }
+    });
+  } finally {
+    if (ownsInheritance) workPlanInheritanceSource = undefined;
+  }
   if (selectedText) send(socket, { type: "editor_prefill", text: selectedText });
   broadcast({ type: "tree", roots: buildTree() });
 }

@@ -24,12 +24,14 @@ describe("WorkPlanPanel", () => {
     expect(screen.getByLabelText("Done")).toBeTruthy();
     expect(screen.getByLabelText("Needs review")).toBeTruthy();
     expect(screen.getByLabelText("Blocked")).toBeTruthy();
+    expect(screen.getByRole("treeitem", { name: /Build UI/ })).toHaveAttribute("aria-level", "1");
+    expect(screen.getByRole("treeitem", { name: /Review output/ })).toHaveAttribute("aria-level", "2");
   });
 
   it("inspects details and navigates known workspace resources", () => {
     const onOpenWorkspace = vi.fn();
     render(<WorkPlanPanel plan={plan} open onToggle={() => {}} onOpenWorkspace={onOpenWorkspace} />);
-    fireEvent.click(screen.getByRole("button", { name: /Build UI/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /Build UI/ }));
     expect(screen.getByText("Keep the plan readable.")).toBeTruthy();
     expect(screen.getByLabelText("Task details").textContent).toContain("Depends on: Analyse impact");
     fireEvent.click(screen.getByRole("button", { name: "App" }));
@@ -38,17 +40,44 @@ describe("WorkPlanPanel", () => {
 
   it("keeps an unresolved generic resource visible but not clickable", () => {
     render(<WorkPlanPanel plan={plan} open onToggle={() => {}} onOpenWorkspace={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /Review output/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /Review output/ }));
     expect(screen.getByText("Needs human acceptance")).toBeTruthy();
     expect(screen.getByText("SYS-421").tagName).toBe("SPAN");
-    fireEvent.click(screen.getByRole("button", { name: /Publish/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /Publish/ }));
     expect(screen.getByText("Credentials unavailable")).toBeTruthy();
   });
 
-  it("collapses to a readily accessible progress control", () => {
+  it("does not make a traversing workspace reference navigable", () => {
+    const unsafe: WorkPlan = {
+      ...plan,
+      tasks: [{ ...plan.tasks[0], resources: [{ uri: "workspace:../../etc/passwd", label: "outside" }] }],
+    };
+    const onOpenWorkspace = vi.fn();
+    render(<WorkPlanPanel plan={unsafe} open onToggle={() => {}} onOpenWorkspace={onOpenWorkspace} />);
+    fireEvent.click(screen.getByRole("treeitem", { name: /Analyse impact/ }));
+    expect(screen.getByText("outside").tagName).toBe("SPAN");
+    expect(onOpenWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("previews task lines from the collapsed progress control before opening details", () => {
     const onToggle = vi.fn();
     render(<WorkPlanPanel plan={plan} open={false} onToggle={onToggle} onOpenWorkspace={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "Open Work Plan" }));
+    const control = screen.getByRole("button", { name: "Open Work Plan" });
+    const preview = screen.getByRole("tooltip");
+    expect(control).toHaveAttribute("aria-describedby", preview.id);
+    expect(preview).toHaveClass("hidden");
+    fireEvent.mouseEnter(control.parentElement!);
+    expect(preview).toHaveClass("block");
+    expect(preview.textContent).toContain("Analyse impact");
+    expect(preview.textContent).toContain("Build UI");
+    expect(preview.textContent).toContain("Review output");
+    expect(preview.textContent).toContain("Publish");
+    expect(preview.querySelectorAll("li")).toHaveLength(4);
+    expect(screen.getByLabelText("Done").textContent).toBe("☑");
+    expect(screen.getByLabelText("In progress").textContent).toBe("☐");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(preview).toHaveClass("hidden");
+    fireEvent.click(control);
     expect(onToggle).toHaveBeenCalledOnce();
   });
 });

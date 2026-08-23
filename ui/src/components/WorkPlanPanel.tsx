@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { WorkPlan, WorkPlanResource, WorkPlanStatus, WorkPlanTask } from "@pi-outpost/shared";
 
 const STATUS: Record<WorkPlanStatus, { icon: string; label: string; className: string }> = {
@@ -9,6 +9,8 @@ const STATUS: Record<WorkPlanStatus, { icon: string; label: string; className: s
   needs_review: { icon: "?", label: "Needs review", className: "text-amber-600 dark:text-amber-400" },
 };
 
+const PREVIEW_TASK_LIMIT = 8;
+
 interface WorkPlanPanelProps {
   plan: WorkPlan;
   open: boolean;
@@ -17,16 +19,31 @@ interface WorkPlanPanelProps {
 }
 
 function workspacePath(resource: WorkPlanResource): string | null {
-  if (resource.uri.startsWith("workspace:")) return resource.uri.slice("workspace:".length);
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(resource.uri)) return resource.uri;
-  return null;
+  const candidate = resource.uri.startsWith("workspace:")
+    ? resource.uri.slice("workspace:".length)
+    : !/^[a-z][a-z0-9+.-]*:/i.test(resource.uri)
+      ? resource.uri
+      : null;
+  if (candidate === null || candidate === "" || /^(?:[\\/]|[a-z]:[\\/])/i.test(candidate)) return null;
+  if (candidate.replaceAll("\\", "/").split("/").includes("..")) return null;
+  return candidate;
 }
 
 export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPlanPanelProps) {
+  const previewId = useId();
+  const [previewVisible, setPreviewVisible] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   useEffect(() => {
     if (selectedId !== null && !plan.tasks.some((task) => task.id === selectedId)) setSelectedId(null);
   }, [plan, selectedId]);
+  useEffect(() => {
+    if (!previewVisible) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewVisible(false);
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, [previewVisible]);
 
   const children = useMemo(() => {
     const result = new Map<string | undefined, WorkPlanTask[]>();
@@ -34,6 +51,17 @@ export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPla
     return result;
   }, [plan.tasks]);
   const byId = useMemo(() => new Map(plan.tasks.map((task) => [task.id, task])), [plan.tasks]);
+  const previewTasks = useMemo(() => {
+    const result: Array<{ task: WorkPlanTask; depth: number }> = [];
+    const visit = (parentId: string | undefined, depth: number) => {
+      for (const task of children.get(parentId) ?? []) {
+        result.push({ task, depth });
+        visit(task.id, depth + 1);
+      }
+    };
+    visit(undefined, 0);
+    return result.slice(0, PREVIEW_TASK_LIMIT);
+  }, [children]);
   const selected = selectedId ? byId.get(selectedId) : undefined;
   const done = plan.tasks.filter((task) => task.status === "done").length;
 
@@ -41,7 +69,7 @@ export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPla
     (children.get(parentId) ?? []).flatMap((task) => {
       const status = STATUS[task.status];
       return [
-        <button key={task.id} type="button" onClick={() => setSelectedId(task.id)} aria-current={task.status === "in_progress" ? "step" : undefined}
+        <button key={task.id} type="button" role="treeitem" aria-level={depth + 1} aria-selected={selectedId === task.id} onClick={() => setSelectedId(task.id)} aria-current={task.status === "in_progress" ? "step" : undefined}
           className={`flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 ${selectedId === task.id ? "bg-zinc-100 dark:bg-zinc-800" : ""}`}
           style={{ paddingLeft: `${0.5 + depth * 0.85}rem` }}>
           <span className={`mt-px w-4 shrink-0 text-center font-semibold ${status.className}`} aria-label={status.label}>{status.icon}</span>
@@ -51,7 +79,21 @@ export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPla
       ];
     });
 
-  if (!open) return <button type="button" onClick={onToggle} className="absolute right-3 top-3 z-20 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-900" aria-label="Open Work Plan">Plan {done}/{plan.tasks.length}</button>;
+  if (!open) return (
+    <div className="absolute right-3 top-3 z-20" onMouseEnter={() => setPreviewVisible(true)} onMouseLeave={() => setPreviewVisible(false)} onFocusCapture={() => setPreviewVisible(true)} onBlurCapture={() => setPreviewVisible(false)}>
+      <button type="button" onClick={() => { setPreviewVisible(false); onToggle(); }} className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-900" aria-label="Open Work Plan" aria-describedby={previewId}>Plan {done}/{plan.tasks.length}</button>
+      <div id={previewId} role="tooltip" className={`absolute right-0 top-full w-72 pt-2 ${previewVisible ? "block" : "hidden"}`}>
+        <div className="rounded-md border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"><ul className="space-y-1">
+          {previewTasks.map(({ task, depth }) => <li key={task.id} className="flex min-w-0 items-start gap-1.5 text-xs" style={{ paddingLeft: `${depth * 0.75}rem` }}>
+            <span aria-label={STATUS[task.status].label} className={`shrink-0 font-semibold ${STATUS[task.status].className}`}>{task.status === "done" ? "☑" : "☐"}</span>
+            <span className={`truncate ${task.status === "done" ? "text-zinc-500 line-through" : "text-zinc-800 dark:text-zinc-200"}`}>{task.title}</span>
+          </li>)}
+        </ul>
+        {plan.tasks.length > previewTasks.length && <div className="mt-1 text-[11px] text-zinc-500">+{plan.tasks.length - previewTasks.length} more</div>}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <aside aria-label="Work Plan" className="absolute inset-y-0 right-0 z-10 flex w-full flex-col border-l border-zinc-200 bg-white/95 shadow-lg backdrop-blur md:w-[23rem] dark:border-zinc-800 dark:bg-zinc-950/95">
@@ -60,7 +102,7 @@ export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPla
         <div className="mt-2 text-xs text-zinc-500">Progress: {done} / {plan.tasks.length}</div>
         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800" aria-hidden><div className="h-full bg-emerald-500" style={{ width: `${plan.tasks.length === 0 ? 0 : (done / plan.tasks.length) * 100}%` }} /></div>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">{rows(undefined)}</div>
+      <div role="tree" aria-label="Work Plan tasks" className="min-h-0 flex-1 overflow-y-auto p-2">{rows(undefined)}</div>
       {selected && <section aria-label="Task details" className="max-h-[45%] overflow-y-auto border-t border-zinc-200 p-3 text-xs dark:border-zinc-800">
         <div className={`font-semibold ${STATUS[selected.status].className}`}>{STATUS[selected.status].label}</div><h3 className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{selected.title}</h3>
         {selected.description && <p className="mt-2 whitespace-pre-wrap text-zinc-600 dark:text-zinc-300">{selected.description}</p>}

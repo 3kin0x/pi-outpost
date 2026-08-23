@@ -21,6 +21,7 @@ const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fix
 const CONFIG_FILE = "pi-outpost.test.json";
 
 const skills = (message) => (message.commands ?? []).filter((c) => c.source === "skill").map((c) => c.name);
+const activeTools = (message) => (message.tools ?? []).filter((tool) => tool.active).map((tool) => tool.name);
 
 describe("persistent runtime settings", () => {
   test("an applied skill path reaches the session, the config file, and the next start", async () => {
@@ -44,6 +45,8 @@ describe("persistent runtime settings", () => {
       await client.open();
       const hello = await client.waitFor("hello", 30_000);
       assert.deepEqual(skills(hello), ["skill:deployment-skill"], "precondition: only the deployment's skill");
+      assert.ok(activeTools(hello).includes("present_structure"));
+      assert.ok(activeTools(hello).includes("work_plan"));
       assert.deepEqual(hello.userSkillPaths, [], "the snapshot carries the user's own list");
 
       client.send({ type: "update_config", userSkillPaths: [skillDir] });
@@ -55,6 +58,8 @@ describe("persistent runtime settings", () => {
         "the replacement session loaded the new skill, and kept the deployment's",
       );
       assert.deepEqual(ack.userSkillPaths, [skillDir]);
+      assert.ok(activeTools(ack).includes("present_structure"), "config apply keeps the Structured Exchange tool");
+      assert.ok(activeTools(ack).includes("work_plan"), "config apply keeps the Work Plan tool");
       assert.notEqual(ack.sessionId, hello.sessionId, "the session was replaced");
 
       const persisted = JSON.parse(await readFile(path.join(root, CONFIG_FILE), "utf8"));

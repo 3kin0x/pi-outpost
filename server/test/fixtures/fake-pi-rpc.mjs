@@ -144,11 +144,6 @@ function handle(command) {
 
   emitAll(script?.before);
 
-  if (config.dialogBlocksCommand === type) {
-    pendingDialogCommand = command;
-    return;
-  }
-
   const failure = config.failures?.[type];
   if (failure !== undefined) {
     emit({ ...responseId, type: "response", command: type, success: false, error: failure });
@@ -156,6 +151,23 @@ function handle(command) {
     return;
   }
 
+  // Keep a command in flight while another client reaches the server. This is
+  // used for replacement-lock races that cannot be reproduced with an
+  // immediate scripted response.
+  if (script?.delayMs !== undefined) {
+    setTimeout(() => finishSuccessfulCommand(command, type, script, responseId), script.delayMs);
+    return;
+  }
+
+  if (config.dialogBlocksCommand === type) {
+    pendingDialogCommand = command;
+    return;
+  }
+
+  finishSuccessfulCommand(command, type, script, responseId);
+}
+
+function finishSuccessfulCommand(command, type, script, responseId) {
   // Commands that change what the state queries return
   if (type === "set_model") state.model = { provider: command.provider, id: command.modelId, name: command.modelId, reasoning: true };
   if (type === "set_thinking_level") state.thinkingLevel = command.level;

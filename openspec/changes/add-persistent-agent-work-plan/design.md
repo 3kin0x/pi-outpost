@@ -32,8 +32,8 @@ Use a persistent/collapsible companion surface with status icons, nesting, focus
 ## Risks / Trade-offs
 
 - [Sidecar lifecycle may diverge from session lifecycle] → Use the same canonical session identity/path and fork/switch/delete hooks; test each lifecycle operation.
-- [A plan can become very large] → Validate bounded titles, descriptions, resources, and task counts; send full snapshots only after accepted mutations.
-- [Agent tool availability differs between embedded and RPC runtimes] → Define one runtime capability contract and test both supported runtimes before claiming parity.
+- [A plan can become very large] → Cap the complete serialized plan at 64 KiB so a post-compaction `get` cannot refill the model context; also bound titles, descriptions, resources, and task counts.
+- [Agent tool availability differs between embedded and RPC runtimes] → Define one runtime capability contract and execute `work_plan` through a real `pi --mode rpc` child before claiming parity.
 - [Dependencies can form cycles] → Reject self-dependencies and cycles atomically.
 
 ## Migration Plan

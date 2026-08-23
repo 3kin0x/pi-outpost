@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { mutateWorkPlan, validateWorkPlan, type WorkPlan } from "@pi-outpost/shared/work-plan";
-import { applyWorkPlanMutation, copyWorkPlan, deleteWorkPlan, loadWorkPlan, workPlanPath } from "../src/workPlanStore.ts";
+import { mutateWorkPlan, validateWorkPlan, WORK_PLAN_LIMITS, type WorkPlan } from "@pi-outpost/shared/work-plan";
+import { applyWorkPlanMutation, copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile, workPlanPath } from "../src/workPlanStore.ts";
 import { createWorkPlanToolDefinition } from "../src/workPlanTool.ts";
 
 const base = (): WorkPlan => ({
@@ -36,7 +36,7 @@ describe("Work Plan contract", () => {
     assert.equal(next?.tasks.find((task) => task.id === "verify")?.parentId, "build");
   });
 
-  it("does not infer completion from unrelated activity", () => {
+  it("keeps status unchanged when an explicit Work Plan operation only reads it", () => {
     const current = base();
     assert.deepEqual(mutateWorkPlan(current, { action: "get" }), current);
     assert.equal(current.tasks[1].status, "in_progress");
@@ -55,6 +55,27 @@ describe("Work Plan contract", () => {
     });
     assert.equal(reopened?.tasks[1].description, undefined);
     assert.equal(reopened?.tasks[1].statusReason, undefined);
+  });
+
+  it("promotes a task to the root when update_task clears parentId with JSON null", () => {
+    const nested = mutateWorkPlan(base(), { action: "move_task", taskId: "build", parentId: "analyse" });
+    const promoted = mutateWorkPlan(nested, {
+      action: "update_task",
+      taskId: "build",
+      changes: { parentId: null },
+    });
+    assert.equal(promoted?.tasks[1].parentId, undefined);
+  });
+
+  it("rejects duplicate resource URIs before they reach keyed UI rows", () => {
+    assert.throws(
+      () => mutateWorkPlan(base(), {
+        action: "set_resources",
+        taskId: "build",
+        resources: [{ uri: "workspace:a" }, { uri: "workspace:a", label: "duplicate" }],
+      }),
+      /duplicate resource URI/,
+    );
   });
 
   it("rejects invalid hierarchy and dependency cycles without changing the input", () => {
@@ -76,7 +97,11 @@ describe("Work Plan contract", () => {
         resources: [],
       })),
     };
-    assert.throws(() => validateWorkPlan(oversized), /larger than 500000 bytes/);
+    assert.throws(
+      () => validateWorkPlan(oversized),
+      new RegExp(`larger than ${WORK_PLAN_LIMITS.serializedBytes} bytes`),
+    );
+    assert.ok(WORK_PLAN_LIMITS.serializedBytes <= 64 * 1024, "a get must not refill a compacted model context");
   });
 
   it("removes descendants and cleans dependencies atomically", () => {
@@ -87,6 +112,18 @@ describe("Work Plan contract", () => {
 });
 
 describe("Work Plan persistence", () => {
+  it("recognises equivalent relative and canonical session paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-outpost-work-plan-path-"));
+    try {
+      const sessionFile = path.join(root, "session.jsonl");
+      await fs.writeFile(sessionFile, "");
+      const relative = path.relative(process.cwd(), sessionFile);
+      assert.equal(sameSessionFile(relative, await fs.realpath(sessionFile)), true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("loads absence, persists atomically, copies forks, and deletes with the session", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-outpost-work-plan-"));
     try {
@@ -110,7 +147,7 @@ describe("Work Plan persistence", () => {
 });
 
 describe("work_plan tool", () => {
-  it("frames the plan as maintained working state rather than progress ceremony", () => {
+  it("publishes maintenance and reconciliation guidance on the model-visible tool contract", () => {
     const tool = createWorkPlanToolDefinition();
     const guidance = [tool.description, ...(tool.promptGuidelines ?? [])].join(" ");
     assert.match(guidance, /working.state/i);
@@ -133,6 +170,10 @@ describe("work_plan tool", () => {
       const restored = await tool.execute("call-resume", { action: "get" }, undefined, undefined, ctx);
       assert.deepEqual((restored.details as { plan: WorkPlan }).plan, base());
       const modelContent = (restored.content[0] as { text: string }).text;
+      assert.ok(
+        Buffer.byteLength(modelContent) <= WORK_PLAN_LIMITS.serializedBytes + 512,
+        "the model-facing response stays within the plan's compact context budget",
+      );
       assert.match(modelContent, /\"id\":\"build\"/);
       assert.match(modelContent, /workspace:src\/index\.ts/);
       const refused = await tool.execute("call-2", { action: "move_task", taskId: "build", parentId: "missing" }, undefined, undefined, ctx);

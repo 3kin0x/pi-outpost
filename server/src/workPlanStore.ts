@@ -1,8 +1,20 @@
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { mutateWorkPlan, validateWorkPlan, type WorkPlan, type WorkPlanMutation } from "@pi-outpost/shared/work-plan";
 
 export const workPlanPath = (sessionFile: string): string => `${sessionFile}.work-plan.json`;
+
+/** Session paths may cross aliases such as macOS `/var` and `/private/var`. */
+export function sameSessionFile(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  try {
+    return realpathSync.native(path.resolve(left)) === realpathSync.native(path.resolve(right));
+  } catch {
+    // A just-deleted session still has a stable lexical identity.
+    return path.resolve(left) === path.resolve(right);
+  }
+}
 
 export async function loadWorkPlan(sessionFile: string | undefined): Promise<WorkPlan | null> {
   if (!sessionFile) return null;

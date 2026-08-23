@@ -12,7 +12,7 @@ const parameters = Type.Object({
   task: Type.Optional(Type.Unknown()),
   taskId: Type.Optional(Type.String()),
   changes: Type.Optional(Type.Unknown()),
-  parentId: Type.Optional(Type.String()),
+  parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   dependsOn: Type.Optional(Type.Array(Type.String())),
   resources: Type.Optional(Type.Array(Type.Object({ uri: Type.String(), label: Type.Optional(Type.String()) }))),
 });

@@ -21,7 +21,22 @@ test("agent-owned Work Plan survives reload, switches with sessions, and isolate
   await expect(panel.getByRole("heading", { name: "Release plan" })).toBeVisible();
   await expect(panel.getByLabel("In progress")).toBeVisible();
 
-  await panel.getByRole("button", { name: "Publish release" }).click();
+  await panel.getByRole("button", { name: "Close Work Plan" }).click();
+  const collapsedPlan = page.getByRole("button", { name: "Open Work Plan" });
+  await collapsedPlan.hover();
+  const preview = page.getByRole("tooltip");
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText("Publish release")).toBeVisible();
+  await preview.hover();
+  await expect(preview).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(preview).toBeHidden();
+  await collapsedPlan.hover();
+  await expect(preview).toBeVisible();
+  await collapsedPlan.click();
+  await expect(panel).toBeVisible();
+
+  await panel.getByRole("treeitem", { name: /Publish release/ }).click();
   await panel.getByRole("button", { name: "Release notes" }).click();
   await expect(page.getByRole("button", { name: "Close file viewer" })).toBeVisible();
   await page.getByRole("button", { name: "Close file viewer" }).click();
@@ -34,7 +49,7 @@ test("agent-owned Work Plan survives reload, switches with sessions, and isolate
   await page.getByRole("button", { name: "sessions" }).click();
   await page.getByRole("button", { name: /Other work/ }).click();
   await expect(page.getByRole("heading", { name: "Other plan" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Wait" })).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: "Wait" })).toBeVisible();
 
   await page.getByRole("button", { name: "sessions" }).click();
   await page.getByRole("button", { name: /Release source/ }).click();
