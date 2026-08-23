@@ -11,6 +11,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { DirEntry, FileBrowserErrorReason, FileSearchEntry } from "@pi-outpost/shared";
+import { declaredStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/document";
 import type { AppConfig } from "./config.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
 
@@ -146,6 +147,7 @@ function looksBinary(buffer: Buffer): boolean {
 export async function readFileForPreview(
   root: string,
   relPath: string,
+  structuredExchangeMaxBytes = MAX_PREVIEW_BYTES,
 ): Promise<{ content: string; size: number; mtimeMs: number }> {
   const resolved = await resolveConfined(root, relPath);
   let stat: Awaited<ReturnType<typeof fs.stat>>;
@@ -157,15 +159,60 @@ export async function readFileForPreview(
   if (!stat.isFile()) {
     throw new FileBrowserError("not-found", `"${relPath}" is not a file`);
   }
-  if (stat.size > MAX_PREVIEW_BYTES) {
-    const mb = (stat.size / (1024 * 1024)).toFixed(1);
-    throw new FileBrowserError("too-large", `File is ${mb} MB, larger than the 1 MB preview limit`);
+  // A structured-exchange document is measured against its own ceiling, the way a
+  // PDF is. Which ceiling applies cannot be known from the name — recognition is
+  // by what the document declares — so the wider one gates the read and the
+  // narrower one is applied afterwards, to a file that turned out not to be one.
+  // The cost is reading a file that is then refused; the alternative is deciding
+  // by extension, which is the thing this feature exists not to do.
+  const outer = Math.max(MAX_PREVIEW_BYTES, structuredExchangeMaxBytes);
+  if (stat.size > outer) {
+    throw new FileBrowserError("too-large", describeUnmeasured(stat.size, structuredExchangeMaxBytes));
   }
   const buffer = await fs.readFile(resolved);
   if (looksBinary(buffer)) {
     throw new FileBrowserError("binary", "Binary file — preview not supported");
   }
-  return { content: buffer.toString("utf8"), size: stat.size, mtimeMs: stat.mtimeMs };
+  const content = buffer.toString("utf8");
+  // Which of the two ceilings applies is settled here and nowhere earlier, because
+  // it depends on what the file declares. Both directions matter: a tightened
+  // document limit must actually refuse a document above it, and a document below
+  // the wider ceiling must not be refused for exceeding the preview one.
+  const isDocument = declaredStructuredExchangeSchema(content) !== undefined;
+  const limit = isDocument ? structuredExchangeMaxBytes : MAX_PREVIEW_BYTES;
+  if (stat.size > limit) {
+    throw new FileBrowserError("too-large", describeOversize(stat.size, limit, isDocument));
+  }
+  return { content, size: stat.size, mtimeMs: stat.mtimeMs };
+}
+
+/** Megabytes, to one decimal, the way every other size refusal here says it. */
+const asMb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+
+/**
+ * The size refusal, naming the limit that was applied.
+ *
+ * It is a size problem, and never a claim about the document being wrong — which
+ * is why the sentence says what was measured and against what, and stops there.
+ */
+function describeOversize(size: number, limit: number, isDocument: boolean): string {
+  return isDocument
+    ? `File is ${asMb(size)} MB, larger than the ${asMb(limit)} MB structured-exchange document limit`
+    : `File is ${asMb(size)} MB, larger than the 1 MB preview limit`;
+}
+
+/**
+ * The refusal for a file too large to open at all, which is therefore too large to
+ * ask what it declares.
+ *
+ * Both limits are named because at this point neither has been chosen, and a
+ * reader told only "larger than the 1 MB preview limit" about a 6 MB diagram would
+ * conclude that diagrams are capped at 1 MB.
+ */
+function describeUnmeasured(size: number, structuredExchangeMaxBytes: number): string {
+  const preview = `File is ${asMb(size)} MB, larger than the 1 MB preview limit`;
+  if (structuredExchangeMaxBytes <= MAX_PREVIEW_BYTES) return preview;
+  return `${preview} (${asMb(structuredExchangeMaxBytes)} MB for structured-exchange documents)`;
 }
 
 /**

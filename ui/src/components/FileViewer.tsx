@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -13,6 +13,8 @@ import { isImageFile, isPdfFile, rawFileUrl, resolveRelativeHref } from "../util
 import { normalizeMathDelimiters } from "../util/markdownMath";
 import { MarkdownPre } from "./Mermaid";
 import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
+import { readStructuredExchangeFile } from "../presentations/structuredExchange";
+import { StructuredExchangeDocument } from "../presentations/StructuredExchangeView";
 
 // pdf.js is over a megabyte: a session that never opens a PDF must not load it.
 const PdfViewer = lazy(() => import("./PdfViewer"));
@@ -120,6 +122,15 @@ export function FileViewer({
   const image = isImageFile(file.path);
   // Same door for a PDF — it renders from the raw bytes, not from the preview.
   const pdf = isPdfFile(file.path);
+  // A structured-exchange document is recognised by what it declares, never by its
+  // name: a `.json` file is one because its `schema` field says so, and any other
+  // JSON keeps the display it has always had. Reading the file is the only way to
+  // know, so the verdict is computed from the content and remembered against it.
+  const exchange = useMemo(
+    () => (loaded === null ? undefined : readStructuredExchangeFile(loaded.content)),
+    [loaded?.content],
+  );
+  const diagram = exchange?.status === "valid";
   // A PDF is never editable here: this viewer edits text, and there is no text.
   const writable = isWritable(file.path, writableRoot) && !pdf;
   const dirty = edit !== null && edit.draft !== edit.baseContent;
@@ -211,7 +222,7 @@ export function FileViewer({
   return (
     <div className="absolute inset-0 z-20 flex flex-col bg-white dark:bg-zinc-950">
       <div className="flex items-center gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
-        {markdown && edit === null && !showGitDiff && (
+        {(markdown || diagram) && edit === null && !showGitDiff && (
           <button
             type="button"
             onClick={() => setShowRaw(!showRaw)}
@@ -426,7 +437,51 @@ export function FileViewer({
             </ReactMarkdown>
           </div>
         )}
-        {loaded && edit === null && !showGitDiff && (!markdown || showRaw) && (
+        {loaded && edit === null && !showGitDiff && diagram && !showRaw && exchange?.status === "valid" && (
+          <ViewerErrorBoundary label="This diagram">
+            <div className="mx-auto max-w-5xl p-4" data-testid="file-structured-exchange">
+              <StructuredExchangeDocument envelope={exchange.envelope} source={loaded.content} />
+            </div>
+          </ViewerErrorBoundary>
+        )}
+        {loaded && edit === null && !showGitDiff && exchange?.status === "invalid" && (
+          // Named, not merely refused. A document that declares the schema and does
+          // not satisfy it is the producer's mistake, and the reader is the one
+          // person positioned to say so — which they cannot do from "could not be
+          // displayed". The reasons come from the server's reference validator when
+          // it sent any; this browser's own check is a verdict without a diagnosis,
+          // and its one generic sentence is the fallback, not the intent. The file
+          // stays readable as text underneath either way.
+          <div
+            data-testid="file-structured-exchange-invalid"
+            className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            <p className="font-medium">This declares a structured-exchange document and does not satisfy the schema.</p>
+            <ul className="mt-1 space-y-0.5 text-xs">
+              {(loaded.documentIssues ?? exchange.issues).slice(0, 8).map((issue, index) => (
+                <li key={index}>
+                  <span className="font-mono opacity-70">{issue.path === "" ? "(document)" : issue.path}</span> {issue.message}
+                </li>
+              ))}
+              {(loaded.documentIssues ?? exchange.issues).length > 8 && (
+                <li className="opacity-70">…and {(loaded.documentIssues ?? exchange.issues).length - 8} more</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {loaded && edit === null && !showGitDiff && exchange?.status === "unsupported-version" && (
+          // No rendering attempted: validating a version 2 document against the
+          // version 1 schema would report failures against a contract it never
+          // claimed to meet, and blame a producer who did nothing wrong.
+          <div
+            data-testid="file-structured-exchange-unsupported"
+            className="mx-4 mt-4 rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+          >
+            This document declares <span className="font-mono">{exchange.schema}</span>, which this version does not
+            render. Shown as text.
+          </div>
+        )}
+        {loaded && edit === null && !showGitDiff && (!markdown || showRaw) && (!diagram || showRaw) && (
           <div className="p-4">
             <CodeHighlight code={loaded.content} path={file.path} />
           </div>

@@ -13,10 +13,11 @@
  * `npm run build:e2e-host` — an unbuilt fix is invisible here.
  */
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SEEDED_MESSAGES } from "../e2e/fixtures/seeded-transcript";
+import { createStructuredExchangeFigureToolDefinition } from "../server/src/structuredExchangeFigureTool.ts";
 // @ts-expect-error -- .mjs harness, no types
 import { makeWorkspace, startServer } from "../server/test/harness.mjs";
 
@@ -63,8 +64,19 @@ function serveHostPage(port: number): Promise<{ url: string; close: () => Promis
   });
 }
 
+/**
+ * Whether this bench may talk to a real model.
+ *
+ * Off by default and deliberately opt-in: a bench that spends tokens every time
+ * someone opens it is a bench nobody leaves running. `BENCH_LIVE=1 npm run bench`
+ * turns it on, and then the agent in the widget is the real one — which is the only
+ * way to see whether it reaches for a tool, as opposed to whether the tool works.
+ */
+const LIVE = process.env.BENCH_LIVE === "1";
+
 /** No real provider key: nothing here talks to a model, and PI_OFFLINE keeps it that way. */
 function onlyOneFakeProvider(): Record<string, string | undefined> {
+  if (LIVE) return {};
   const env: Record<string, string | undefined> = {};
   for (const name of Object.keys(process.env)) {
     if (/API_KEY|AUTH_TOKEN|_TOKEN$/.test(name)) env[name] = undefined;
@@ -75,11 +87,103 @@ function onlyOneFakeProvider(): Record<string, string | undefined> {
 
 const host = await serveHostPage(HOST_PORT);
 
+/**
+ * Four JSON files that differ only in what they declare.
+ *
+ * The viewer decides by content, so a bench that carries one document proves
+ * nothing: what has to be visible side by side is the document that draws, the
+ * JSON that does not, the version we do not implement, and the one that claims
+ * the contract and fails it.
+ */
+const DOCUMENT_FILES = {
+  "diagrams/architecture.json": JSON.stringify(
+    {
+      schema: "urn:structured-exchange:1",
+      kind: "graph",
+      data: {
+        nodes: [
+          { id: "batt", label: "Batterie", kind: "power" },
+          { id: "ecu", label: "Calculateur", kind: "compute" },
+          { id: "dash", label: "Tableau de bord", kind: "compute" },
+        ],
+        edges: [
+          { from: "batt", to: "ecu", label: "400V", kind: "power" },
+          { from: "ecu", to: "dash", label: "état", kind: "signal" },
+        ],
+      },
+    },
+    null,
+    2,
+  ),
+  "diagrams/not-a-document.json": JSON.stringify({ kind: "graph", data: { nodes: [], edges: [] } }, null, 2),
+  "diagrams/future.json": JSON.stringify({ schema: "urn:structured-exchange:2", kind: "constellation" }, null, 2),
+  "diagrams/broken.json": JSON.stringify(
+    { schema: "urn:structured-exchange:1", kind: "graph", data: { nodes: [{ label: "no id" }], edges: [] } },
+    null,
+    2,
+  ),
+};
+
 const root = await makeWorkspace({
   "readme.md": "# workspace\n\nA file the browser is allowed to see.\n",
   "docs/notes.md": "# notes\n\nAnother file, so the tree has a folder in it.\n",
   ".pi/prompts/greet.md": "---\ndescription: say hello\n---\n\nSay hello.\n",
+  ...DOCUMENT_FILES,
 });
+
+/**
+ * Two figures and a report that references them, written by the agent's own tool.
+ *
+ * Not fixtures. The point of having them here is that the whole path runs in a real
+ * process against a real workspace before anyone looks at it: the tool reads the
+ * document off disk, validates it, narrows it, and writes an `.svg` the Markdown
+ * view then has to fetch and decode. A hand-written SVG dropped in this directory
+ * would prove none of that.
+ */
+async function seedFigures(): Promise<void> {
+  const tool = createStructuredExchangeFigureToolDefinition({
+    cwd: root,
+    allowedRoots: [await realpath(root)],
+    maxBytes: 4_000_000,
+    writableRoot: await realpath(root),
+  });
+  const write = (params: Record<string, unknown>) =>
+    (tool.execute as (id: string, params: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }>)(
+      "bench",
+      params,
+    );
+
+  const whole = await write({ path: "diagrams/architecture.json", output_path: "figures/whole.svg" });
+  const narrowed = await write({
+    path: "diagrams/architecture.json",
+    output_path: "figures/power-only.svg",
+    hide_relationship_kinds: ["signal"],
+  });
+  for (const result of [whole, narrowed]) {
+    if (result.isError) throw new Error(`the bench could not write its figures: ${result.content[0]?.text}`);
+  }
+
+  await writeFile(
+    path.join(root, "report.md"),
+    [
+      "# Vehicle architecture",
+      "",
+      "The whole document, as the reader would see it in a conversation:",
+      "",
+      "![The whole architecture](figures/whole.svg)",
+      "",
+      "And the power path on its own, with the signal relationships hidden. The figure",
+      "says so itself, at the bottom of the picture:",
+      "",
+      "![Power only](figures/power-only.svg)",
+      "",
+      "Both were written by `write_structure_figure` from `diagrams/architecture.json`.",
+      "",
+    ].join("\n"),
+  );
+}
+
+await seedFigures();
 const plain = await startServer(
   root,
   {
@@ -88,6 +192,11 @@ const plain = await startServer(
     server: { allowedOrigins: [host.url], port: HOST_PORT + 1 },
     branding: { title: "bench" },
     noPromptTemplates: false,
+    // The harness turns skills off so a test measures the tool alone. Here the
+    // opposite is wanted: the bundled skill is what tells the agent this tool exists
+    // and what its two hide lists mean, so leaving it out would make a live bench
+    // measure the tool description and call it agent behaviour.
+    noSkills: false,
   },
   { env: onlyOneFakeProvider() },
 );
@@ -115,6 +224,12 @@ const diagrams = await startServer(
 const link = (server: string) => `${host.url}/?server=${encodeURIComponent(server)}&theme=light`;
 console.log("\n  embed bench — the widget inside a host page that fights it\n");
 console.log(`  settings, files, sessions   ${link(plain.base)}`);
+console.log(`  workspace                   ${root}`);
+console.log(
+  LIVE
+    ? "  live: the agent is real — ask it for a figure and watch the file land"
+    : "  offline: no model (BENCH_LIVE=1 npm run bench to talk to a real one)",
+);
 console.log(`  seeded transcript           ${link(diagrams.base)}   (diagrams + table)`);
 console.log("\n  ctrl-c to stop\n");
 

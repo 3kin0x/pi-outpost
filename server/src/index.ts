@@ -35,6 +35,8 @@ import {
   type WireImage,
   WORKTREE_REVISION,
 } from "@pi-outpost/shared";
+import { readStructuredExchangeDocument } from "@pi-outpost/shared/structured-exchange/document";
+import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
 import {
   type AgentRuntime,
   type RuntimeEvent,
@@ -94,6 +96,7 @@ import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
 import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
+import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createDirectoryWatcher, type DirectoryWatcher } from "./fileWatcher.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
@@ -286,7 +289,14 @@ const structuredExchangeTool = createStructuredExchangeToolDefinition();
 
 let sandboxedTools = config.sandbox
   ? [
-      ...(await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes)),
+      ...(await createSandboxedTools(
+        config.sandbox,
+        config.pdf.maxBytes,
+        config.docx.maxBytes,
+        config.xlsx.maxBytes,
+        config.pptx.maxBytes,
+        config.structuredExchange.maxBytes,
+      )),
       structuredExchangeTool,
     ]
   : undefined;
@@ -854,6 +864,12 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
                 maxBytes: config.pptx.maxBytes,
                 writableRoot: await fs.realpath(cwd),
               }),
+              createStructuredExchangeFigureToolDefinition({
+                cwd,
+                allowedRoots: [await fs.realpath(cwd)],
+                maxBytes: config.structuredExchange.maxBytes,
+                writableRoot: await fs.realpath(cwd),
+              }),
               structuredExchangeTool,
             ],
           }),
@@ -904,6 +920,7 @@ const runtime: AgentRuntime = await (async () => {
               docx: config.docx.maxBytes,
               xlsx: config.xlsx.maxBytes,
               pptx: config.pptx.maxBytes,
+              structuredExchange: config.structuredExchange.maxBytes,
             },
           } satisfies PiOutpostToolsSettings),
         },
@@ -1436,7 +1453,16 @@ async function handleUpdateConfig(
     // Every watched path was relative to the root that just moved.
     fileWatcher?.close();
     fileWatcher = buildFileWatcher();
-    sandboxedTools = config.sandbox ? await createSandboxedTools(config.sandbox, config.pdf.maxBytes, config.docx.maxBytes, config.xlsx.maxBytes, config.pptx.maxBytes) : undefined;
+    sandboxedTools = config.sandbox
+      ? await createSandboxedTools(
+          config.sandbox,
+          config.pdf.maxBytes,
+          config.docx.maxBytes,
+          config.xlsx.maxBytes,
+          config.pptx.maxBytes,
+          config.structuredExchange.maxBytes,
+        )
+      : undefined;
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
     await rebuildTools.call(runtime);
@@ -1950,11 +1976,35 @@ async function handleListDirectory(socket: WebSocket, dirPath: string, requestId
   }
 }
 
+/**
+ * The reference validator's diagnosis of a file that claims to be a
+ * structured-exchange document and is not one.
+ *
+ * Undefined for everything else, including a document that validates: the field
+ * exists to say what is wrong, and "nothing" is said by its absence. The browser
+ * decides for itself whether to render — it has its own check — and this only
+ * supplies the reason, which its check does not have.
+ */
+function documentIssuesFor(content: string): { rule: string; path: string; message: string }[] | undefined {
+  const verdict = readStructuredExchangeDocument(content, checkStructuredExchangeSchema);
+  if (verdict.status !== "invalid") return undefined;
+  return verdict.issues.map((issue) => ({ rule: issue.rule, path: issue.path, message: issue.message }));
+}
+
 /** File-browser sidebar: read a file for preview, confined to BROWSER_ROOT. */
 async function handleReadFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
-    const { content, size, mtimeMs } = await readFileForPreview(BROWSER_ROOT, filePath);
-    send(socket, { type: "file_content", requestId, path: filePath, content, size, mtimeMs });
+    const { content, size, mtimeMs } = await readFileForPreview(BROWSER_ROOT, filePath, config.structuredExchange.maxBytes);
+    const documentIssues = documentIssuesFor(content);
+    send(socket, {
+      type: "file_content",
+      requestId,
+      path: filePath,
+      content,
+      size,
+      mtimeMs,
+      ...(documentIssues === undefined ? {} : { documentIssues }),
+    });
   } catch (error) {
     const message = error instanceof FileBrowserError ? error.message : `Unexpected error: ${(error as Error).message}`;
     send(socket, { type: "file_browser_error", requestId, path: filePath, message });

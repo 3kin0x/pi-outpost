@@ -23,6 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { THEMES, type Theme } from "@pi-outpost/shared";
+import { STRUCTURED_EXCHANGE_BYTES_CEILING } from "@pi-outpost/shared/structured-exchange/bounds";
 
 export interface BrandingConfig {
   /** Header title. Default: "π". */
@@ -140,6 +141,24 @@ export interface PdfConfig {
 
 /** Default PDF ceiling — 25 MiB, well above the 1 MiB that governs other files. */
 export const DEFAULT_PDF_MAX_BYTES = 26_214_400;
+
+export interface StructuredExchangeConfig {
+  /**
+   * Largest structured-exchange document the viewer will fetch, in bytes.
+   * Default: the contract's own byte ceiling.
+   *
+   * These documents get their own limit for the same reason PDFs do — the 1 MiB
+   * preview limit is about *text previews*, and a diagram is not read as text —
+   * but the reasoning stops somewhere different. A PDF's ceiling is a guess about
+   * what people open; this one is published: version 1 of the contract bounds a
+   * conforming document, and a deployment accepting more would be promising
+   * something the schema does not.
+   */
+  maxBytes: number;
+}
+
+/** Default document ceiling — the contract's, so the viewer accepts what the schema does. */
+export const DEFAULT_STRUCTURED_EXCHANGE_MAX_BYTES = STRUCTURED_EXCHANGE_BYTES_CEILING;
 
 export const AGENT_RUNTIME_MODES = ["embedded", "rpc"] as const;
 export type AgentRuntimeMode = (typeof AGENT_RUNTIME_MODES)[number];
@@ -377,6 +396,8 @@ export interface AppConfig {
   xlsx: XlsxConfig;
   /** PowerPoint handling (size ceiling for the extraction tool). */
   pptx: PptxConfig;
+  /** Structured-exchange documents opened as files (size ceiling for the viewer). */
+  structuredExchange: StructuredExchangeConfig;
 }
 
 /** Launch-time options from the command line — the top of the precedence chain. */
@@ -561,6 +582,7 @@ export function loadConfig(
     docx: { maxBytes: DEFAULT_DOCX_MAX_BYTES },
     xlsx: { maxBytes: DEFAULT_XLSX_MAX_BYTES },
     pptx: { maxBytes: DEFAULT_PPTX_MAX_BYTES },
+    structuredExchange: { maxBytes: DEFAULT_STRUCTURED_EXCHANGE_MAX_BYTES },
   };
 
   let raw: Record<string, unknown>;
@@ -809,6 +831,25 @@ export function loadConfig(
         fail(`"pptx.maxBytes" must be a positive integer (bytes)`);
       }
       config.pptx.maxBytes = pptx.maxBytes;
+    }
+  }
+
+  if (raw.structuredExchange !== undefined) {
+    const structuredExchange = asObject(raw.structuredExchange, "structuredExchange");
+    if (structuredExchange.maxBytes !== undefined) {
+      if (
+        typeof structuredExchange.maxBytes !== "number" ||
+        !Number.isInteger(structuredExchange.maxBytes) ||
+        structuredExchange.maxBytes <= 0
+      ) {
+        fail(`"structuredExchange.maxBytes" must be a positive integer (bytes)`);
+      }
+      // Clamped rather than refused, matching what `effectiveLimit` already does
+      // with the contract's byte bound: a deployment may only be more careful than
+      // the published ceiling, never less. Without this the server would serve a
+      // document the browser's own bound then refuses, and the reader would be
+      // shown raw JSON with nothing said about why.
+      config.structuredExchange.maxBytes = Math.min(structuredExchange.maxBytes, STRUCTURED_EXCHANGE_BYTES_CEILING);
     }
   }
 

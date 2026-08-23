@@ -24,6 +24,7 @@ import {
   DEFAULT_DOCX_MAX_BYTES,
   DEFAULT_PDF_MAX_BYTES,
   DEFAULT_PPTX_MAX_BYTES,
+  DEFAULT_STRUCTURED_EXCHANGE_MAX_BYTES,
   DEFAULT_XLSX_MAX_BYTES,
   type SandboxConfig,
 } from "./config.ts";
@@ -31,6 +32,7 @@ import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
+import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
 
 /**
  * Resolve `target` following symlinks in its deepest existing ancestor, so a
@@ -109,6 +111,7 @@ export async function createSandboxedTools(
   docxMaxBytes: number = DEFAULT_DOCX_MAX_BYTES,
   xlsxMaxBytes: number = DEFAULT_XLSX_MAX_BYTES,
   pptxMaxBytes: number = DEFAULT_PPTX_MAX_BYTES,
+  structuredExchangeMaxBytes: number = DEFAULT_STRUCTURED_EXCHANGE_MAX_BYTES,
 ): Promise<ToolDefinition[]> {
   const realRoot = await fs.realpath(sandbox.root);
   const readFactories: Array<(cwd: string) => ToolDefinition> = [
@@ -147,6 +150,17 @@ export async function createSandboxedTools(
   );
   readFactories.push((cwd) =>
     createPptxExtractToolDefinition({ cwd, allowedRoots: documentRoots, maxBytes: pptxMaxBytes, writableRoot: realWritableRoot }),
+  );
+  // Reading a document and drawing it is reading, so it sits with the extractors:
+  // same zone, same exceptions, and its `output_path` measured against the writable
+  // one exactly as theirs is.
+  readFactories.push((cwd) =>
+    createStructuredExchangeFigureToolDefinition({
+      cwd,
+      allowedRoots: documentRoots,
+      maxBytes: structuredExchangeMaxBytes,
+      writableRoot: realWritableRoot,
+    }),
   );
   const tools = readFactories.map((create) =>
     scopeToRoot(create(realRoot), realRoot, realRoot, readExceptions),

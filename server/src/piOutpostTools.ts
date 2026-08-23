@@ -1,7 +1,7 @@
 /**
  * pi-outpost's own tools, packaged as a pi extension so an RPC child has them.
  *
- * The embedded runtime hands these five tool definitions straight to the SDK
+ * The embedded runtime hands these six tool definitions straight to the SDK
  * session (`customTools` in index.ts). A `pi --mode rpc` child is a separate
  * process and builds its own toolset from its own flags, so without this file the
  * agent would lose `present_structure` and the four document extractors the moment
@@ -28,6 +28,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
+import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
 import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 
@@ -35,7 +36,7 @@ import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 export interface PiOutpostToolsSettings {
   /** The agent's working directory — paths the model gives resolve against it. */
   cwd: string;
-  maxBytes: { pdf: number; docx: number; xlsx: number; pptx: number };
+  maxBytes: { pdf: number; docx: number; xlsx: number; pptx: number; structuredExchange: number };
 }
 
 export const TOOLS_ENV_VAR = "PI_OUTPOST_TOOLS";
@@ -56,7 +57,7 @@ export function parseToolsSettings(raw: string | undefined): PiOutpostToolsSetti
     throw new Error(`${TOOLS_ENV_VAR} has no "cwd"`);
   }
   const sizes = settings.maxBytes;
-  for (const key of ["pdf", "docx", "xlsx", "pptx"] as const) {
+  for (const key of ["pdf", "docx", "xlsx", "pptx", "structuredExchange"] as const) {
     if (typeof sizes?.[key] !== "number" || !Number.isFinite(sizes[key]) || sizes[key] <= 0) {
       throw new Error(`${TOOLS_ENV_VAR} has no positive "maxBytes.${key}"`);
     }
@@ -65,7 +66,7 @@ export function parseToolsSettings(raw: string | undefined): PiOutpostToolsSetti
 }
 
 /**
- * The same five tools, built the same way as the unsandboxed branch of index.ts.
+ * The same six tools, built the same way as the unsandboxed branch of index.ts.
  * `realpath` matters: the confinement checks compare resolved paths, and on macOS
  * a workspace under /tmp is reached through a symlink.
  */
@@ -78,6 +79,7 @@ export async function createPiOutpostTools(settings: PiOutpostToolsSettings): Pr
     createDocxExtractToolDefinition({ ...common, maxBytes: settings.maxBytes.docx }),
     createXlsxExtractToolDefinition({ ...common, maxBytes: settings.maxBytes.xlsx }),
     createPptxExtractToolDefinition({ ...common, maxBytes: settings.maxBytes.pptx }),
+    createStructuredExchangeFigureToolDefinition({ ...common, maxBytes: settings.maxBytes.structuredExchange }),
     createStructuredExchangeToolDefinition(),
   ];
 }
