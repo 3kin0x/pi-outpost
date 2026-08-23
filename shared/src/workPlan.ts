@@ -38,9 +38,35 @@ export const WORK_PLAN_LIMITS = {
   uri: 2_000,
 } as const;
 
+/** Finite agent-facing creation schema; persisted plans remain a flat graph. */
+export const WORK_PLAN_CREATE_MAX_DEPTH = 2;
+
+export interface WorkPlanDraftTask {
+  /** Optional caller-chosen identity; generated when omitted. */
+  id?: string;
+  title: string;
+  description?: string;
+  status?: WorkPlanStatus;
+  statusReason?: string;
+  resources?: WorkPlanResource[];
+  subtasks?: WorkPlanDraftTask[];
+}
+
+export interface WorkPlanDraft {
+  title: string;
+  tasks: WorkPlanDraftTask[];
+}
+
+export interface WorkPlanDraftNormalizationOptions {
+  /** Injectable seams keep identity and time assertions deterministic. */
+  nextId?: () => string;
+  now?: () => string;
+}
+
 export type WorkPlanMutation =
   | { action: "get" }
   | { action: "clear" }
+  | { action: "create"; title: unknown; tasks: unknown }
   | { action: "replace"; plan: unknown }
   | { action: "add_task"; task: unknown }
   | { action: "update_task"; taskId: string; changes: unknown }
@@ -52,6 +78,11 @@ export type WorkPlanMutation =
 function object(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("must be an object");
   return value as Record<string, unknown>;
+}
+
+function onlyFields(raw: Record<string, unknown>, allowed: readonly string[], field: string): void {
+  const unexpected = Object.keys(raw).find((key) => !allowed.includes(key));
+  if (unexpected !== undefined) throw new Error(`${field}.${unexpected} is not accepted`);
 }
 
 function text(value: unknown, field: string, max: number): string {
@@ -166,11 +197,101 @@ export function validateWorkPlan(value: unknown): WorkPlan {
   };
 }
 
+/** Convert the compact agent-authored tree into the one canonical flat document. */
+export function normalizeWorkPlanDraft(
+  value: unknown,
+  options: WorkPlanDraftNormalizationOptions = {},
+): WorkPlan {
+  const raw = object(value);
+  onlyFields(raw, ["title", "tasks"], "plan");
+  if (!Array.isArray(raw.tasks)) throw new Error("tasks must be an array");
+
+  const usedIds = new Set<string>();
+  const generate = (): string => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const candidate = text(
+        options.nextId?.() ?? globalThis.crypto.randomUUID(),
+        "generated id",
+        WORK_PLAN_LIMITS.title,
+      );
+      if (!usedIds.has(candidate)) {
+        usedIds.add(candidate);
+        return candidate;
+      }
+    }
+    throw new Error("could not generate a unique Work Plan identifier");
+  };
+  /**
+   * Models name their tasks: refusing a supplied id costs a repair round, and the
+   * union's validation message does not say which property was refused, so the
+   * repair guesses. Honour it instead — identity stays unique either way.
+   */
+  const claim = (value: unknown, field: string): string => {
+    const id = text(value, field, WORK_PLAN_LIMITS.title);
+    if (usedIds.has(id)) throw new Error(`duplicate task id: ${id}`);
+    usedIds.add(id);
+    return id;
+  };
+
+  const planId = generate();
+  const tasks: WorkPlanTask[] = [];
+  const visit = (items: unknown[], depth: number, parentId?: string): void => {
+    if (depth > WORK_PLAN_CREATE_MAX_DEPTH) {
+      throw new Error(`creation tasks may be nested at most ${WORK_PLAN_CREATE_MAX_DEPTH} levels`);
+    }
+    if (items.length > WORK_PLAN_LIMITS.tasks) {
+      throw new Error(`a task collection may contain at most ${WORK_PLAN_LIMITS.tasks} tasks`);
+    }
+    for (const [index, item] of items.entries()) {
+      const draft = object(item);
+      onlyFields(draft, ["id", "title", "description", "status", "statusReason", "resources", "subtasks"], `tasks[${index}]`);
+      const status = draft.status ?? "todo";
+      if (typeof status !== "string" || !WORK_PLAN_STATUSES.includes(status as WorkPlanStatus)) {
+        throw new Error(`status must be one of ${WORK_PLAN_STATUSES.join(", ")}`);
+      }
+      const id = draft.id === undefined ? generate() : claim(draft.id, `tasks[${index}].id`);
+      tasks.push({
+        id,
+        title: text(draft.title, "task.title", WORK_PLAN_LIMITS.title),
+        ...(draft.description === undefined
+          ? {}
+          : { description: text(draft.description, "task.description", WORK_PLAN_LIMITS.description) }),
+        status: status as WorkPlanStatus,
+        ...(parentId === undefined ? {} : { parentId }),
+        dependsOn: [],
+        resources: draft.resources === undefined ? [] : resources(draft.resources),
+        ...(draft.statusReason === undefined
+          ? {}
+          : { statusReason: text(draft.statusReason, "task.statusReason", WORK_PLAN_LIMITS.reason) }),
+      });
+      if (draft.subtasks !== undefined) {
+        if (!Array.isArray(draft.subtasks)) throw new Error(`tasks[${index}].subtasks must be an array`);
+        visit(draft.subtasks, depth + 1, id);
+      }
+      if (tasks.length > WORK_PLAN_LIMITS.tasks) {
+        throw new Error(`a work plan may contain at most ${WORK_PLAN_LIMITS.tasks} tasks`);
+      }
+    }
+  };
+  visit(raw.tasks, 1);
+  return validateWorkPlan({
+    version: 1,
+    id: planId,
+    title: text(raw.title, "plan.title", WORK_PLAN_LIMITS.title),
+    tasks,
+    updatedAt: options.now?.() ?? new Date().toISOString(),
+  });
+}
+
 export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutation): WorkPlan | null {
   if (mutation.action === "get") return current;
   if (mutation.action === "clear") return null;
+  if (mutation.action === "create") {
+    if (current !== null) throw new Error("this session already has a Work Plan; use action=replace to overwrite it");
+    return normalizeWorkPlanDraft({ title: mutation.title, tasks: mutation.tasks });
+  }
   if (mutation.action === "replace") return validateWorkPlan(mutation.plan);
-  if (current === null) throw new Error("create a plan with action=replace before mutating tasks");
+  if (current === null) throw new Error("create a plan with action=create or action=replace before mutating tasks");
   let tasks = current.tasks.map((item) => ({ ...item, dependsOn: [...item.dependsOn], resources: item.resources.map((resource) => ({ ...resource })) }));
   const index = "taskId" in mutation ? tasks.findIndex((item) => item.id === mutation.taskId) : -1;
   if ("taskId" in mutation && index < 0) throw new Error(`unknown task: ${mutation.taskId}`);

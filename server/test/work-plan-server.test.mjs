@@ -193,16 +193,50 @@ test("a real Pi RPC child executes work_plan and synchronizes its persisted resu
   const client = connect(server.wsUrl());
   try {
     const hello = await client.waitFor("hello", 30_000);
-    client.send({ type: "prompt", text: "Replace the Work Plan" });
+    client.send({ type: "prompt", text: "Create and refine the Work Plan" });
     const changed = await client.waitFor(
-      (message) => message.type === "work_plan_changed" && message.workPlan?.id === "rpc-release",
+      (message) => message.type === "work_plan_changed"
+        && message.workPlan?.title === "RPC release"
+        && message.workPlan?.tasks.length === 2
+        && message.workPlan.tasks[0].status === "done",
       30_000,
     );
     assert.equal(changed.workPlan.tasks[0].status, "done");
+    assert.equal(changed.workPlan.tasks[1].id, "release-note");
+    await client.waitFor("agent_end", 30_000); // emitted only after the provider receives the fourth (`get`) result
     const sidecars = (await readdir(root, { recursive: true }))
       .filter((entry) => entry.endsWith(".work-plan.json"));
     assert.equal(sidecars.length, 1, "the real child persisted exactly one Work Plan sidecar");
     assert.deepEqual(JSON.parse(await readFile(path.join(root, sidecars[0]), "utf8")), changed.workPlan);
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});
+
+test("the embedded SDK provider receives the same fully typed work_plan schema", async () => {
+  const root = await makeWorkspace();
+  const server = await startServer(root, {
+    extensionPaths: [WORK_PLAN_PROVIDER],
+    allowedModels: [{ provider: "work-plan-test", id: "work-plan-test" }],
+  });
+  const client = connect(server.wsUrl());
+  try {
+    const hello = await client.waitFor("hello", 30_000);
+    assert.ok(hello.models.some((model) => model.provider === "work-plan-test" && model.id === "work-plan-test"));
+    client.send({ type: "set_model", provider: "work-plan-test", id: "work-plan-test" });
+    await client.waitFor((message) => message.type === "model_changed" && message.model === "work-plan-test/work-plan-test");
+    client.send({ type: "prompt", text: "Create and refine the Work Plan" });
+    const changed = await client.waitFor(
+      (message) => message.type === "work_plan_changed"
+        && message.workPlan?.title === "RPC release"
+        && message.workPlan?.tasks.length === 2
+        && message.workPlan.tasks[0].status === "done",
+      30_000,
+    );
+    assert.equal(changed.workPlan.tasks[0].status, "done");
+    assert.equal(changed.workPlan.tasks[1].id, "release-note");
+    await client.waitFor("agent_end", 30_000);
   } finally {
     client.close();
     await server.stop();

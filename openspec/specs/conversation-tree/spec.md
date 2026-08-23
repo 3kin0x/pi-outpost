@@ -79,6 +79,15 @@ A user message in the transcript SHALL be editable once persisted: submitting an
 - **WHEN** the user has an editor open
 - **THEN** submitting is disabled and the draft is kept (never silently dropped)
 
+### Requirement: Forked Work Plan isolation
+When the user forks a session, the new session SHALL begin with a copy of the Work Plan state applicable at the fork point. Subsequent Work Plan mutations in either session SHALL be independent and SHALL NOT modify the other session's plan.
+
+#### Scenario: Fork preserves then isolates work
+- **GIVEN** a session with an existing Work Plan
+- **WHEN** the user forks the session
+- **THEN** the fork initially shows the copied plan
+- **AND** changing a task in the fork does not change that task in the original session
+
 ## Technical Notes
 
 - **Implementation**: `server/src/index.ts` (buildTree, replyTip, navigateTree, editPrompt), `web/src/components/TreeMenu.tsx`, `web/src/components/UserMessage.tsx`

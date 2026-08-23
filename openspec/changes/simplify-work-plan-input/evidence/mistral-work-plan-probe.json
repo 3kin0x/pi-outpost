@@ -1,0 +1,1324 @@
+{
+  "capturedAt": "2026-08-23T19:08:44.641Z",
+  "trials": 10,
+  "results": [
+    {
+      "iteration": 1,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "subtasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 of implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 of implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 1,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "work-plan-probe-typed-kwXWgQ",
+          "title": "Implementation Work Plan",
+          "updatedAt": "2024-01-01T00:00:00Z",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1: Implement core logic",
+                  "status": "todo",
+                  "parentId": "implement_change"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2: Handle edge cases",
+                  "status": "todo",
+                  "parentId": "implement_change"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the implementation",
+              "status": "todo"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 1,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic implementation",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration and testing",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 2,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior",
+              "outcome": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "outcome": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 for implementation",
+                  "parentId": "implement"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 for implementation",
+                  "parentId": "implement"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change",
+              "outcome": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 2,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "implementation_plan",
+          "title": "Three-Outcome Implementation Plan",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect Current Behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the Change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1: Core Implementation",
+                  "status": "todo"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2: Edge Cases Handling",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the Change",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T00:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 2,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic implementation",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration and testing",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 3,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 of implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 of implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 3,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "work_plan_probe",
+          "title": "Implementation Work Plan",
+          "updatedAt": "2024-01-01T00:00:00Z",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1 for implementation",
+                  "status": "todo",
+                  "parentId": "implement_change"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2 for implementation",
+                  "status": "todo",
+                  "parentId": "implement_change"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the change",
+              "status": "todo"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 3,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic implementation",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration and testing",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 4,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "subtasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 of implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 of implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 4,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "work-plan-probe-typed-P4EwZG",
+          "title": "Implementation Work Plan",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1 for implementation",
+                  "status": "todo"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2 for implementation",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the change",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T12:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 4,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": null,
+      "firstCallAccepted": false,
+      "expectedAction": "create",
+      "usedExpectedAction": false,
+      "callCount": 0,
+      "timedOut": false
+    },
+    {
+      "iteration": 5,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": null,
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": false,
+      "callCount": 0,
+      "timedOut": false
+    },
+    {
+      "iteration": 5,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "implementation_plan",
+          "title": "Implementation Work Plan",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1: Implement core logic",
+                  "status": "todo"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2: Integrate with existing system",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the change",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T12:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 5,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 6,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 of implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 of implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 6,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "implementation_plan",
+          "title": "Implementation Plan",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1 for implementation",
+                  "status": "todo"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2 for implementation",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the change",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T00:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 6,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Implement core logic",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integrate and test",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 7,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 of implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 of implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 7,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "work_plan_probe",
+          "title": "Implementation Work Plan",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1 for implementation",
+                  "status": "todo"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2 for implementation",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the change",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T00:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 7,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic implementation",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration and testing",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 8,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "outcomes": [
+            "Inspect the current behavior",
+            "Implement the change",
+            "Verify the change"
+          ],
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 of implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 of implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 8,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "work-plan-probe",
+          "title": "Implementation Work Plan",
+          "tasks": [
+            {
+              "id": "inspect",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "implement_subtask1",
+                  "title": "Subtask 1: Core logic",
+                  "status": "todo"
+                },
+                {
+                  "id": "implement_subtask2",
+                  "title": "Subtask 2: Integration",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "title": "Verify the implementation",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T12:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 8,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic implementation",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration and testing",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 9,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "tasks": [
+            {
+              "id": "inspect",
+              "label": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "label": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask1",
+                  "label": "Subtask 1 for implementation"
+                },
+                {
+                  "id": "implement_subtask2",
+                  "label": "Subtask 2 for implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "label": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 9,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "work-plan-probe-typed-SlIz7o",
+          "title": "Implementation Work Plan",
+          "updatedAt": "2023-10-10T00:00:00Z",
+          "tasks": [
+            {
+              "id": "inspect_current_behavior",
+              "title": "Inspect Current Behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement Change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1",
+                  "status": "todo",
+                  "parentId": "implement_change"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2",
+                  "status": "todo",
+                  "parentId": "implement_change"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify Change",
+              "status": "todo"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 9,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Subtask 1: Core logic implementation",
+                "status": "todo"
+              },
+              {
+                "title": "Subtask 2: Integration and testing",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 10,
+      "arm": "baseline",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "tasks": [
+            {
+              "id": "inspect",
+              "description": "Inspect the current behavior"
+            },
+            {
+              "id": "implement",
+              "description": "Implement the change",
+              "tasks": [
+                {
+                  "id": "implement_subtask_1",
+                  "description": "Subtask 1 for implementation"
+                },
+                {
+                  "id": "implement_subtask_2",
+                  "description": "Subtask 2 for implementation"
+                }
+              ]
+            },
+            {
+              "id": "verify",
+              "description": "Verify the change"
+            }
+          ]
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 10,
+      "arm": "typed",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "replace",
+        "plan": {
+          "version": 1,
+          "id": "implementation_plan",
+          "title": "Implementation Work Plan",
+          "tasks": [
+            {
+              "id": "inspect_behavior",
+              "title": "Inspect the current behavior",
+              "status": "todo"
+            },
+            {
+              "id": "implement_change",
+              "title": "Implement the change",
+              "status": "todo",
+              "tasks": [
+                {
+                  "id": "subtask_1",
+                  "title": "Subtask 1: Implement core logic",
+                  "status": "todo"
+                },
+                {
+                  "id": "subtask_2",
+                  "title": "Subtask 2: Integrate with existing system",
+                  "status": "todo"
+                }
+              ]
+            },
+            {
+              "id": "verify_change",
+              "title": "Verify the change",
+              "status": "todo"
+            }
+          ],
+          "updatedAt": "2023-10-04T12:00:00Z"
+        }
+      },
+      "firstCallAccepted": false,
+      "expectedAction": "replace",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    },
+    {
+      "iteration": 10,
+      "arm": "typed-create",
+      "model": "mistral/mistral-medium-latest",
+      "modelReasoningCapability": true,
+      "thinkingLevel": "off",
+      "firstCall": {
+        "action": "create",
+        "title": "Implementation Work Plan",
+        "tasks": [
+          {
+            "title": "Inspect the current behavior",
+            "status": "todo"
+          },
+          {
+            "title": "Implement the change",
+            "status": "todo",
+            "subtasks": [
+              {
+                "title": "Develop the core logic",
+                "status": "todo"
+              },
+              {
+                "title": "Integrate with existing system",
+                "status": "todo"
+              }
+            ]
+          },
+          {
+            "title": "Verify the implementation",
+            "status": "todo"
+          }
+        ]
+      },
+      "firstCallAccepted": true,
+      "expectedAction": "create",
+      "usedExpectedAction": true,
+      "callCount": 1,
+      "timedOut": false
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "acceptedFirstCall": 0,
+      "expectedActionFirst": 9,
+      "trials": 10
+    },
+    "typed": {
+      "acceptedFirstCall": 0,
+      "expectedActionFirst": 10,
+      "trials": 10
+    },
+    "typed-create": {
+      "acceptedFirstCall": 9,
+      "expectedActionFirst": 9,
+      "trials": 10
+    }
+  }
+}

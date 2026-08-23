@@ -101,6 +101,7 @@ import { createStructuredExchangeToolDefinition } from "./structuredExchangeTool
 import { createStructuredExchangeFigureToolDefinition } from "./structuredExchangeFigureTool.ts";
 import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
 import { copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile } from "./workPlanStore.ts";
+import { composeAppendSystemPrompt } from "./systemPrompt.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { createDirectoryWatcher, type DirectoryWatcher } from "./fileWatcher.ts";
 import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
@@ -752,20 +753,6 @@ await app.listen({ port: PORT, host: HOST });
 
 // --- Agent session runtime ---------------------------------------------------
 
-/**
- * Prepended to the operator's appendSystemPrompt entries (unless webContext is
- * disabled) so the model knows its output renders in this web UI rather than a
- * terminal. Describes rendering capabilities only — grants no permissions.
- */
-const WEB_UI_CONTEXT = [
-  "You are running inside pi-outpost, a web chat UI — not a terminal.",
-  "Replies render as markdown with syntax-highlighted code, LaTeX math and mermaid diagrams.",
-  "When a user message contains @some/path, the user picked that file or directory in the UI's file browser: it exists, relative to your working directory. Use it directly — never search for it.",
-  "Workspace files can be referenced with relative markdown links, e.g. [report](./report.md) — clicking one opens the file in the UI's viewer/editor.",
-  "Images in the workspace (including ones you create) display inline in the conversation when referenced with a relative path: ![plot](./plot.png). Prefer showing an image that way over describing it.",
-  "Avoid terminal-only affordances: no 'open this file in your editor' or 'run this command to view' phrasing, no ASCII art where a mermaid diagram or an image file works better.",
-].join("\n");
-
 const DEBUG = process.env.PI_OUTPOST_DEBUG ? console.log : () => {};
 
 const createRuntime: CreateAgentSessionRuntimeFactory = async ({
@@ -773,10 +760,7 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
   sessionManager,
   sessionStartEvent,
 }) => {
-  const appendSystemPrompt = [
-    ...(config.webContext ? [WEB_UI_CONTEXT] : []),
-    ...config.appendSystemPrompt,
-  ];
+  const appendSystemPrompt = composeAppendSystemPrompt(config);
 
   const extraFactories = [...seaExtensionFactories];
   // extensionScripts are loaded via the SDK's jiti-based loader (same as
@@ -914,7 +898,7 @@ const runtime: AgentRuntime = await (async () => {
         resourceArgs: [
           ...rpcResourceArgs(config, {
             bundledSkills: config.noSkills ? [] : BUNDLED_SKILLS,
-            appendSystemPrompt: [...(config.webContext ? [WEB_UI_CONTEXT] : []), ...config.appendSystemPrompt],
+            appendSystemPrompt: composeAppendSystemPrompt(config),
           }),
           "--extension",
           toolsExtension,
