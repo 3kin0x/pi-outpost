@@ -14,6 +14,7 @@ import { normalizeMathDelimiters } from "../util/markdownMath";
 import { MarkdownPre } from "./Mermaid";
 import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 import { readStructuredExchangeFile } from "../presentations/structuredExchange";
+import type { ValidatedStructuredExchange } from "@pi-outpost/shared/structured-exchange";
 import { StructuredExchangeDocument } from "../presentations/StructuredExchangeView";
 
 // pdf.js is over a megabyte: a session that never opens a PDF must not load it.
@@ -53,6 +54,61 @@ interface FileViewerProps {
   /** Changes when raw bytes at the same workspace path must be fetched again. */
   rawRevision?: number;
 }
+
+/**
+ * How long the editor rests before the picture is recomputed.
+ *
+ * Short enough that it reads as following the typing, long enough that a burst of
+ * keystrokes is one recomputation rather than twenty.
+ */
+const RENDER_DEBOUNCE_MS = 250;
+
+/**
+ * Whether there is room for two panes.
+ *
+ * Below this the split is two unusable halves rather than one usable pane, so the
+ * mode falls back to the rendering it extends. Asked of the browser rather than
+ * measured here; where `matchMedia` is absent the answer is yes, which keeps a
+ * host that does not implement it from losing the mode entirely.
+ */
+const SPLIT_NEEDS = "(min-width: 768px)";
+
+function useRoomForTwo(): boolean {
+  const [roomy, setRoomy] = useState(() => window.matchMedia?.(SPLIT_NEEDS).matches ?? true);
+  useEffect(() => {
+    const query = window.matchMedia?.(SPLIT_NEEDS);
+    if (query === undefined) return;
+    const answer = () => setRoomy(query.matches);
+    answer();
+    query.addEventListener?.("change", answer);
+    return () => query.removeEventListener?.("change", answer);
+  }, []);
+  return roomy;
+}
+
+/** A value that follows another one, but not faster than `delay`. */
+function useDebounced<T>(value: T, delay: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [value, delay]);
+  return settled;
+}
+
+/** The envelope a file was holding when it was opened, if it was holding one. */
+function validOpenedDocument(content: string): ValidatedStructuredExchange | undefined {
+  const verdict = readStructuredExchangeFile(content);
+  return verdict.status === "valid" ? verdict.envelope : undefined;
+}
+
+/**
+ * What the viewer is showing of a file that has a rendering.
+ *
+ * `split` is offered only for a structured-exchange document: it is the mode for
+ * revising one by hand, and a Markdown file already has a preview elsewhere.
+ */
+type ViewMode = "rendered" | "source" | "split";
 
 function isMarkdown(path: string): boolean {
   return /\.(md|markdown)$/i.test(path);
@@ -98,7 +154,9 @@ export function FileViewer({
   onPdfLoad,
   rawRevision = 0,
 }: FileViewerProps) {
-  const [showRaw, setShowRaw] = useState(false);
+  // One value rather than a flag per pane. "raw && split" means nothing, and a
+  // second boolean is how a state that means nothing becomes representable.
+  const [mode, setMode] = useState<ViewMode>("rendered");
   const [showGitDiff, setShowGitDiff] = useState(initialShowGitDiff);
   // A file created from the tree opens in edit mode: creating a file is wanting
   // to write in it. The viewer is remounted per path, so this only ever applies
@@ -131,6 +189,27 @@ export function FileViewer({
     [loaded?.content],
   );
   const diagram = exchange?.status === "valid";
+  /**
+   * Recognised — not necessarily drawable.
+   *
+   * A document that declares the contract and fails it is still one of ours, and
+   * the side-by-side mode is exactly where someone goes to fix it. Offering the
+   * mode only for a document that already validates would shut the door on the
+   * one case it is most wanted for.
+   */
+  const recognised = exchange?.status === "valid" || exchange?.status === "invalid";
+  /**
+   * A file with something to show beside its text.
+   *
+   * Markdown belongs here for the same reason a structured-exchange document does:
+   * it has a rendering, and revising it means reading that rendering while typing.
+   * It arrives with no notion of invalid — every text renders as something — so its
+   * half of the split never goes stale.
+   */
+  const renderable = recognised || markdown;
+  /** The old boolean, derived: every existing branch keeps reading one thing. */
+  const showRaw = mode === "source";
+  const roomForTwo = useRoomForTwo();
   // A PDF is never editable here: this viewer edits text, and there is no text.
   const writable = isWritable(file.path, writableRoot) && !pdf;
   const dirty = edit !== null && edit.draft !== edit.baseContent;
@@ -138,6 +217,189 @@ export function FileViewer({
   // The reducer refetches on file_changed, so a foreign write shows up as a new mtime
   const changedOnDisk = edit !== null && loaded !== null && loaded.mtimeMs !== edit.baseMtimeMs;
   const conflict = loaded?.saveError?.conflict === true || changedOnDisk;
+
+  /**
+   * The text the rendering is drawn from: the buffer when one is open, the file
+   * otherwise.
+   *
+   * One source, never two kept in step. A reader who has saved nothing has still
+   * changed the model in front of them, and a picture of the file on disk would be
+   * a picture of a document that no longer exists in this session.
+   */
+  const editedText = edit?.draft ?? loaded?.content ?? "";
+  // Validation and layout are arithmetic over the whole document — cheap for a
+  // small model, not free for a large one. A short debounce bounds how often that
+  // runs; the previous picture stays on screen in between.
+  const settledText = useDebounced(editedText, RENDER_DEBOUNCE_MS);
+  const liveVerdict = useMemo(
+    () => (loaded === null ? undefined : readStructuredExchangeFile(settledText)),
+    [settledText, loaded === null],
+  );
+  /**
+   * The last rendering that was good.
+   *
+   * Seeded from the file as opened, so a document that is invalid before anything
+   * is typed shows its reason and no picture — rather than a stale one carried in
+   * from somewhere else. The viewer is remounted per path, so "as opened" is this
+   * file and no other.
+   */
+  const [lastGood, setLastGood] = useState<ValidatedStructuredExchange | undefined>(() =>
+    file.status === "loaded" ? validOpenedDocument(file.content) : undefined,
+  );
+  useEffect(() => {
+    if (liveVerdict?.status === "valid") setLastGood(liveVerdict.envelope);
+  }, [liveVerdict]);
+  /** The picture no longer matches the editor — it is the document as it last stood. */
+  const stale = liveVerdict !== undefined && liveVerdict.status !== "valid" && lastGood !== undefined;
+  /**
+   * Why the editor's text is refused.
+   *
+   * The server's diagnosis describes the file *on disk*. The moment the buffer
+   * differs from it, those reasons are about text nobody is looking at any more,
+   * so they are used only while the two agree.
+   */
+  const liveIssues =
+    liveVerdict?.status !== "invalid"
+      ? undefined
+      : settledText === loaded?.content && loaded.documentIssues !== undefined
+        ? loaded.documentIssues
+        : liveVerdict.issues;
+  /**
+   * The one-line reason, for the refusals that have no issue list.
+   *
+   * Text under revision is unparseable for most of the keystrokes that produce it,
+   * and that is the state a reader most often sees the stale marker in — so it is
+   * the state most in need of saying why. Found by typing in the running app: the
+   * marker appeared and the reason list beside it was empty.
+   */
+  const liveRefusal =
+    liveVerdict?.status === "not-a-document"
+      ? liveVerdict.why === "unparseable"
+        ? "This is not parseable JSON yet."
+        : "This no longer declares a structured-exchange `schema`."
+      : liveVerdict?.status === "unsupported-version"
+        ? `This declares ${liveVerdict.schema}, which this version does not render.`
+        : undefined;
+
+  /**
+   * The side-by-side mode, once everything that could rule it out has.
+   *
+   * A git diff replaces the whole body, and an unrecognised file was never offered
+   * the mode; either way there is no second pane to show.
+   */
+  const splitting = mode === "split" && renderable && !showGitDiff && loaded !== null && roomForTwo;
+  /**
+   * What the fallback shows when there is no room for two panes.
+   *
+   * Two orderings reach it and they are not the same. Choosing the mode in a narrow
+   * pane never opens an editor, so the rendering it extends is what shows. Narrowing
+   * *while* editing has a buffer in hand, and the editor stays — discarding
+   * somebody's unsaved text to honour a layout rule would be the worse trade by
+   * far. Found by resizing the running application, where the second ordering
+   * behaved differently from the test that only exercised the first.
+   */
+
+  /**
+   * The editor, named once.
+   *
+   * The same element in both places it appears: full width in edit mode, and in one
+   * half of the split. A second textarea would be a second set of handlers, and the
+   * save path is the thing that must not fork.
+   */
+  const editor =
+    edit === null ? null : (
+      <textarea
+        ref={textareaRef}
+        value={edit.draft}
+        onChange={(event) => setEdit({ ...edit, draft: event.target.value })}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+            event.preventDefault();
+            if (dirty && !saving && !conflict) save();
+          }
+        }}
+        spellCheck={false}
+        className="h-full w-full resize-none bg-transparent p-4 font-mono text-[13px] leading-relaxed text-zinc-800 outline-none ring-inset focus-visible:ring-1 focus-visible:ring-zinc-300 dark:text-zinc-200 dark:focus-visible:ring-zinc-700"
+      />
+    );
+
+  /**
+   * The Markdown rendering, named once.
+   *
+   * The full-width view and the split pane both call it, so the relative links and
+   * image references it resolves behave the same in either — a figure referenced
+   * from a report that loaded in one mode and not the other would be the exact
+   * confusion this rendering exists to avoid.
+   */
+  function renderedMarkdown(source: string) {
+    return (
+            <div className="prose-chat mx-auto max-w-3xl p-4 text-zinc-700 dark:text-zinc-300">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+                components={{
+                  // Same routing AssistantMessage uses: a ```mermaid fence renders as a
+                  // diagram here too, instead of falling through to plain <pre> text.
+                  pre: MarkdownPre,
+                  // Relative links point at sibling files, not server routes: open them
+                  // in the viewer instead of navigating the page (which 404s)
+                  a: ({ href, children, ...rest }) => {
+                    if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href)) {
+                      return (
+                        <a href={href} target="_blank" rel="noreferrer" {...rest}>
+                          {children}
+                        </a>
+                      );
+                    }
+                    if (href.startsWith("#")) {
+                      return (
+                        <a href={href} {...rest}>
+                          {children}
+                        </a>
+                      );
+                    }
+                    return (
+                      <a
+                        href={href}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          onReload(resolveRelativeHref(file.path, href));
+                        }}
+                        {...rest}
+                      >
+                        {children}
+                      </a>
+                    );
+                  },
+                  // Relative image references resolve against this file's directory
+                  // and load through /files/raw (the text protocol refuses binary)
+                  img: ({ src, alt, ...rest }) => {
+                    const resolved =
+                      typeof src === "string" && src !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith("//")
+                        ? rawFileUrl(serverUrl, resolveRelativeHref(file.path, src), token)
+                        : src;
+                    return <img {...rest} src={resolved} alt={alt ?? ""} loading="lazy" className="max-w-full rounded-lg" />;
+                  },
+                }}
+              >
+                {normalizeMathDelimiters(source)}
+              </ReactMarkdown>
+            </div>
+    );
+  }
+
+  /**
+   * Change what the viewer is showing.
+   *
+   * Leaving the side-by-side mode with unsaved changes is leaving the editor, and
+   * asks what leaving the editor asks. Staying inside it — or entering it — keeps
+   * whatever is in the buffer.
+   */
+  function changeMode(next: ViewMode) {
+    if (mode === "split" && next !== "split" && dirty && !window.confirm("Discard unsaved changes?")) return;
+    if (mode === "split" && next !== "split") setEdit(null);
+    setMode(next);
+  }
 
   function requestClose() {
     if (dirty && !window.confirm("Discard unsaved changes?")) return;
@@ -200,6 +462,16 @@ export function FileViewer({
     return () => document.removeEventListener("keydown", onKeyDown);
   });
 
+  // Choosing the side-by-side mode is choosing to revise the document: it opens the
+  // editor, on a file the reader may write. Outside the writable zone it stays a
+  // reading pane, which is what the requirement asks for.
+  useEffect(() => {
+    if (splitting && writable && edit === null && loaded !== null) {
+      setEdit({ draft: loaded.content, baseContent: loaded.content, baseMtimeMs: loaded.mtimeMs });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splitting, writable, loaded?.mtimeMs]);
+
   useEffect(() => {
     if (isStreaming) setAgentActivity("streaming");
     else setAgentActivity((current) => (current === "streaming" ? "done" : current));
@@ -222,15 +494,34 @@ export function FileViewer({
   return (
     <div className="absolute inset-0 z-20 flex flex-col bg-white dark:bg-zinc-950">
       <div className="flex items-center gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
-        {(markdown || diagram) && edit === null && !showGitDiff && (
-          <button
-            type="button"
-            onClick={() => setShowRaw(!showRaw)}
-            title={showRaw ? "Show rendered" : "Show source"}
-            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
-          >
-            {showRaw ? "⚏ rendered" : "⌗ source"}
-          </button>
+        {/* Three modes rather than two, and only for a document with a rendering to
+            sit beside: revising a model by hand means reading the picture and
+            changing the text in one motion, which a toggle makes a round trip. */}
+        {renderable && !showGitDiff && (
+          <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="How to show this document">
+            {(
+              [
+                ["rendered", "⚏ rendered", "Show the rendering"],
+                ["split", "⇹ split", "Edit the file beside its rendering"],
+                ["source", "⌗ source", "Show the file as written"],
+              ] as const
+            ).map(([value, label, title]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => changeMode(value)}
+                aria-pressed={mode === value}
+                title={title}
+                className={`rounded px-1.5 py-0.5 text-xs ${
+                  mode === value
+                    ? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                    : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         )}
         {gitState !== undefined && edit === null && (
           <button
@@ -288,7 +579,20 @@ export function FileViewer({
             </button>
             <button
               type="button"
-              onClick={() => (dirty ? window.confirm("Discard unsaved changes?") && setEdit(null) : setEdit(null))}
+              onClick={() => {
+                if (dirty && !window.confirm("Discard unsaved changes?")) return;
+                // Cancelling in the side-by-side mode discards the draft and keeps
+                // the mode: the reader asked to look at this document beside its
+                // picture, and throwing away an edit is not a request to stop. A
+                // plain setEdit(null) left them in "split" with a read-only pane,
+                // because the effect that opens the editor watches the mode and not
+                // the buffer, so it never fired again.
+                setEdit(
+                  splitting && loaded !== null
+                    ? { draft: loaded.content, baseContent: loaded.content, baseMtimeMs: loaded.mtimeMs }
+                    : null,
+                );
+              }}
               className="shrink-0 rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-zinc-500"
             >
               cancel
@@ -368,83 +672,81 @@ export function FileViewer({
         )}
         {/* Keyed on `edit`, not `loaded`: the post-save file_changed refetch flips the file
             to "loading" for a moment and must not unmount the textarea (focus/caret loss) */}
-        {edit !== null && (
-          <textarea
-            ref={textareaRef}
-            value={edit.draft}
-            onChange={(event) => setEdit({ ...edit, draft: event.target.value })}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "s") {
-                event.preventDefault();
-                if (dirty && !saving && !conflict) save();
-              }
-            }}
-            spellCheck={false}
-            className="h-full w-full resize-none bg-transparent p-4 font-mono text-[13px] leading-relaxed text-zinc-800 outline-none ring-inset focus-visible:ring-1 focus-visible:ring-zinc-300 dark:text-zinc-200 dark:focus-visible:ring-zinc-700"
-          />
-        )}
-        {loaded && edit === null && !showGitDiff && markdown && !showRaw && (
-          <div className="prose-chat mx-auto max-w-3xl p-4 text-zinc-700 dark:text-zinc-300">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
-              components={{
-                // Same routing AssistantMessage uses: a ```mermaid fence renders as a
-                // diagram here too, instead of falling through to plain <pre> text.
-                pre: MarkdownPre,
-                // Relative links point at sibling files, not server routes: open them
-                // in the viewer instead of navigating the page (which 404s)
-                a: ({ href, children, ...rest }) => {
-                  if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href)) {
-                    return (
-                      <a href={href} target="_blank" rel="noreferrer" {...rest}>
-                        {children}
-                      </a>
-                    );
-                  }
-                  if (href.startsWith("#")) {
-                    return (
-                      <a href={href} {...rest}>
-                        {children}
-                      </a>
-                    );
-                  }
-                  return (
-                    <a
-                      href={href}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        onReload(resolveRelativeHref(file.path, href));
-                      }}
-                      {...rest}
-                    >
-                      {children}
-                    </a>
-                  );
-                },
-                // Relative image references resolve against this file's directory
-                // and load through /files/raw (the text protocol refuses binary)
-                img: ({ src, alt, ...rest }) => {
-                  const resolved =
-                    typeof src === "string" && src !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith("//")
-                      ? rawFileUrl(serverUrl, resolveRelativeHref(file.path, src), token)
-                      : src;
-                  return <img {...rest} src={resolved} alt={alt ?? ""} loading="lazy" className="max-w-full rounded-lg" />;
-                },
-              }}
-            >
-              {normalizeMathDelimiters(loaded.content)}
-            </ReactMarkdown>
+        {edit !== null && !splitting && editor}
+        {loaded && edit === null && !splitting && !showGitDiff && markdown && !showRaw && renderedMarkdown(loaded.content)}
+        {splitting && (
+          <div className="flex h-full min-h-0" data-testid="file-split">
+            {/* Each pane scrolls on its own: a long document must not scroll the
+                diagram out of view, and a wide diagram must not widen the editor.
+                min-w-0 is what stops a wide child from pushing its half open. */}
+            <div className="min-w-0 flex-1 overflow-auto border-r border-zinc-200 dark:border-zinc-800">
+              {editor ?? (
+                // Outside the writable zone there is nothing to type into, and the
+                // document still deserves to be read beside its picture.
+                <div className="p-4">
+                  <CodeHighlight code={loaded.content} path={file.path} />
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1 overflow-auto" data-testid="file-split-rendering">
+              {markdown && !recognised ? (
+                // Markdown has no invalid state — every text is a rendering of
+                // something — so there is nothing here to mark stale or to explain.
+                // The same renderer as the full-width view, on the same debounce.
+                <div className="prose-chat p-4 text-zinc-700 dark:text-zinc-300">{renderedMarkdown(settledText)}</div>
+              ) : (
+                <>
+              {stale && (
+                // Said plainly and while they are looking: the picture is the
+                // document as it last stood, and the text beside it has moved on.
+                <p
+                  data-testid="file-split-stale"
+                  className="flex flex-wrap items-center gap-2 border-b border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                >
+                  <span>
+                    Showing the document as it last stood.{" "}
+                    {liveRefusal ?? "The text beside it does not satisfy the schema it declares."}
+                  </span>
+                </p>
+              )}
+              {liveIssues !== undefined && (
+                <ul
+                  data-testid="file-split-issues"
+                  className="space-y-0.5 border-b border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+                >
+                  {liveIssues.slice(0, 6).map((issue, index) => (
+                    <li key={index}>
+                      <span className="font-mono opacity-70">{issue.path === "" ? "(document)" : issue.path}</span>{" "}
+                      {issue.message}
+                    </li>
+                  ))}
+                  {liveIssues.length > 6 && <li className="opacity-70">…and {liveIssues.length - 6} more</li>}
+                </ul>
+              )}
+              {lastGood === undefined ? (
+                <p className="p-4 text-sm text-zinc-400 dark:text-zinc-600" data-testid="file-split-nothing">
+                  Nothing to draw yet. {liveRefusal ?? "This document does not satisfy the schema it declares."}
+                </p>
+              ) : (
+                <ViewerErrorBoundary label="This diagram">
+                  <div className="p-4" data-testid="file-structured-exchange">
+                    <StructuredExchangeDocument envelope={lastGood} source={editedText} />
+                  </div>
+                </ViewerErrorBoundary>
+              )}
+                </>
+              )}
+            </div>
           </div>
         )}
-        {loaded && edit === null && !showGitDiff && diagram && !showRaw && exchange?.status === "valid" && (
+        {loaded && edit === null && !splitting && !showGitDiff && diagram && !showRaw && exchange?.status === "valid" && (
           <ViewerErrorBoundary label="This diagram">
             <div className="mx-auto max-w-5xl p-4" data-testid="file-structured-exchange">
               <StructuredExchangeDocument envelope={exchange.envelope} source={loaded.content} />
             </div>
           </ViewerErrorBoundary>
         )}
-        {loaded && edit === null && !showGitDiff && exchange?.status === "invalid" && (
+        {loaded && edit === null && !splitting && !showGitDiff && exchange?.status === "invalid" && (
           // Named, not merely refused. A document that declares the schema and does
           // not satisfy it is the producer's mistake, and the reader is the one
           // person positioned to say so — which they cannot do from "could not be
@@ -469,7 +771,7 @@ export function FileViewer({
             </ul>
           </div>
         )}
-        {loaded && edit === null && !showGitDiff && exchange?.status === "unsupported-version" && (
+        {loaded && edit === null && !splitting && !showGitDiff && exchange?.status === "unsupported-version" && (
           // No rendering attempted: validating a version 2 document against the
           // version 1 schema would report failures against a contract it never
           // claimed to meet, and blame a producer who did nothing wrong.
@@ -481,7 +783,7 @@ export function FileViewer({
             render. Shown as text.
           </div>
         )}
-        {loaded && edit === null && !showGitDiff && (!markdown || showRaw) && (!diagram || showRaw) && (
+        {loaded && edit === null && !splitting && !showGitDiff && (!markdown || showRaw) && (!diagram || showRaw) && (
           <div className="p-4">
             <CodeHighlight code={loaded.content} path={file.path} />
           </div>

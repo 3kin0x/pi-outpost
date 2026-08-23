@@ -12,11 +12,14 @@ missing.
 
 ## What Changes
 
-- The full-size file viewer gains a third mode for a recognized structured-exchange
-  document: the editor and the rendering side by side, instead of one or the other.
+- The full-size file viewer gains a third mode for any file it can render — a
+  structured-exchange document or Markdown: the editor and the rendering side by side,
+  instead of one or the other.
+- Markdown's existing source/rendered toggle becomes that same three-way control, so a
+  file with a rendering is looked at the same way whatever kind it is.
 - The rendering follows what is typed rather than what was last saved, so the picture is
   of the document in the editor.
-- A document that is momentarily unparseable mid-keystroke — which is most of the time
+- A structured-exchange document that is momentarily unparseable mid-keystroke — which is most of the time
   while someone types — keeps the last picture that was good, marked as no longer
   current, rather than replacing the diagram with an error.
 - Saving, the mtime conflict guard and the writable-zone rules are unchanged: this adds a

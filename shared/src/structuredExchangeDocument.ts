@@ -55,9 +55,19 @@ function declaredSchemaOf(document: unknown): string | undefined {
   return schema;
 }
 
+/**
+ * Why a candidate is not one of ours.
+ *
+ * Two situations, and the difference matters to anyone editing: text that does not
+ * parse is usually a half-finished keystroke, and text that parses but declares
+ * nothing is a document missing its `schema`. Telling a reader only "not a
+ * structured-exchange document" leaves them to work out which.
+ */
+export type NotADocument = "unparseable" | "undeclared";
+
 export type StructuredExchangeDocumentVerdict =
   /** Not a structured-exchange document at all. Whatever it is, it is not ours. */
-  | { status: "not-a-document" }
+  | { status: "not-a-document"; why: NotADocument }
   /** Declares the family, names a version this build does not implement. */
   | { status: "unsupported-version"; schema: string }
   /** Declares a supported version and does not satisfy it. */
@@ -87,11 +97,11 @@ export function readStructuredExchangeDocument(
   try {
     document = JSON.parse(serialized);
   } catch {
-    return { status: "not-a-document" };
+    return { status: "not-a-document", why: "unparseable" };
   }
 
   const schema = declaredSchemaOf(document);
-  if (schema === undefined) return { status: "not-a-document" };
+  if (schema === undefined) return { status: "not-a-document", why: "undeclared" };
   // A version we do not implement is not validated against the one we do: the
   // issues that would come back describe a contract the document never claimed
   // to satisfy, and reporting them would blame a producer who did nothing wrong.

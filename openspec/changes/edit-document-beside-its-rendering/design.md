@@ -69,6 +69,39 @@ produces states that mean nothing (`raw && split`). One mode value — source, r
 split — is what the display actually is, and it makes the illegal states unrepresentable
 rather than merely unreached.
 
+## Found on the way
+
+**The commonest refusal was the one that said nothing.** `WhyItDoesNotMatchIsReachable`
+was satisfied by the invalid-document case and not by the one a reader actually meets:
+text that does not parse produces no issue list at all, so the stale marker appeared
+with an empty reason beside it. The unit test had used a schema-failing document, which
+parses — a fake kinder than reality. `readStructuredExchangeDocument` now says *why* a
+candidate is not one of ours: `unparseable` (a half-finished keystroke) or `undeclared`
+(the `schema` field is gone). Those are different situations for someone editing, and
+the viewer says which. Found by typing in the running application.
+
+**The narrow fallback has two orderings, and they are not the same.** Choosing the mode
+in a narrow pane never opens an editor, so the rendering shows. Narrowing *while*
+editing has a buffer in hand, and the editor stays — discarding unsaved text to honour a
+layout rule would be the worse trade by far. The first test only exercised the first
+ordering and passed for the wrong reason; both are covered now, and the choice is
+written down in the code rather than left as an accident of which branch ran.
+
+**The mode had to be offered for an invalid document, not only a valid one.** Gating the
+control on "draws today" shut the door on the case the mode is most wanted for — a
+document that declares the contract and fails it is exactly what someone opens the
+editor to fix. Caught by the tests before it reached the browser.
+
+**Markdown wanted the same mode, and asking for it removed a control rather than adding
+one.** Raised while the change was in flight. Markdown already had a source/rendered
+toggle, so widening the mode replaced that toggle with the same three-way group instead
+of putting a second control beside it: a file with a rendering is now looked at the same
+way whatever kind it is. Its half of the split never goes stale — every text renders as
+something — so the marker and the issue list are structured-exchange's alone. The one
+thing that had to be got right is that both places showing Markdown call *one* renderer:
+a figure referenced from a report that loaded at full width and not in the split would be
+the exact confusion the rendering exists to avoid, and it is asserted in both.
+
 ## Risks / Trade-offs
 
 **A stale picture is mistaken for a current one** → The marker is not decoration; it is

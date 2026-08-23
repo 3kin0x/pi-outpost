@@ -16,6 +16,7 @@
  */
 import {
   readStructuredExchangeDocument,
+  type NotADocument,
   type StructuredExchangeDocumentVerdict,
 } from "./structuredExchangeDocument.ts";
 import type { StructuredExchangeSchemaCheck } from "./structuredExchangeParse.ts";
@@ -52,7 +53,7 @@ export interface FigureExport {
 }
 
 export type FigureRefusal = { ok: false } & (
-  | { reason: "not-a-document" }
+  | { reason: "not-a-document"; why: NotADocument }
   | { reason: "unsupported-version"; schema: string }
   | { reason: "invalid"; issues: StructuredExchangeIssue[] }
   | { reason: "too-large"; issue: StructuredExchangeIssue }
@@ -74,7 +75,7 @@ function refusalOf(verdict: StructuredExchangeDocumentVerdict): FigureRefusal | 
     case "valid":
       return undefined;
     case "not-a-document":
-      return { ok: false, reason: "not-a-document" };
+      return { ok: false, reason: "not-a-document", why: verdict.why };
     case "unsupported-version":
       return { ok: false, reason: "unsupported-version", schema: verdict.schema };
     case "invalid":
@@ -172,7 +173,9 @@ export function figureForDocument(
 export function describeFigureRefusal(refusal: FigureRefusal): string {
   switch (refusal.reason) {
     case "not-a-document":
-      return "not a structured-exchange document: it declares no supported `schema`";
+      return refusal.why === "unparseable"
+        ? "not a structured-exchange document: it is not parseable JSON"
+        : "not a structured-exchange document: it declares no supported `schema`";
     case "unsupported-version":
       return `declares ${refusal.schema}, which this version does not render`;
     case "invalid":
