@@ -98,47 +98,58 @@ await esbuild.build({
 //
 // The upstream fix is the same three lines in the SDK's own detection; this stays
 // until that lands.
+//
+// It landed in pi-coding-agent 0.84.3 (earendil-works/pi#8237): the branch now
+// reads `isBunBinary || isNodeSeaBinary || isBundledNode`, where `isNodeSeaBinary`
+// is the same `node:sea` isSea() check this patch was adding by hand. Checked
+// explicitly below rather than assumed, so a real drift in the SDK's source still
+// throws instead of silently shipping a broken loader.
 {
   console.log("[build-sea] routing extension imports through jiti's virtual modules …");
   let bundleSrc = await readFile(BUNDLE_PATH, "utf-8");
 
-  // `node:sea` answers this for real; wrapped because a runtime without it must
-  // simply say no rather than take the whole loader with it.
-  const helper =
-    "\nfunction __piOutpostIsSea() {\n" +
-    "  try {\n" +
-    "    return require(\"node:sea\").isSea();\n" +
-    "  } catch {\n" +
-    "    return false;\n" +
-    "  }\n" +
-    "}\n";
-  const requireShim = "const require = ___createRequire(import.meta.url);";
-  if (!bundleSrc.includes(requireShim)) {
-    throw new Error("[build-sea] the bundle's createRequire shim moved — the SEA extension patch needs it");
-  }
-  bundleSrc = bundleSrc.replace(requireShim, requireShim + helper);
-
   const branchBefore = "...isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
-  const branchAfter = "...isBunBinary || __piOutpostIsSea() ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
-  if (!bundleSrc.includes(branchBefore)) {
+  const upstreamHandlesSea = /isBunBinary\s*\|\|\s*isNodeSeaBinary\s*\|\|\s*isBundledNode\s*\?\s*\{\s*virtualModules:\s*VIRTUAL_MODULES,\s*tryNative:\s*false\s*\}/;
+
+  if (bundleSrc.includes(branchBefore)) {
+    // `node:sea` answers this for real; wrapped because a runtime without it must
+    // simply say no rather than take the whole loader with it.
+    const helper =
+      "\nfunction __piOutpostIsSea() {\n" +
+      "  try {\n" +
+      "    return require(\"node:sea\").isSea();\n" +
+      "  } catch {\n" +
+      "    return false;\n" +
+      "  }\n" +
+      "}\n";
+    const requireShim = "const require = ___createRequire(import.meta.url);";
+    if (!bundleSrc.includes(requireShim)) {
+      throw new Error("[build-sea] the bundle's createRequire shim moved — the SEA extension patch needs it");
+    }
+    bundleSrc = bundleSrc.replace(requireShim, requireShim + helper);
+
+    const branchAfter = "...isBunBinary || __piOutpostIsSea() ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
+    bundleSrc = bundleSrc.replace(branchBefore, branchAfter);
+
+    // getAliases() keeps its guard, demoted from mechanism to seatbelt: it is no
+    // longer how extensions resolve anything, but a build where the detection above
+    // failed must degrade to "extensions with no npm imports" rather than to a
+    // loader that throws before any extension is read.
+    const openBefore = "function getAliases() {\n" + "  if (_aliases)\n" + "    return _aliases;";
+    const openAfter = openBefore + "\n  try {";
+    const tailBefore = "};\n" + "  return _aliases;\n" + "}";
+    const tailAfter =
+      "};\n" + "  return _aliases;\n" + "  } catch {\n" + "    _aliases = {};\n" + "    return _aliases;\n" + "  }\n" + "}";
+    bundleSrc = bundleSrc.replace(openBefore, openAfter).replace(tailBefore, tailAfter);
+
+    await writeFile(BUNDLE_PATH, bundleSrc, "utf-8");
+  } else if (upstreamHandlesSea.test(bundleSrc)) {
+    console.log("[build-sea] the SDK already detects a Node SEA binary itself (pi#8237) — nothing to patch");
+  } else {
     // Loudly, not silently: a patch that quietly stops matching leaves extensions
     // broken in exactly the build nobody runs locally.
     throw new Error("[build-sea] the SDK's jiti branch moved — extensions would lose their bundled packages");
   }
-  bundleSrc = bundleSrc.replace(branchBefore, branchAfter);
-
-  // getAliases() keeps its guard, demoted from mechanism to seatbelt: it is no
-  // longer how extensions resolve anything, but a build where the detection above
-  // failed must degrade to "extensions with no npm imports" rather than to a
-  // loader that throws before any extension is read.
-  const openBefore = "function getAliases() {\n" + "  if (_aliases)\n" + "    return _aliases;";
-  const openAfter = openBefore + "\n  try {";
-  const tailBefore = "};\n" + "  return _aliases;\n" + "}";
-  const tailAfter =
-    "};\n" + "  return _aliases;\n" + "  } catch {\n" + "    _aliases = {};\n" + "    return _aliases;\n" + "  }\n" + "}";
-  bundleSrc = bundleSrc.replace(openBefore, openAfter).replace(tailBefore, tailAfter);
-
-  await writeFile(BUNDLE_PATH, bundleSrc, "utf-8");
 }
 
 // ── 2a. Generate preparation blob (for npm distribution, cross-platform) ─────

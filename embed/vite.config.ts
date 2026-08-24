@@ -41,6 +41,27 @@ export default defineConfig({
     // bundleTypes rolls src/**/*.d.ts into a single mount.d.ts — it needs
     // @microsoft/api-extractor installed, and silently emits unbundled types if
     // it is missing. The published entry must import nothing but React.
+    //
+    // Do not bump `typescript` here past the 6.x line without re-checking this
+    // build first. Tried at 7.0.2 (2026-08-24, alongside mermaid/pi-coding-agent/
+    // typebox/katex — see the PR that reverted just this one): it breaks in two
+    // layers, not one.
+    //   1. TS7 dropped the JS Compiler API vite-plugin-dts (unplugin-dts) needs to
+    //      read types at all. There is a documented fallback —
+    //      `npm install -D @typescript/typescript6` — which does clear this step.
+    //   2. Past that, @microsoft/api-extractor's declaration bundling throws
+    //      `Internal Error: Unable to follow symbol for "HTMLElement"` — an
+    //      acknowledged api-extractor defect against TS7, not a config gap; no
+    //      flag or fallback package routes around it.
+    // So a TS7 bump needs both api-extractor and vite-plugin-dts/unplugin-dts to
+    // have shipped a fix for #2, not just the existence of the #1 workaround.
+    //
+    // Also: test this with a *clean* install (`rm -rf node_modules
+    // package-lock.json && npm install` at the repo root), not an incremental
+    // `npm install` on top of an existing tree. unplugin-dts is hoisted to the
+    // root and resolves its own `typescript` from there — an incremental install
+    // can leave a stale hoisted version in place and pass locally while the
+    // version `npm ci` actually resolves (what CI runs) still breaks.
     dts({ tsconfigPath: './tsconfig.app.json', include: ['src'], bundleTypes: true }),
   ],
   build: {
