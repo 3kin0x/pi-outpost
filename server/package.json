@@ -30,6 +30,6 @@
     "@types/ws": "^8.18.0",
     "esbuild": "^0.28.1",
     "tsx": "^4.19.0",
-    "typescript": "^7.0.2"
+    "typescript": "^5.8.0"
   }
 }
