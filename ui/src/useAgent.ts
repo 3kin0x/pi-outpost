@@ -66,6 +66,16 @@ export type OpenFile =
        * reason to give.
        */
       documentIssues?: { rule: string; path: string; message: string }[];
+      /**
+       * In-flight background re-read (`file_changed` / `directory_changed`), if any.
+       *
+       * Kept on the "loaded" variant instead of flipping to "loading", the same
+       * choice `dir_list_started`'s `preserveEntries` makes for the tree: the file
+       * that changed underneath the viewer is still the best answer to "what does
+       * this file contain" until the new read lands, and blanking it would unmount
+       * the rendered markdown for no reason the user did anything to deserve.
+       */
+      refreshRequestId?: string;
     }
   | { status: "error"; path: string; message: string };
 
@@ -297,7 +307,7 @@ type Action =
   | { type: "dialog_answered" }
   | { type: "dir_list_started"; path: string; requestId: string; preserveEntries?: boolean }
   | { type: "raw_preview_changed"; path: string }
-  | { type: "file_read_started"; path: string; requestId: string }
+  | { type: "file_read_started"; path: string; requestId: string; preserveContent?: boolean }
   | { type: "file_save_started"; path: string; requestId: string; content: string }
   | { type: "close_file_preview" }
   | { type: "file_create_started" }
@@ -433,6 +443,12 @@ function reduce(state: AgentState, action: Action): AgentState {
     return { ...state, previewRevision: state.previewRevision + 1 };
   }
   if (action.type === "file_read_started") {
+    const current = state.openFile;
+    // A background refresh of the file already on screen: keep showing it — see
+    // `refreshRequestId` on the "loaded" variant.
+    if (action.preserveContent && current?.status === "loaded" && current.path === action.path) {
+      return { ...state, openFile: { ...current, refreshRequestId: action.requestId } };
+    }
     return { ...state, openFile: { status: "loading", path: action.path, requestId: action.requestId } };
   }
   if (action.type === "file_save_started") {
@@ -702,9 +718,14 @@ function reduce(state: AgentState, action: Action): AgentState {
         // A listing answered under a creation request id *is* the creation's answer.
         ...(message.requestId.startsWith("create:") ? { created: message.path, createError: null } : {}),
       };
-    case "file_content":
-      // Ignore stale responses from a since-superseded read (user opened another file meanwhile)
-      if (state.openFile?.status !== "loading" || state.openFile.requestId !== message.requestId) return state;
+    case "file_content": {
+      // Ignore stale responses from a since-superseded read (user opened another file
+      // meanwhile) — either the initial-open "loading" request, or a background refresh
+      // ("loaded" the whole time, correlated by `refreshRequestId` instead).
+      const file = state.openFile;
+      const answersLoad = file?.status === "loading" && file.requestId === message.requestId;
+      const answersRefresh = file?.status === "loaded" && file.refreshRequestId === message.requestId;
+      if (!answersLoad && !answersRefresh) return state;
       return {
         ...state,
         openFile: {
@@ -716,6 +737,7 @@ function reduce(state: AgentState, action: Action): AgentState {
           ...(message.documentIssues === undefined ? {} : { documentIssues: message.documentIssues }),
         },
       };
+    }
     case "file_written": {
       if (message.requestId.startsWith("create:")) {
         // A file that did not exist a moment ago: open it, empty, in edit mode.
@@ -803,8 +825,16 @@ function reduce(state: AgentState, action: Action): AgentState {
           },
         };
       }
-      if (state.openFile?.status !== "loading" || state.openFile.requestId !== message.requestId) return state;
-      return { ...state, openFile: { status: "error", path: message.path, message: message.message } };
+      if (state.openFile?.status === "loading" && state.openFile.requestId === message.requestId) {
+        return { ...state, openFile: { status: "error", path: message.path, message: message.message } };
+      }
+      if (state.openFile?.status === "loaded" && state.openFile.refreshRequestId === message.requestId) {
+        // A background refresh failed — e.g. the read raced a write mid-way through.
+        // What is on screen is still the last good read; keep it rather than replace
+        // a shown file with an error banner over something the user did not do.
+        return { ...state, openFile: { ...state.openFile, refreshRequestId: undefined } };
+      }
+      return state;
     }
     case "file_search_results":
       // Ignore stale responses from a since-superseded (or since-cleared) search
@@ -1078,7 +1108,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           const openFile = openFileRef.current;
           if (openFile?.status === "loaded" && openFile.path === message.path) {
             const requestId = `file:${crypto.randomUUID()}`;
-            dispatch({ type: "file_read_started", path: message.path, requestId });
+            dispatch({ type: "file_read_started", path: message.path, requestId, preserveContent: true });
             sendMessage({ type: "read_file", path: message.path, requestId });
           }
           // An open "± diff" pane for this file would silently go stale otherwise
@@ -1100,7 +1130,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
               dispatch({ type: "raw_preview_changed", path: openFile.path });
             } else if (openFile.status === "loaded") {
               const requestId = `file:${crypto.randomUUID()}`;
-              dispatch({ type: "file_read_started", path: openFile.path, requestId });
+              dispatch({ type: "file_read_started", path: openFile.path, requestId, preserveContent: true });
               sendMessage({ type: "read_file", path: openFile.path, requestId });
             }
           }

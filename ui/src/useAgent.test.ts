@@ -688,6 +688,29 @@ describe("file lifecycle operations", () => {
     expect(followUps).toContainEqual(expect.objectContaining({ type: "read_file", path: "final.docx" }));
   });
 
+  it("keeps the open file's content on screen while a self-triggered re-read is in flight", async () => {
+    // Regression: file_read_started used to blank openFile to "loading" for this
+    // re-read too, unmounting the rendered markdown for a moment on every save —
+    // the same class of bug the file tree already guards against for directory
+    // refreshes (see the "directory_changed" suite), just never carried over here.
+    const result = await withLoadedFile();
+
+    act(() => mockWs!.receive({ type: "file_changed", path: "draft.docx" }));
+    expect(result.current.state.openFile).toMatchObject({ status: "loaded", path: "draft.docx", content: "draft" });
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_content",
+        requestId: lastRequestId(),
+        path: "draft.docx",
+        content: "draft, edited elsewhere",
+        size: 20,
+        mtimeMs: 20,
+      }),
+    );
+    expect(result.current.state.openFile).toMatchObject({ status: "loaded", content: "draft, edited elsewhere" });
+  });
+
   it("moves an open viewer to the acknowledged destination path", async () => {
     const result = await withLoadedFile("inbox/report.docx");
     act(() => result.current.moveFile("inbox/report.docx", "archive"));
@@ -1560,6 +1583,34 @@ describe("directory_changed", () => {
     act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
 
     expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "read_file", path: "docs/note.md" }));
+  });
+
+  it("keeps the open preview's content on screen while its directory's re-read is in flight", async () => {
+    // Same regression as the file tree's "keeps a refreshed directory's entries on
+    // screen" test above: flipping openFile to "loading" for this re-read unmounts
+    // the rendered markdown for the length of the round trip, on every directory
+    // event — chatty on Windows, where a single write can fire several.
+    const result = await connected();
+    act(() => result.current.readFile("docs/note.md"));
+    act(() =>
+      mockWs!.receive({ type: "file_content", requestId: lastRequestId(), path: "docs/note.md", content: "old", size: 3, mtimeMs: 1 }),
+    );
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("loaded"));
+
+    act(() => mockWs!.receive({ type: "directory_changed", path: "docs" }));
+    expect(result.current.state.openFile).toMatchObject({ status: "loaded", path: "docs/note.md", content: "old" });
+
+    act(() =>
+      mockWs!.receive({
+        type: "file_content",
+        requestId: lastRequestId(),
+        path: "docs/note.md",
+        content: "new",
+        size: 3,
+        mtimeMs: 2,
+      }),
+    );
+    expect(result.current.state.openFile).toMatchObject({ status: "loaded", content: "new" });
   });
 
   it("invalidates a raw PDF preview when its directory changed", async () => {
