@@ -110,41 +110,51 @@ await esbuild.build({
 // Two bundles carry this because two paths produce an executable: this one for
 // `node --build-sea`, and server/dist/bundle.mjs for the blob. Patching only one
 // leaves extensions working on whichever path the machine happened to take.
+//
+// pi-coding-agent 0.84.3 fixed the same gap upstream (earendil-works/pi#8237):
+// the branch now reads `isBunBinary || isNodeSeaBinary || isBundledNode`, and
+// `isNodeSeaBinary` is the same `node:sea` isSea() check this patch was adding
+// by hand. When that shape is present there is nothing left to patch —
+// checked explicitly, not assumed, so a real drift still throws below.
 {
   console.log("[build] routing extension imports through jiti's virtual modules …");
   let src = await readFile(SEA_BUNDLE, "utf-8");
 
-  const helper =
-    "\nfunction __piOutpostIsSea() {\n" +
-    "  try {\n" +
-    "    return require(\"node:sea\").isSea();\n" +
-    "  } catch {\n" +
-    "    return false;\n" +
-    "  }\n" +
-    "}\n";
-  const requireShim = "const require = ___createRequire(import.meta.url);";
-  if (!src.includes(requireShim)) {
-    throw new Error("[build] the bundle's createRequire shim moved — the SEA extension patch needs it");
-  }
-  src = src.replace(requireShim, requireShim + helper);
-
   const branchBefore = "...isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false }";
-  if (!src.includes(branchBefore)) {
+  const upstreamHandlesSea = /isBunBinary\s*\|\|\s*isNodeSeaBinary\s*\|\|\s*isBundledNode\s*\?\s*\{\s*virtualModules:\s*VIRTUAL_MODULES,\s*tryNative:\s*false\s*\}/;
+
+  if (src.includes(branchBefore)) {
+    const helper =
+      "\nfunction __piOutpostIsSea() {\n" +
+      "  try {\n" +
+      "    return require(\"node:sea\").isSea();\n" +
+      "  } catch {\n" +
+      "    return false;\n" +
+      "  }\n" +
+      "}\n";
+    const requireShim = "const require = ___createRequire(import.meta.url);";
+    if (!src.includes(requireShim)) {
+      throw new Error("[build] the bundle's createRequire shim moved — the SEA extension patch needs it");
+    }
+    src = src.replace(requireShim, requireShim + helper);
+    src = src.replace(branchBefore, "...isBunBinary || __piOutpostIsSea() ? { virtualModules: VIRTUAL_MODULES, tryNative: false }");
+
+    // Kept as a seatbelt rather than as the mechanism: if the detection above ever
+    // stops matching, extension loading degrades instead of throwing before the
+    // first extension is read.
+    const openBefore = "function getAliases() {\n" + "  if (_aliases)\n" + "    return _aliases;";
+    const openAfter = openBefore + "\n  try {";
+    const tailBefore = "};\n" + "  return _aliases;\n" + "}";
+    const tailAfter =
+      "};\n" + "  return _aliases;\n" + "  } catch {\n" + "    _aliases = {};\n" + "    return _aliases;\n" + "  }\n" + "}";
+    src = src.replace(openBefore, openAfter).replace(tailBefore, tailAfter);
+
+    await writeFile(SEA_BUNDLE, src, "utf-8");
+  } else if (upstreamHandlesSea.test(src)) {
+    console.log("[build] the SDK already detects a Node SEA binary itself (pi#8237) — nothing to patch");
+  } else {
     throw new Error("[build] the SDK's jiti branch moved — extensions would lose their bundled packages");
   }
-  src = src.replace(branchBefore, "...isBunBinary || __piOutpostIsSea() ? { virtualModules: VIRTUAL_MODULES, tryNative: false }");
-
-  // Kept as a seatbelt rather than as the mechanism: if the detection above ever
-  // stops matching, extension loading degrades instead of throwing before the
-  // first extension is read.
-  const openBefore = "function getAliases() {\n" + "  if (_aliases)\n" + "    return _aliases;";
-  const openAfter = openBefore + "\n  try {";
-  const tailBefore = "};\n" + "  return _aliases;\n" + "}";
-  const tailAfter =
-    "};\n" + "  return _aliases;\n" + "  } catch {\n" + "    _aliases = {};\n" + "    return _aliases;\n" + "  }\n" + "}";
-  src = src.replace(openBefore, openAfter).replace(tailBefore, tailAfter);
-
-  await writeFile(SEA_BUNDLE, src, "utf-8");
 }
 
 // Skills are part of the product, not local configuration: an agent that has the
