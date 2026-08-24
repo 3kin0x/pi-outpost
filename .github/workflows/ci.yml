@@ -84,7 +84,7 @@ jobs:
     # a browser older or newer than the client that drives it fails at launch, and
     # fails confusingly. The step below refuses the job when the two drift apart.
     container:
-      image: mcr.microsoft.com/playwright:v1.61.1-noble
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
