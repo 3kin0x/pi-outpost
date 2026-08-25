@@ -1,3 +1,17 @@
+/** Lines, without the terminator that ended them. */
+const splitLines = (text: string): string[] => text.split(/\r?\n/);
+
+/**
+ * Whether two texts differ only in how their lines end.
+ *
+ * A diff of such a pair has nothing to mark, and drawing the whole file as
+ * unchanged says the file is unchanged — which is not what happened. The
+ * caller can say what did.
+ */
+export function differsOnlyInLineEndings(oldText: string, newText: string): boolean {
+  return oldText !== newText && splitLines(oldText).join("\n") === splitLines(newText).join("\n");
+}
+
 /** One rendered diff row. */
 export interface DiffLine {
   type: "same" | "add" | "del";
@@ -11,8 +25,13 @@ export interface DiffLine {
  * burning O(n²) on a huge file.
  */
 export function diffLines(oldText: string, newText: string): DiffLine[] {
-  const a = oldText.split("\n");
-  const b = newText.split("\n");
+  // Split on either terminator. The two sides of a diff rarely come from the
+  // same place — a git blob is stored with LF, the working tree on Windows is
+  // checked out with CRLF — and splitting on "\n" alone leaves every line of
+  // one side carrying a trailing "\r". Nothing then matches anything, and a
+  // file with one edited line is drawn as entirely rewritten.
+  const a = splitLines(oldText);
+  const b = splitLines(newText);
 
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) start++;
