@@ -1,6 +1,21 @@
 export const WORK_PLAN_STATUSES = ["todo", "in_progress", "done", "blocked", "needs_review"] as const;
 export type WorkPlanStatus = (typeof WORK_PLAN_STATUSES)[number];
 
+/** Every operation the tool accepts; the tool schema publishes this list verbatim. */
+export const WORK_PLAN_ACTIONS = [
+  "get",
+  "create",
+  "replace",
+  "add_task",
+  "update_task",
+  "move_task",
+  "remove_task",
+  "set_dependencies",
+  "set_resources",
+  "clear",
+] as const;
+export type WorkPlanAction = (typeof WORK_PLAN_ACTIONS)[number];
+
 export interface WorkPlanResource {
   /** Generic address. `workspace:<path>` is navigable by Pi Outpost. */
   uri: string;
@@ -49,6 +64,8 @@ export interface WorkPlanDraftTask {
   status?: WorkPlanStatus;
   statusReason?: string;
   resources?: WorkPlanResource[];
+  /** Ids of other tasks in the same draft; resolved once the whole tree is read. */
+  dependsOn?: string[];
   subtasks?: WorkPlanDraftTask[];
 }
 
@@ -69,7 +86,7 @@ export type WorkPlanMutation =
   | { action: "create"; title: unknown; tasks: unknown }
   | { action: "replace"; plan: unknown }
   | { action: "add_task"; task: unknown }
-  | { action: "update_task"; taskId: string; changes: unknown }
+  | { action: "update_task"; taskId: string; changes?: unknown }
   | { action: "move_task"; taskId: string; parentId?: string | null }
   | { action: "remove_task"; taskId: string }
   | { action: "set_dependencies"; taskId: string; dependsOn: unknown }
@@ -244,7 +261,7 @@ export function normalizeWorkPlanDraft(
     }
     for (const [index, item] of items.entries()) {
       const draft = object(item);
-      onlyFields(draft, ["id", "title", "description", "status", "statusReason", "resources", "subtasks"], `tasks[${index}]`);
+      onlyFields(draft, ["id", "title", "description", "status", "statusReason", "resources", "dependsOn", "subtasks"], `tasks[${index}]`);
       const status = draft.status ?? "todo";
       if (typeof status !== "string" || !WORK_PLAN_STATUSES.includes(status as WorkPlanStatus)) {
         throw new Error(`status must be one of ${WORK_PLAN_STATUSES.join(", ")}`);
@@ -258,7 +275,9 @@ export function normalizeWorkPlanDraft(
           : { description: text(draft.description, "task.description", WORK_PLAN_LIMITS.description) }),
         status: status as WorkPlanStatus,
         ...(parentId === undefined ? {} : { parentId }),
-        dependsOn: [],
+        // Resolved after the whole tree is read: a plan names its dependencies in
+        // reading order, so a task may depend on one declared further down.
+        dependsOn: draft.dependsOn === undefined ? [] : ids(draft.dependsOn, `tasks[${index}].dependsOn`),
         resources: draft.resources === undefined ? [] : resources(draft.resources),
         ...(draft.statusReason === undefined
           ? {}
@@ -283,7 +302,55 @@ export function normalizeWorkPlanDraft(
   });
 }
 
+/**
+ * The changed fields of an `update_task` that did not wrap them in `changes`.
+ *
+ * `{"action":"update_task","taskId":"b","status":"done"}` is what a model writes
+ * when it is thinking about the task rather than about this tool's envelope, and
+ * refusing it bought nothing: the schema's own message for that shape does not
+ * even name `status`. An explicit `changes` still wins — this reads only the
+ * fields left at the top level, and never `taskId`, whose whole purpose there is
+ * to say which task is being changed rather than to change identity.
+ */
+function loosenedChanges(mutation: Record<string, unknown>): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const field of ["title", "description", "status", "statusReason", "parentId", "dependsOn", "resources"]) {
+    if (mutation[field] !== undefined) changed[field] = mutation[field];
+  }
+  return changed;
+}
+
+/**
+ * What each action cannot do without.
+ *
+ * The published schema declares one object whose per-action arguments are all
+ * optional — that is what makes a refusal name the field it refuses instead of
+ * enumerating ten branch failures. The requirement itself still has to be
+ * checked, here, by name: without this a `{"action":"remove_task"}` missing its
+ * `taskId` looked up index -1, changed nothing, and was reported to the model as
+ * a successful removal.
+ */
+const REQUIRED_ARGUMENTS: Partial<Record<WorkPlanAction, readonly string[]>> = {
+  create: ["title", "tasks"],
+  replace: ["plan"],
+  add_task: ["task"],
+  update_task: ["taskId"],
+  move_task: ["taskId"],
+  remove_task: ["taskId"],
+  set_dependencies: ["taskId", "dependsOn"],
+  set_resources: ["taskId", "resources"],
+};
+
+function assertRequiredArguments(mutation: Record<string, unknown>): void {
+  for (const field of REQUIRED_ARGUMENTS[mutation.action as WorkPlanAction] ?? []) {
+    if (mutation[field] === undefined || mutation[field] === null) {
+      throw new Error(`action=${String(mutation.action)} requires ${field}`);
+    }
+  }
+}
+
 export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutation): WorkPlan | null {
+  assertRequiredArguments(mutation as Record<string, unknown>);
   if (mutation.action === "get") return current;
   if (mutation.action === "clear") return null;
   if (mutation.action === "create") {
@@ -300,8 +367,11 @@ export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutat
       tasks.push(task(mutation.task));
       break;
     case "update_task": {
-      const changes = object(mutation.changes);
+      const changes = object(mutation.changes ?? loosenedChanges(mutation));
       if (changes.id !== undefined) throw new Error("task identity cannot be changed");
+      if (Object.keys(changes).length === 0) {
+        throw new Error("action=update_task requires at least one changed field, in changes or beside taskId");
+      }
       tasks[index] = task({ ...tasks[index], ...changes, id: tasks[index].id });
       break;
     }

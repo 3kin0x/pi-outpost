@@ -36,9 +36,12 @@ function assertWorkPlanSchema(context) {
   };
   walk(tool.parameters, "$parameters");
   if (empty.length > 0) throw new Error(`unconstrained work_plan schemas reached provider: ${empty.join(", ")}`);
-  const actions = tool.parameters.anyOf?.map((branch) => branch.properties?.action?.const);
+  // One object whose `action` enumerates the operations — not a union of ten
+  // branches, whose failures pi reports all at once.
+  if (tool.parameters.anyOf) throw new Error("work_plan provider schema is a union again");
+  const actions = tool.parameters.properties?.action?.enum;
   for (const action of ["get", "clear", "create", "replace", "add_task", "update_task", "move_task", "remove_task", "set_dependencies", "set_resources"]) {
-    if (!actions?.includes(action)) throw new Error(`work_plan provider schema has no ${action} branch`);
+    if (!actions?.includes(action)) throw new Error(`work_plan provider schema does not offer ${action}`);
   }
 }
 

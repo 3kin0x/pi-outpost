@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { Compile } from "typebox/compile";
 import { mutateWorkPlan, normalizeWorkPlanDraft, validateWorkPlan, WORK_PLAN_LIMITS, type WorkPlan } from "@pi-outpost/shared/work-plan";
 import { applyWorkPlanMutation, copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile, workPlanPath } from "../src/workPlanStore.ts";
 import { createWorkPlanToolDefinition } from "../src/workPlanTool.ts";
@@ -102,13 +103,93 @@ describe("Work Plan contract", () => {
   });
 
   it("rejects persistence fields in the ergonomic draft", () => {
-    assert.throws(
-      () => normalizeWorkPlanDraft({ title: "No graph edges", tasks: [{ title: "Task", dependsOn: [] }] }),
-      /tasks\[0\]\.dependsOn is not accepted/,
-    );
+    // Nesting is how creation expresses hierarchy; a parent id would be a second
+    // way to say the same thing, and the two could disagree.
     assert.throws(
       () => normalizeWorkPlanDraft({ title: "No parents", tasks: [{ title: "Task", parentId: "other" }] }),
       /tasks\[0\]\.parentId is not accepted/,
+    );
+    assert.throws(
+      () => normalizeWorkPlanDraft({ title: "No timestamps", tasks: [{ title: "Task", updatedAt: "now" }] }),
+      /tasks\[0\]\.updatedAt is not accepted/,
+    );
+  });
+
+  it("creates a plan that already carries its dependencies", () => {
+    const plan = normalizeWorkPlanDraft({
+      title: "Ship it",
+      tasks: [
+        { id: "design", title: "Design" },
+        { id: "build", title: "Build" },
+        { id: "ship", title: "Ship", dependsOn: ["design", "build"] },
+      ],
+    });
+    assert.deepEqual(plan.tasks.map((task) => task.dependsOn), [[], [], ["design", "build"]]);
+  });
+
+  it("resolves a dependency on a task declared further down", () => {
+    // A plan is written in the order the work reads, not in dependency order.
+    const plan = normalizeWorkPlanDraft({
+      title: "Backwards",
+      tasks: [{ id: "ship", title: "Ship", dependsOn: ["build"] }, { id: "build", title: "Build" }],
+    });
+    assert.deepEqual(plan.tasks[0].dependsOn, ["build"]);
+  });
+
+  it("names the dependency it cannot resolve", () => {
+    // The whole point of the change: the model must be told which identifier is
+    // wrong, not that some branch of a union rejected the call.
+    assert.throws(
+      () => normalizeWorkPlanDraft({
+        title: "Invented",
+        tasks: [{ title: "First" }, { title: "Second", dependsOn: ["task_1"] }],
+      }),
+      /unknown dependency: task_1/,
+    );
+  });
+
+  it("accepts changed fields beside the task identifier", () => {
+    const plan = normalizeWorkPlanDraft({ title: "P", tasks: [{ id: "a", title: "First" }] });
+    const updated = mutateWorkPlan(plan, { action: "update_task", taskId: "a", status: "in_progress" } as never);
+    assert.equal(updated?.tasks[0].status, "in_progress");
+    assert.equal(updated?.tasks[0].title, "First", "an absent field is not cleared");
+
+    const explicit = mutateWorkPlan(updated, {
+      action: "update_task",
+      taskId: "a",
+      changes: { status: "done" },
+      status: "blocked",
+    } as never);
+    assert.equal(explicit?.tasks[0].status, "done", "an explicit changes object wins");
+
+    assert.throws(
+      () => mutateWorkPlan(plan, { action: "update_task", taskId: "a", changes: { id: "b" } }),
+      /identity cannot be changed/,
+    );
+  });
+
+  it("refuses an action whose own argument is missing, by name", () => {
+    // The published schema makes every per-action argument optional, so that a
+    // wrong property is answered by naming it rather than by ten branch
+    // failures. The requirement itself has to be checked here — without it a
+    // remove_task with no taskId looked up index -1, changed nothing, and was
+    // reported to the model as a successful removal.
+    const plan = normalizeWorkPlanDraft({ title: "P", tasks: [{ id: "a", title: "A" }] });
+    for (const [mutation, message] of [
+      [{ action: "remove_task" }, /action=remove_task requires taskId/],
+      [{ action: "move_task", parentId: "a" }, /action=move_task requires taskId/],
+      [{ action: "set_dependencies", dependsOn: ["a"] }, /action=set_dependencies requires taskId/],
+      [{ action: "set_resources", resources: [] }, /action=set_resources requires taskId/],
+      [{ action: "update_task", status: "done" }, /action=update_task requires taskId/],
+      [{ action: "add_task" }, /action=add_task requires task/],
+      [{ action: "update_task", taskId: "a" }, /requires at least one changed field/],
+    ] as const) {
+      assert.throws(() => mutateWorkPlan(plan, mutation as never), message, JSON.stringify(mutation));
+    }
+    assert.throws(() => mutateWorkPlan(null, { action: "replace" } as never), /action=replace requires plan/);
+    assert.throws(
+      () => mutateWorkPlan(null, { action: "create", tasks: [{ title: "A" }] } as never),
+      /action=create requires title/,
     );
   });
 
@@ -331,48 +412,101 @@ describe("work_plan tool", () => {
     walk(schema, "$parameters");
     assert.deepEqual(emptySchemas, [], `unconstrained schema nodes: ${emptySchemas.join(", ")}`);
 
-    const branches = schema.anyOf as Array<Record<string, unknown>>;
-    assert.ok(Array.isArray(branches), "the root is an action-specific union");
-    const branch = (action: string): Record<string, unknown> => {
-      const found = branches.find((candidate) => {
-        const properties = candidate.properties as Record<string, Record<string, unknown>> | undefined;
-        return properties?.action?.const === action;
-      });
-      assert.ok(found, `missing ${action} branch`);
-      return found;
-    };
-    const actions = [
-      "get", "clear", "create", "replace", "add_task", "update_task", "move_task",
-      "remove_task", "set_dependencies", "set_resources",
-    ];
-    for (const action of actions) branch(action);
+    // One object, not a union: pi validates a call against the whole schema and
+    // reports every branch that rejected it, so a union answers one wrong
+    // property with one "must be equal to constant" per action the caller never
+    // asked for — and never names the property. See the tool's own comment.
+    assert.equal(schema.anyOf, undefined, "the root is a single object, not a union of actions");
+    assert.equal(schema.type, "object");
+    assert.deepEqual(schema.required, ["action"]);
+    assert.equal(schema.additionalProperties, false);
 
-    const create = branch("create");
-    assert.deepEqual(create.required, ["action", "title", "tasks"]);
-    let tasks = (create.properties as Record<string, Record<string, unknown>>).tasks;
+    const properties = schema.properties as Record<string, Record<string, unknown>>;
+    assert.deepEqual(
+      properties.action.enum,
+      ["get", "create", "replace", "add_task", "update_task", "move_task", "remove_task", "set_dependencies", "set_resources", "clear"],
+      "every action is one enum node, so an unknown action fails once",
+    );
+    // Each operation-specific argument says which actions use it, since the
+    // schema no longer separates them into branches.
+    for (const [field, action] of [
+      ["title", /create/], ["tasks", /create/], ["plan", /replace/], ["task", /add_task/],
+      ["taskId", /update_task/], ["changes", /update_task/], ["parentId", /move_task/],
+      ["dependsOn", /set_dependencies/], ["resources", /set_resources/],
+    ] as const) {
+      assert.match(String(properties[field].description), action, `${field} names the action that uses it`);
+    }
+
+    let tasks = properties.tasks;
     assert.match(String(tasks.description), /500 tasks total.*65536 serialized bytes/);
     for (let depth = 1; depth <= 2; depth += 1) {
       assert.equal(tasks.maxItems, WORK_PLAN_LIMITS.tasks, `task collection at depth ${depth} exposes its ceiling`);
       const draft = tasks.items as Record<string, unknown>;
       assert.deepEqual(draft.required, ["title"]);
-      const properties = draft.properties as Record<string, Record<string, unknown>>;
-      const statuses = (properties.status.anyOf as Array<Record<string, unknown>>).map((item) => item.const);
-      assert.deepEqual(statuses, ["todo", "in_progress", "done", "blocked", "needs_review"]);
-      if (depth < 2) tasks = properties.subtasks;
-      else assert.equal(properties.subtasks, undefined, "subtasks cannot nest again");
+      const taskProperties = draft.properties as Record<string, Record<string, unknown>>;
+      assert.deepEqual(taskProperties.status.enum, ["todo", "in_progress", "done", "blocked", "needs_review"]);
+      // A plan that has dependencies says so where it is written, in one call.
+      assert.equal(taskProperties.dependsOn.type, "array");
+      assert.match(String(taskProperties.dependsOn.description), /same call/);
+      if (depth < 2) tasks = taskProperties.subtasks;
+      else assert.equal(taskProperties.subtasks, undefined, "subtasks cannot nest again");
     }
 
-    assert.deepEqual(branch("replace").required, ["action", "plan"]);
-    assert.deepEqual(branch("add_task").required, ["action", "task"]);
-    assert.deepEqual(branch("update_task").required, ["action", "taskId", "changes"]);
-    const changes = (branch("update_task").properties as Record<string, Record<string, unknown>>).changes;
-    const changeProperties = changes.properties as Record<string, Record<string, unknown>>;
+    const changeProperties = (properties.changes.properties) as Record<string, Record<string, unknown>>;
     for (const field of ["description", "statusReason", "parentId"]) {
       assert.ok(
         (changeProperties[field].anyOf as Array<Record<string, unknown>>).some((candidate) => candidate.type === "null"),
         `${field} declares JSON null clearing`,
       );
     }
+  });
+
+  it("answers a refused property by naming it, and says nothing about other actions", () => {
+    // The failure this change exists for. pi validates a tool call against the
+    // published schema and hands the model every error it collects, so the shape
+    // of that error list *is* the repair instruction. Compiling here is what pi
+    // itself does (pi-ai/utils/validation.js).
+    const validator = Compile(createWorkPlanToolDefinition().parameters as never);
+    const errors = [...validator.Errors({
+      action: "create",
+      title: "Ship it",
+      tasks: [{ title: "First" }, { title: "Second", priority: "high" }],
+    })].map((error) => `${error.instancePath}: ${error.message}`);
+
+    assert.deepEqual(errors.map((error) => error.split(":")[0]), ["/tasks/1"], `one error, at the offending task: ${errors.join(" | ")}`);
+    assert.ok(
+      !errors.some((error) => /equal to constant/.test(error)),
+      `no branch of an unrequested action reports itself: ${errors.join(" | ")}`,
+    );
+
+    // An unknown action fails once, against the enumerated list, rather than once
+    // per accepted value.
+    const unknown = [...validator.Errors({ action: "frobnicate" })];
+    assert.equal(unknown.length, 1);
+    assert.match(unknown[0].message, /one of the allowed values/);
+  });
+
+  it("refuses task identity supplied at either level of an update", () => {
+    const validator = Compile(createWorkPlanToolDefinition().parameters as never);
+    assert.equal(validator.Check({ action: "update_task", taskId: "a", id: "b" }), false, "identity beside the identifier");
+    assert.equal(validator.Check({ action: "update_task", taskId: "a", changes: { id: "b" } }), false, "identity inside changes");
+    assert.equal(validator.Check({ action: "update_task", taskId: "a", status: "done" }), true);
+  });
+
+  it("ships a worked example the model can copy", () => {
+    const tool = createWorkPlanToolDefinition();
+    const example = (tool.promptGuidelines ?? []).find((line) => line.includes('"action":"create"'));
+    assert.ok(example, "the guidelines carry a literal creation call");
+    // An example that does not survive the tool's own validator is worse than
+    // none: it teaches a shape that will be refused.
+    const call = JSON.parse(example.slice(example.indexOf("{"), example.lastIndexOf("}") + 1)) as {
+      action: string;
+      title: string;
+      tasks: { id?: string; dependsOn?: string[]; subtasks?: unknown[] }[];
+    };
+    const plan = normalizeWorkPlanDraft({ title: call.title, tasks: call.tasks });
+    assert.equal(plan.tasks.filter((task) => task.dependsOn.length > 0).length, 1, "the example shows a dependency");
+    assert.equal(plan.tasks.filter((task) => task.parentId !== undefined).length, 1, "the example shows a subtask");
   });
 
   it("keeps behavioral selection guidance out of the mechanical tool contract", () => {
