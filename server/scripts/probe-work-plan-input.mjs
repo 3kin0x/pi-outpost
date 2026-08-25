@@ -42,10 +42,18 @@ const baselineParameters = Type.Object({
   resources: Type.Optional(Type.Array(Type.Object({ uri: Type.String(), label: Type.Optional(Type.String()) }))),
 });
 
-const typedBranches = workPlanParameters.anyOf.filter(
-  (branch) => branch.properties?.action?.const !== "create",
-);
-const typedParameters = Type.Union(typedBranches);
+// The published contract minus the ergonomic creation input: the arm exists to
+// measure what the typed schema alone buys, before `create` is offered. The
+// schema is one object now, so "without create" is one action off the enum and
+// the two creation-only arguments removed — it used to be a branch filter.
+const { title: _title, tasks: _tasks, ...typedProperties } = workPlanParameters.properties;
+const typedParameters = {
+  ...workPlanParameters,
+  properties: {
+    ...typedProperties,
+    action: { ...workPlanParameters.properties.action, enum: workPlanParameters.properties.action.enum.filter((action) => action !== "create") },
+  },
+};
 
 const allArms = [
   {
