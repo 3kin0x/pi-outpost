@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/protocol.ts",
+    "./mentions": "./src/mentions.ts",
     "./work-plan": "./src/workPlan.ts",
     "./structured-exchange": "./src/structuredExchange.ts",
     "./structured-exchange/validation": "./src/structuredExchangeValidation.ts",

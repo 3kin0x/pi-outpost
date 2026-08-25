@@ -36,6 +36,7 @@ import {
   type WorkPlan,
   WORKTREE_REVISION,
 } from "@pi-outpost/shared";
+import { rewriteMentionedPaths } from "@pi-outpost/shared/mentions";
 import { readStructuredExchangeDocument } from "@pi-outpost/shared/structured-exchange/document";
 import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
 import { validateWorkPlan } from "@pi-outpost/shared/work-plan";
@@ -88,6 +89,7 @@ import {
   readFileRaw,
   renameFileFromBrowser,
   resolveBrowserRoot,
+  resolveConfined,
   resolveWritableRoot,
   searchFiles,
   uploadFileFromBrowser,
@@ -1047,6 +1049,7 @@ function snapshot(): SessionSnapshot {
       state.messages as never,
       state.isStreaming,
       branchUserEntries().map((entry) => entry.entryId),
+      BROWSER_ROOT,
     ),
     models: availableModels(),
     commands: state.commands,
@@ -1629,10 +1632,49 @@ function validImages(images: unknown): WireImage[] | undefined {
   return valid;
 }
 
+/**
+ * Makes an `@`-mentioned path unambiguous before the model ever reads it.
+ *
+ * The composer sends `@ui/src/App.tsx` — a path relative to the browser root,
+ * which is also the agent's own sandbox root. That should be enough, but the
+ * model resolves it itself (there is no structured wire field for a mention,
+ * just text it reads and acts on), and a bash tool call earlier in the turn
+ * can leave it assuming a different current directory. An absolute path has
+ * no "relative to what" left to get wrong.
+ *
+ * Left untouched, not failed, when a mention doesn't resolve — a name that
+ * isn't a real path (an email-shaped "@work.md" typo, `@someone` in prose) is
+ * exactly as informative to the model as it always was; this only removes
+ * ambiguity from a mention that already named something real.
+ *
+ * `resolveConfined` alone is not enough to decide that: it resolves the
+ * existing prefix of a path and is deliberately fine with a nonexistent tail
+ * (a save destination isn't there yet either), so on its own it would turn
+ * "@someone" into a confident-looking absolute path under the root for a file
+ * that was never there — worse than leaving it alone, since it now reads as
+ * resolved. `fs.stat` is the one extra check that keeps this to mentions of
+ * something that actually exists.
+ */
+async function absolutizeMentions(text: string): Promise<string> {
+  return rewriteMentionedPaths(text, async (relPath) => {
+    try {
+      const absolute = await resolveConfined(BROWSER_ROOT, relPath);
+      await fs.stat(absolute);
+      return absolute;
+    } catch {
+      return undefined;
+    }
+  });
+}
+
 async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
-  await runtime.prompt(text, {
+  const promptText = await absolutizeMentions(text);
+  await runtime.prompt(promptText, {
     ...(images?.length ? { images } : {}),
-    // Echo the user message only once accepted (avoids ghost bubbles on reject)
+    // Echo the user message only once accepted (avoids ghost bubbles on reject).
+    // The *original* text, not promptText: the absolute path is for the model,
+    // never for what the user sees — see historyToItems for the reload side of
+    // the same rule.
     onAccepted: (accepted) => {
       if (accepted) broadcast({ type: "user", text, ...(images?.length ? { images } : {}) });
     },

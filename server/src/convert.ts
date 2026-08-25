@@ -1,6 +1,8 @@
 /**
  * Conversion from SDK AgentMessage history to wire ChatItems.
  */
+import path from "node:path";
+import { rewriteMentionedPathsSync } from "@pi-outpost/shared/mentions";
 import type { AssistantBlock, ChatItem, TurnUsage, WireImage } from "@pi-outpost/shared";
 import {
   renderCustomMessageHtml,
@@ -9,6 +11,21 @@ import {
 } from "./extensionRender.ts";
 
 const MAX_TOOL_OUTPUT = 20_000;
+
+/**
+ * `maybePath` back to root-relative, posix-separated form — undefined for
+ * anything that isn't actually an absolute path under `root`, which
+ * `rewriteMentionedPathsSync` treats as "leave this mention alone": most
+ * mentions were never absolutized (they didn't resolve to a real path in the
+ * first place — see absolutizeMentions in index.ts) and must round-trip
+ * unchanged, not get mangled by a relative computed against the wrong thing.
+ */
+function relativizeUnderRoot(root: string, maybePath: string): string | undefined {
+  if (!path.isAbsolute(maybePath)) return undefined;
+  const rel = path.relative(root, maybePath);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+  return rel.split(path.sep).join("/");
+}
 
 interface AnyContent {
   type: string;
@@ -133,8 +150,19 @@ function assistantBlocks(content: string | AnyContent[]): AssistantBlock[] {
  * branch, oldest first. They are matched to the emitted user items from the END:
  * compaction drops a prefix of the history, so the items are a suffix of the
  * branch. Items left unmatched simply carry no entryId (edit stays disabled).
+ *
+ * `browserRoot`, when given, turns an `@`-mentioned path back from the absolute
+ * form the model was handed (see absolutizeMentions in index.ts) into the
+ * relative one the composer actually sent — what replaying history from a
+ * reconnect or a page reload shows must match what a live turn showed, or the
+ * "transparent" half of that trade stops being true the moment someone reloads.
  */
-export function historyToItems(messages: AnyMessage[], streaming = false, userEntryIds: string[] = []): ChatItem[] {
+export function historyToItems(
+  messages: AnyMessage[],
+  streaming = false,
+  userEntryIds: string[] = [],
+  browserRoot?: string,
+): ChatItem[] {
   const items: ChatItem[] = [];
   const userItems: Extract<ChatItem, { kind: "user" }>[] = [];
   const pendingCalls = new Map<string, { name: string; args: unknown }>();
@@ -164,7 +192,7 @@ export function historyToItems(messages: AnyMessage[], streaming = false, userEn
         if (text || images.length > 0) {
           const item: Extract<ChatItem, { kind: "user" }> = {
             kind: "user",
-            text,
+            text: browserRoot ? rewriteMentionedPathsSync(text, (p) => relativizeUnderRoot(browserRoot, p)) : text,
             ...(images.length > 0 ? { images } : {}),
           };
           items.push(item);
