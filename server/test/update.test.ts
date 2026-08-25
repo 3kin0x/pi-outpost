@@ -20,6 +20,7 @@ import {
   isFresh,
   isNewer,
   npmCommand,
+  npmExecutable,
   readCache,
   resolveRegistry,
   runStartupUpdateNotice,
@@ -430,9 +431,14 @@ async function runUpdate(
 
 describe("npmCommand", () => {
   test("names npm.cmd on Windows and npm elsewhere", () => {
-    assert.deepEqual(npmCommand("win32", undefined), ["npm.cmd", []]);
-    assert.deepEqual(npmCommand("darwin", undefined), ["npm", []]);
-    assert.deepEqual(npmCommand("linux", undefined), ["npm", []]);
+    // Passing "" rather than undefined: an omitted argument falls back to this
+    // process's own npm_execpath, which npm sets for `npm test` — the table would
+    // then assert the environment rather than the rule, and pass locally under
+    // `node --test` while failing in CI.
+    assert.deepEqual(npmCommand("win32", ""), ["npm.cmd", []]);
+    assert.deepEqual(npmCommand("darwin", ""), ["npm", []]);
+    assert.equal(npmExecutable("win32"), "npm.cmd");
+    assert.equal(npmExecutable("linux"), "npm");
   });
 
   test("npm's own exported path wins on every platform", () => {
@@ -518,8 +524,11 @@ describe("update, by channel", () => {
     // reported as "the installer exited with 1" — npm blamed for never having
     // run. This assertion is evaluated on the Windows CI job too, which is the
     // only place the regression can be seen.
-    const run = await runUpdate({ channel: "global", latest: "0.9.0" });
+    // `registry: null` for the bare form: an override would add --registry and
+    // say nothing about the command, which is what this test is about.
+    const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: null });
     assert.equal(run.installs[0]?.command, process.platform === "win32" ? "npm.cmd" : "npm");
+    assert.deepEqual(run.installs[0]?.args, ["install", "-g", "pi-outpost@latest"], "the argv vector is untouched");
     assert.ok(run.said(/running: npm(\.cmd)? install -g/), `announced: ${run.lines.join(" | ")}`);
   });
 

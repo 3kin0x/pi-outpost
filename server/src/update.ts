@@ -198,12 +198,22 @@ function envForNpm(): NodeJS.ProcessEnv {
  * `npm_execpath` still wins where npm exported it: that is npm telling us which
  * npm is running, and it is a `.js` file run by this node, on every platform.
  */
+export function npmExecutable(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "npm.cmd" : "npm";
+}
+
+/**
+ * The probes additionally prefer the npm that started this process, when there
+ * is one. The installer deliberately does not: it must run the npm the operator
+ * would run by hand, reading their own configuration, rather than whichever npm
+ * happened to launch the server.
+ */
 export function npmCommand(
   platform: NodeJS.Platform = process.platform,
-  execpath = process.env.npm_execpath,
+  execpath: string | undefined = process.env.npm_execpath,
 ): [command: string, argv: string[]] {
   if (execpath) return [process.execPath, [execpath]];
-  return [platform === "win32" ? "npm.cmd" : "npm", []];
+  return [npmExecutable(platform), []];
 }
 
 let npmRegistryMemo: { value: string | undefined; failure?: string } | undefined;
@@ -577,11 +587,10 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
       // "npm" here reached `child.on("error")` and was reported as "the installer
       // exited with 1", which reads as npm refusing the install rather than npm
       // never having been started.
-      const [npm, prefix] = npmCommand();
-      const invocation = [...prefix, ...args];
-      say(`[pi] running: ${path.basename(npm)} ${invocation.join(" ")}`);
+      const npm = npmExecutable();
+      say(`[pi] running: ${npm} ${args.join(" ")}`);
       const run = options.install ?? runInstaller;
-      const code = await run(npm, invocation);
+      const code = await run(npm, args);
       if (code !== 0) {
         say(`[pi] the installer exited with ${code}; nothing was changed by pi-outpost itself`);
         return code;
