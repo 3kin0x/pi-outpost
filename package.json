@@ -34,8 +34,5 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "concurrently": "^10.0.4"
-  },
-  "dependencies": {
-    "pi-outpost": "^0.6.4"
   }
 }
