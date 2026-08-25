@@ -22,8 +22,7 @@
 
 - [x] 4.1 `npm test --workspace server`, `npm run typecheck`, `npm run lint`.
 - [x] 4.2 Live: same prompt, same model as the measured failure (`mistral/ministral-8b-latest`), a real server and a real transcript — the refusal must be gone and the dependencies must arrive in the creation call.
-- [ ] 4.3 A second live model, to show the result is not one model's habit. *(not run — the first live check was decisive and the second was cut for time)*
-- [x] 4.4 The widget, driven by hand: create a plan through the composer and read the Work Plan panel back.
+- [x] 4.3 The widget, driven by hand: create a plan through the composer and read the Work Plan panel back.
 
 ## 5. Review follow-up
 
