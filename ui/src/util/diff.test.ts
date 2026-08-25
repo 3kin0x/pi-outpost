@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffLines, toSideBySide, rowsWithContext, withContext } from "./diff";
+import { differsOnlyInLineEndings, diffLines, toSideBySide, rowsWithContext, withContext } from "./diff";
 
 describe("diffLines", () => {
   it("returns all same lines for identical text", () => {
@@ -122,5 +122,39 @@ describe("withContext", () => {
     // 'away' is skipped (consecutive non-kept)
     // 'change' is kept
     expect(result[1]).not.toBeNull();
+  });
+});
+
+describe("line endings", () => {
+  // The reported case: the "before" side is a git blob (LF, as stored) and the
+  // "after" side is the working tree on Windows (CRLF, as checked out). Split on
+  // "\n" alone, every line of one side keeps a trailing "\r", nothing matches,
+  // and a one-line edit is drawn as a rewritten file.
+  it("marks only the line that changed when the sides disagree on terminators", () => {
+    const blob = "one\ntwo\nthree\n";
+    const worktree = "one\r\nTWO\r\nthree\r\n";
+    const lines = diffLines(blob, worktree);
+    expect(lines.filter((line) => line.type !== "same").map((line) => `${line.type}:${line.text}`)).toEqual([
+      "del:two",
+      "add:TWO",
+    ]);
+    expect(lines.filter((line) => line.type === "same").map((line) => line.text)).toEqual(["one", "three", ""]);
+  });
+
+  it("keeps a carriage return that is not a terminator", () => {
+    // A lone \r inside a line is content, not a line ending, and must survive.
+    const lines = diffLines("a\rb\n", "a\rc\n");
+    expect(lines.filter((line) => line.type !== "same")).toEqual([
+      { type: "del", text: "a\rb" },
+      { type: "add", text: "a\rc" },
+    ]);
+  });
+
+  it("recognises a pair that differs only in how its lines end", () => {
+    expect(differsOnlyInLineEndings("one\ntwo\n", "one\r\ntwo\r\n")).toBe(true);
+    // Identical texts have no difference to explain away.
+    expect(differsOnlyInLineEndings("one\n", "one\n")).toBe(false);
+    // A real edit is a real edit, whatever the terminators.
+    expect(differsOnlyInLineEndings("one\n", "two\r\n")).toBe(false);
   });
 });

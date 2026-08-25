@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { WORKTREE_REVISION, type GitRevision } from "@pi-outpost/shared";
 import type { GitFileDiffState, GitFileHistoryState } from "../useAgent";
-import { diffLines } from "../util/diff";
+import { differsOnlyInLineEndings, diffLines } from "../util/diff";
 import { HISTORY_LIST_WIDTH } from "../util/panelWidth";
 import { SplitDiffBlock } from "./DiffBlocks";
 import { PanelResizeHandle, useResizablePanelWidth } from "./PanelResizeHandle";
@@ -404,6 +404,16 @@ function DiffPane({ diff, base, target }: { diff: GitFileDiffState | null; base:
   if (diff === null) return <p className="text-sm text-zinc-400 dark:text-zinc-600">Loading…</p>;
   if (diff.status === "loaded" && diff.beforeText === diff.afterText) {
     return <p className="text-sm text-zinc-400 dark:text-zinc-600">These two versions are identical.</p>;
+  }
+  // The diff compares lines without their terminators, so a pair that differs
+  // only in those has nothing to mark — and a screen of unchanged lines would
+  // read as "identical", which is not what happened.
+  if (diff.status === "loaded" && differsOnlyInLineEndings(diff.beforeText, diff.afterText)) {
+    return (
+      <p className="text-sm text-zinc-400 dark:text-zinc-600">
+        These two versions differ only in their line endings.
+      </p>
+    );
   }
   return (
     // Dim rather than clear while reloading: the pane must not flash empty between pairs
