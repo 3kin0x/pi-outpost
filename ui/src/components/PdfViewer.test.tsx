@@ -365,8 +365,16 @@ describe("PdfViewer scrolling", () => {
     render(<PdfViewer path="report.pdf" />);
     await screen.findByText("Page 1 / 5");
 
-    // What the browser reports when page 4 scrolls across the middle line
-    notify?.([{ isIntersecting: true, target: { dataset: { page: "4" } } }]);
+    // The observer is created only once the document has loaded, which is later
+    // than the page indicator appearing. `notify?.()` on a callback that is not
+    // there yet does nothing at all, and the test then waits for a change that
+    // will never come — one ubuntu CI run in a few, never locally.
+    await waitFor(() => expect(notify).toBeDefined());
+
+    // What the browser reports when page 4 scrolls across the middle line. Not
+    // optional: a missing observer must fail here, naming itself, rather than
+    // being swallowed and reported as a page indicator that would not update.
+    notify!([{ isIntersecting: true, target: { dataset: { page: "4" } } }]);
     expect(await screen.findByText("Page 4 / 5")).toBeInTheDocument();
   });
 
