@@ -189,6 +189,21 @@ export interface AgentState {
   tree: TreeNode[] | null;
   isStreaming: boolean;
   items: ChatItem[];
+  /**
+   * A prompt this client has sent and the server has not echoed back yet.
+   *
+   * The authoritative bubble arrives on `user`, which the server broadcasts only
+   * once the runtime *accepts* the prompt — after session creation, runtime
+   * start-up and, on a loaded provider, the wait for the request to be taken.
+   * Those seconds used to show nothing at all: the composer emptied and the
+   * transcript did not move, which reads as a lost message.
+   *
+   * Kept out of `items` deliberately. `user_entries` pairs bubbles to persisted
+   * entry ids counting from the end, so an unsent bubble sitting in that list
+   * would take the previous message's id — and editing it would rewind the wrong
+   * turn.
+   */
+  pendingPrompt: { text: string; images?: WireImage[] } | null;
   workPlan: WorkPlan | null;
   queue: { steering: string[]; followUp: string[] };
   errors: string[];
@@ -262,6 +277,7 @@ const initialState: AgentState = {
   tree: null,
   isStreaming: false,
   items: [],
+  pendingPrompt: null,
   workPlan: null,
   queue: { steering: [], followUp: [] },
   errors: [],
@@ -303,6 +319,7 @@ type Action =
   | { type: "auth_required" }
   | { type: "auth_retrying" }
   | { type: "server"; message: ServerMessage }
+  | { type: "prompt_sent"; text: string; images?: WireImage[] }
   | { type: "dismiss_notification"; id: string }
   | { type: "dialog_answered" }
   | { type: "dir_list_started"; path: string; requestId: string; preserveEntries?: boolean }
@@ -373,6 +390,10 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     commands: message.commands,
     isStreaming: message.isStreaming,
     items: message.items,
+    // A snapshot is the authority on what this conversation contains. A prompt
+    // still waiting for its echo when one arrives — a reconnect, a session
+    // switch — either made it into these items or never landed at all.
+    pendingPrompt: null,
     workPlan: message.workPlan ?? null,
     queue: { steering: [], followUp: [] },
     errors: [],
@@ -423,6 +444,9 @@ function reduce(state: AgentState, action: Action): AgentState {
   // (see the /branding fetch below); "hello" still wins if it arrives with a different value.
   if (action.type === "branding_settled") return { ...state, brandingReady: true };
   if (action.type === "branding_loaded") return { ...state, brandingReady: true, branding: action.branding };
+  if (action.type === "prompt_sent") {
+    return { ...state, pendingPrompt: { text: action.text, ...(action.images?.length ? { images: action.images } : {}) } };
+  }
   if (action.type === "dismiss_notification") {
     return { ...state, notifications: state.notifications.filter((n) => n.id !== action.id) };
   }
@@ -563,6 +587,9 @@ function reduce(state: AgentState, action: Action): AgentState {
     case "user":
       return {
         ...state,
+        // Ours or another client's: either way the placeholder has served its
+        // purpose, and leaving it would double the bubble.
+        pendingPrompt: null,
         items: [
           ...state.items,
           { kind: "user", text: message.text, ...(message.images ? { images: message.images } : {}) },
@@ -673,6 +700,12 @@ function reduce(state: AgentState, action: Action): AgentState {
       return {
         ...state,
         errors: [...state.errors, message.message],
+        // A prompt the server refused — a session change in flight, attachments it
+        // would not take — is answered with an error and never with a `user`. The
+        // placeholder must go with it, or it stands there as a message that was
+        // never sent. Nothing is lost by clearing it on an unrelated error either:
+        // an accepted prompt has already been replaced by its real bubble.
+        pendingPrompt: null,
         // An apply is a modal wait on one answer, and the server answers a refused
         // one with exactly this. Attributing the first error that lands during the
         // wait keeps the menu open on the message that explains the refusal.
@@ -1213,8 +1246,12 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       dispatch({ type: "auth_retrying" });
       setAuthNonce((n) => n + 1);
     },
-    prompt: (text: string, images?: WireImage[]) =>
-      sendMessage({ type: "prompt", text, ...(images?.length ? { images } : {}) }),
+    prompt: (text: string, images?: WireImage[]) => {
+      // Shown immediately, before the server has accepted anything: the round
+      // trip is long enough at the start of a conversation to read as a failure.
+      dispatch({ type: "prompt_sent", text, ...(images?.length ? { images } : {}) });
+      sendMessage({ type: "prompt", text, ...(images?.length ? { images } : {}) });
+    },
     abort: () => sendMessage({ type: "abort" }),
     setModel: (provider: string, id: string) => sendMessage({ type: "set_model", provider, id }),
     setThinking: (level: ThinkingLevel) => sendMessage({ type: "set_thinking", level }),

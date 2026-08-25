@@ -309,6 +309,20 @@ describe("historyToItems", () => {
     assert.equal(asst.errorMessage, "something broke");
     assert.deepEqual(asst.blocks, []);
   });
+
+  test("a provider failure reaches the bubble as prose, not as a web page", () => {
+    // The SDK persists whatever the provider's proxy answered, markup included,
+    // so a reopened session replays the page unless this conversion cleans it.
+    const items = historyToItems([
+      {
+        role: "assistant",
+        content: [],
+        errorMessage: "504 <html><body><h1>504 Gateway Time-out</h1> The server didn't respond in time. </body></html>",
+      },
+    ]);
+    const asst = items[0] as Extract<(typeof items)[0], { kind: "assistant" }>;
+    assert.equal(asst.errorMessage, "504 Gateway Time-out The server didn't respond in time.");
+  });
 });
 
 // ---------------------------------------------------------------------------

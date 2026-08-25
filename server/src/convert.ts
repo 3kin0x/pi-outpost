@@ -4,6 +4,7 @@
 import path from "node:path";
 import { rewriteMentionedPathsSync } from "@pi-outpost/shared/mentions";
 import type { AssistantBlock, ChatItem, TurnUsage, WireImage } from "@pi-outpost/shared";
+import { describeProviderError } from "@pi-outpost/shared/provider-error";
 import {
   renderCustomMessageHtml,
   renderToolCallHtml,
@@ -218,7 +219,7 @@ export function historyToItems(
           trailingAssistantItem = {
             kind: "assistant",
             blocks,
-            ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+            ...(message.errorMessage ? { errorMessage: describeProviderError(message.errorMessage) } : {}),
             ...(usage ? { usage } : {}),
           };
           items.push(trailingAssistantItem);
@@ -346,7 +347,7 @@ export function assistantToItem(message: AnyMessage): ChatItem {
   return {
     kind: "assistant",
     blocks: assistantBlocks(message.content),
-    ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+    ...(message.errorMessage ? { errorMessage: describeProviderError(message.errorMessage) } : {}),
     ...(usage ? { usage } : {}),
   };
 }

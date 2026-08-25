@@ -40,6 +40,7 @@ import { rewriteMentionedPaths } from "@pi-outpost/shared/mentions";
 import { readStructuredExchangeDocument } from "@pi-outpost/shared/structured-exchange/document";
 import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
 import { validateWorkPlan } from "@pi-outpost/shared/work-plan";
+import { describeProviderError } from "@pi-outpost/shared/provider-error";
 import {
   type AgentRuntime,
   type RuntimeEvent,
@@ -1286,7 +1287,9 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       broadcast(event.request);
       break;
     case "error":
-      broadcast({ type: "error", message: event.message });
+      // Same treatment as an assistant turn's own failure: a provider reached
+      // through a proxy answers with an HTML page, and the reader gets markup.
+      broadcast({ type: "error", message: describeProviderError(event.message) });
       break;
     case "runtime_failed":
       // Fail closed: /health already reports unready, and this is the one visible
