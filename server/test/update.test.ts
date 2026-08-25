@@ -511,11 +511,14 @@ describe("update, by channel", () => {
   test("a global install is upgraded with the command that was printed", async () => {
     const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: null });
     assert.equal(run.code, 0);
-    assert.deepEqual(run.installs, [{ command: "npm", args: ["install", "-g", "pi-outpost@latest"] }]);
+    // `npmExecutable()` rather than the literal "npm": on Windows it is npm.cmd,
+    // and pinning the name here would assert the very bug this file now guards.
+    const npm = npmExecutable();
+    assert.deepEqual(run.installs, [{ command: npm, args: ["install", "-g", "pi-outpost@latest"] }]);
     // The printed command and the executed one must be the same thing: printing it
     // is what makes the action auditable, and a mismatch makes that worse than useless.
     const printed = run.lines.find((line) => line.startsWith("[pi] running:"));
-    assert.equal(printed, "[pi] running: npm install -g pi-outpost@latest");
+    assert.equal(printed, `[pi] running: ${npm} install -g pi-outpost@latest`);
   });
 
   test("the installer runs the npm this platform can actually execute", async () => {
@@ -562,7 +565,7 @@ describe("update, by channel", () => {
     // And what was printed is still what was run.
     assert.equal(
       run.lines.find((line) => line.startsWith("[pi] running:")),
-      "[pi] running: npm install -g --registry https://nexus.internal/npm pi-outpost@latest",
+      `[pi] running: ${npmExecutable()} install -g --registry https://nexus.internal/npm pi-outpost@latest`,
     );
   });
 
