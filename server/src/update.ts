@@ -180,7 +180,58 @@ function envForNpm(): NodeJS.ProcessEnv {
   return rest;
 }
 
-let npmRegistryMemo: { value: string | undefined } | undefined;
+/**
+ * How to run npm, as an argv vector.
+ *
+ * On Windows `npm` is `npm.cmd`, a batch file: `CreateProcess` cannot execute it,
+ * so every `execFile`/`spawn` of the bare name fails with ENOENT before npm is
+ * ever consulted. The registry probe swallowed that and fell back to the public
+ * registry, and the installer reported "the installer exited with 1" — on the
+ * one deployment this code exists to serve, a site air-gapped behind an internal
+ * proxy whose address lives only in the operator's `.npmrc`, which npm alone can
+ * read. Reported from such a site, on Windows, where this had never worked.
+ *
+ * `shell: true` would also run the batch file, by handing a command *string* to
+ * `cmd.exe` to parse. Naming the file is enough, and keeps every argument a
+ * vector element that nothing re-splits.
+ *
+ * `npm_execpath` still wins where npm exported it: that is npm telling us which
+ * npm is running, and it is a `.js` file run by this node, on every platform.
+ */
+export function npmExecutable(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "npm.cmd" : "npm";
+}
+
+/**
+ * The probes additionally prefer the npm that started this process, when there
+ * is one. The installer deliberately does not: it must run the npm the operator
+ * would run by hand, reading their own configuration, rather than whichever npm
+ * happened to launch the server.
+ */
+export function npmCommand(
+  platform: NodeJS.Platform = process.platform,
+  execpath: string | undefined = process.env.npm_execpath,
+): [command: string, argv: string[]] {
+  if (execpath) return [process.execPath, [execpath]];
+  return [npmExecutable(platform), []];
+}
+
+let npmRegistryMemo: { value: string | undefined; failure?: string } | undefined;
+
+/**
+ * Why asking npm for the registry did not work, when it did not.
+ *
+ * The probe cannot print anything itself — it runs on the startup path, before
+ * anyone has decided whether this is a background check or a command. But
+ * swallowing the reason turns "npm could not be asked" into "npm said nothing",
+ * which is indistinguishable from "npm says the public registry" at the point
+ * where it matters: an operator behind an internal proxy, being told about a
+ * version that came from the wrong place. The caller prints this when it falls
+ * back to the public default.
+ */
+export function npmRegistryProbeFailure(): string | undefined {
+  return npmRegistryMemo?.failure;
+}
 
 function npmConfiguredRegistry(): string | undefined {
   // At most once per process. Each call is a child process with a five-second
@@ -191,8 +242,7 @@ function npmConfiguredRegistry(): string | undefined {
     // `getBuiltinModule` rather than `require`, which does not exist in an ES
     // module, and rather than a dynamic import, which cannot be awaited here.
     const { execFileSync } = process.getBuiltinModule("node:child_process");
-    const npm = process.env.npm_execpath;
-    const [command, argv] = npm ? [process.execPath, [npm]] : ["npm", []];
+    const [command, argv] = npmCommand();
     const out = execFileSync(command, [...argv, "config", "get", "registry"], {
       encoding: "utf8",
       timeout: 5_000,
@@ -202,8 +252,10 @@ function npmConfiguredRegistry(): string | undefined {
     }).trim();
     // npm prints "undefined" rather than nothing when a key is unset.
     npmRegistryMemo.value = out && out !== "undefined" && out !== "null" ? out : undefined;
+    if (npmRegistryMemo.value === undefined) npmRegistryMemo.failure = "npm has no registry configured";
     return npmRegistryMemo.value;
-  } catch {
+  } catch (error) {
+    npmRegistryMemo.failure = error instanceof Error ? error.message : String(error);
     return undefined;
   }
 }
@@ -344,6 +396,9 @@ export async function fetchLatestVersion(
 ): Promise<VersionCheck> {
   const doFetch = options.fetchImpl ?? registryRequest;
   const registry = resolveRegistry(options.registry);
+  // A public-registry check on a host that configured another one is a check of
+  // the wrong shelf; say so rather than reporting its answer as the truth.
+  const probeFailure = registry === PUBLIC_REGISTRY ? npmRegistryProbeFailure() : undefined;
   const background = options.background ?? false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? REGISTRY_TIMEOUT_MS);
@@ -374,7 +429,15 @@ export async function fetchLatestVersion(
       : error instanceof Error
         ? error.message
         : String(error);
-    return { status: "failed", running, reason };
+    // On a host that configured its own registry, a failure against the public
+    // one is a failure to *find* the configured address, not a failure of the
+    // network. Without this the operator reads "ENOTFOUND registry.npmjs.org"
+    // and has no way to know their own proxy was never consulted.
+    return {
+      status: "failed",
+      running,
+      reason: probeFailure === undefined ? reason : `${reason} (asked the public registry: ${probeFailure})`,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -520,9 +583,14 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
         ...(options.registry !== undefined ? ["--registry", options.registry] : []),
         `${PACKAGE_NAME}@latest`,
       ];
-      say(`[pi] running: npm ${args.join(" ")}`);
+      // The same argv vector the probes use, for the same Windows reason: a bare
+      // "npm" here reached `child.on("error")` and was reported as "the installer
+      // exited with 1", which reads as npm refusing the install rather than npm
+      // never having been started.
+      const npm = npmExecutable();
+      say(`[pi] running: ${npm} ${args.join(" ")}`);
       const run = options.install ?? runInstaller;
-      const code = await run("npm", args);
+      const code = await run(npm, args);
       if (code !== 0) {
         say(`[pi] the installer exited with ${code}; nothing was changed by pi-outpost itself`);
         return code;
@@ -732,8 +800,7 @@ function globalNodeModules(): string | undefined {
   }
   try {
     const { execFileSync } = process.getBuiltinModule("node:child_process");
-    const npm = process.env.npm_execpath;
-    const [command, argv] = npm ? [process.execPath, [npm]] : ["npm", []];
+    const [command, argv] = npmCommand();
     const out = execFileSync(command, [...argv, "root", "-g"], {
       encoding: "utf8",
       timeout: 5_000,

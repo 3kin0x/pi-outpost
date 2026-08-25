@@ -19,6 +19,8 @@ import {
   fetchLatestVersion,
   isFresh,
   isNewer,
+  npmCommand,
+  npmExecutable,
   readCache,
   resolveRegistry,
   runStartupUpdateNotice,
@@ -427,6 +429,27 @@ async function runUpdate(
   return { code, lines, installs, said: (pattern) => lines.some((line) => pattern.test(line)) };
 }
 
+describe("npmCommand", () => {
+  test("names npm.cmd on Windows and npm elsewhere", () => {
+    // Passing "" rather than undefined: an omitted argument falls back to this
+    // process's own npm_execpath, which npm sets for `npm test` — the table would
+    // then assert the environment rather than the rule, and pass locally under
+    // `node --test` while failing in CI.
+    assert.deepEqual(npmCommand("win32", ""), ["npm.cmd", []]);
+    assert.deepEqual(npmCommand("darwin", ""), ["npm", []]);
+    assert.equal(npmExecutable("win32"), "npm.cmd");
+    assert.equal(npmExecutable("linux"), "npm");
+  });
+
+  test("npm's own exported path wins on every platform", () => {
+    // npm_execpath is npm telling us which npm is running, and it is a .js file
+    // this node can run directly — no batch file in the way.
+    for (const platform of ["win32", "darwin"] as const) {
+      assert.deepEqual(npmCommand(platform, "/npm/bin/npm-cli.js"), [process.execPath, ["/npm/bin/npm-cli.js"]]);
+    }
+  });
+});
+
 describe("update --check", () => {
   test("a newer version is reported with both numbers, and nothing is installed", async () => {
     const run = await runUpdate({ checkOnly: true, channel: "global", latest: "0.9.0" });
@@ -488,11 +511,28 @@ describe("update, by channel", () => {
   test("a global install is upgraded with the command that was printed", async () => {
     const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: null });
     assert.equal(run.code, 0);
-    assert.deepEqual(run.installs, [{ command: "npm", args: ["install", "-g", "pi-outpost@latest"] }]);
+    // `npmExecutable()` rather than the literal "npm": on Windows it is npm.cmd,
+    // and pinning the name here would assert the very bug this file now guards.
+    const npm = npmExecutable();
+    assert.deepEqual(run.installs, [{ command: npm, args: ["install", "-g", "pi-outpost@latest"] }]);
     // The printed command and the executed one must be the same thing: printing it
     // is what makes the action auditable, and a mismatch makes that worse than useless.
     const printed = run.lines.find((line) => line.startsWith("[pi] running:"));
-    assert.equal(printed, "[pi] running: npm install -g pi-outpost@latest");
+    assert.equal(printed, `[pi] running: ${npm} install -g pi-outpost@latest`);
+  });
+
+  test("the installer runs the npm this platform can actually execute", async () => {
+    // On Windows npm is `npm.cmd`, a batch file: spawning the bare name with
+    // shell:false fails with ENOENT before npm starts, and the failure was
+    // reported as "the installer exited with 1" — npm blamed for never having
+    // run. This assertion is evaluated on the Windows CI job too, which is the
+    // only place the regression can be seen.
+    // `registry: null` for the bare form: an override would add --registry and
+    // say nothing about the command, which is what this test is about.
+    const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: null });
+    assert.equal(run.installs[0]?.command, process.platform === "win32" ? "npm.cmd" : "npm");
+    assert.deepEqual(run.installs[0]?.args, ["install", "-g", "pi-outpost@latest"], "the argv vector is untouched");
+    assert.ok(run.said(/running: npm(\.cmd)? install -g/), `announced: ${run.lines.join(" | ")}`);
   });
 
   test("the installed version is never taken from the registry answer", async () => {
@@ -525,7 +565,7 @@ describe("update, by channel", () => {
     // And what was printed is still what was run.
     assert.equal(
       run.lines.find((line) => line.startsWith("[pi] running:")),
-      "[pi] running: npm install -g --registry https://nexus.internal/npm pi-outpost@latest",
+      `[pi] running: ${npmExecutable()} install -g --registry https://nexus.internal/npm pi-outpost@latest`,
     );
   });
 
