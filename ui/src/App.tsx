@@ -655,6 +655,27 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
                 );
               })}
 
+              {/*
+                The prompt this client just sent, until the server echoes it back.
+                Dimmed and not editable: it has no persisted entry to rewind to,
+                and it is a claim about what was sent, not yet a record of it.
+              */}
+              {state.pendingPrompt && (
+                <div className="flex flex-col gap-3 opacity-60" data-pending-prompt>
+                  <UserMessage
+                    item={{ kind: "user", ...state.pendingPrompt }}
+                    canEdit={false}
+                    onEdit={() => {}}
+                  />
+                  <div className="flex justify-end px-4">
+                    <div className="flex items-center gap-2 py-1">
+                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-[3px] border-zinc-300 border-t-blue-500 dark:border-zinc-600 dark:border-t-blue-400 motion-reduce:animate-pulse" />
+                      <span className="text-xs text-zinc-400 dark:text-zinc-500">sending…</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {(state.queue.steering.length > 0 || state.queue.followUp.length > 0) && (
                 <div className="rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700">
                   {state.queue.steering.map((text, i) => (

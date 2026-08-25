@@ -219,6 +219,71 @@ describe("hello message handling", () => {
   });
 });
 
+describe("the prompt bubble, before the server has echoed it", () => {
+  it("appears as soon as it is sent", async () => {
+    // The server broadcasts `user` only once the runtime accepts the prompt —
+    // after session creation, runtime start-up, and the wait for a loaded
+    // provider to take the request. Until this, those seconds showed nothing:
+    // the composer emptied and the transcript did not move.
+    const result = await connected();
+    act(() => result.current.prompt("what does this repo do?"));
+    expect(result.current.state.pendingPrompt).toEqual({ text: "what does this repo do?" });
+    // It is not in `items`: `user_entries` pairs bubbles to persisted entry ids
+    // counting from the end, and an unsent one would take its neighbour's id.
+    expect(result.current.state.items).toEqual([]);
+    expect(JSON.parse(mockWs!.sent[mockWs!.sent.length - 1])).toEqual({
+      type: "prompt",
+      text: "what does this repo do?",
+    });
+  });
+
+  it("gives way to the real bubble, without doubling it", async () => {
+    const result = await connected();
+    act(() => result.current.prompt("hello"));
+    act(() => mockWs!.receive({ type: "user", text: "hello" }));
+    expect(result.current.state.pendingPrompt).toBeNull();
+    expect(result.current.state.items).toEqual([{ kind: "user", text: "hello" }]);
+  });
+
+  it("carries its attachments while it waits", async () => {
+    const result = await connected();
+    const images = [{ dataUrl: "data:image/png;base64,AAA", name: "shot.png" }];
+    act(() => result.current.prompt("look", images as never));
+    expect(result.current.state.pendingPrompt).toEqual({ text: "look", images });
+  });
+
+  it("disappears when the server refuses the prompt", async () => {
+    // A refusal is an `error` and never a `user`. Left behind, the placeholder
+    // would stand there as a message that was never sent.
+    const result = await connected();
+    act(() => result.current.prompt("during a session switch"));
+    act(() => mockWs!.receive({ type: "error", message: "Session change already in progress" }));
+    expect(result.current.state.pendingPrompt).toBeNull();
+    expect(result.current.state.items).toEqual([]);
+  });
+
+  it("does not survive a snapshot that says what the conversation contains", async () => {
+    const result = await connected();
+    act(() => result.current.prompt("sent just before the switch"));
+    act(() =>
+      mockWs!.receive({
+        type: "session_replaced",
+        sessionId: "sess_2",
+        branding: {},
+        model: "",
+        thinkingLevel: "off",
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        contextUsage: null,
+        gitAvailable: false,
+      }),
+    );
+    expect(result.current.state.pendingPrompt).toBeNull();
+  });
+});
+
 describe("Work Plan synchronization", () => {
   it("applies live changes and replaces the plan with the selected session snapshot", async () => {
     const result = await connected();
