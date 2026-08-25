@@ -45,7 +45,21 @@ test("an @-mentioned path reaches the model absolute, and the user still sees it
     JSON.stringify({
       commandLog,
       commands_: {
-        prompt: { after: [{ type: "message_end", message: { role: "user", content: absolutized } }] },
+        prompt: {
+          // What the child's own history holds once the turn is over. A real Pi
+          // persists the prompt it was given; the server replaces its in-memory
+          // messages with this on every completed turn, so a fixture that answers
+          // nothing makes a reconnect replay nothing.
+          replacement: { messages: [{ role: "user", content: absolutized, timestamp: 1 }] },
+          after: [
+            { type: "message_end", message: { role: "user", content: absolutized } },
+            // The turn has to *end*, not merely be accepted. The server persists
+            // the history and announces it then; without this the reconnect below
+            // raced the write and read an empty session — rarely on macOS, often
+            // enough on Windows CI to fail one run in two.
+            { type: "agent_settled" },
+          ],
+        },
       },
     }),
   );
@@ -78,6 +92,10 @@ test("an @-mentioned path reaches the model absolute, and the user still sees it
     // whatever reached runtime.prompt(), the absolute form. The relative
     // mention must survive that round trip too, or "transparent" stops being
     // true the moment the tab reloads.
+    // `user_entries` is broadcast once the turn is persisted — the server saying
+    // the history now holds what a reconnect would replay.
+    await client.waitFor("user_entries");
+
     const reconnected = connect(server.wsUrl());
     try {
       const hello = await reconnected.waitFor("hello");
