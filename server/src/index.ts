@@ -106,6 +106,7 @@ import { copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile } from "./w
 import { composeAppendSystemPrompt } from "./systemPrompt.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { Workspace } from "./workspace.ts";
+import { WorkspaceRegistry } from "./workspaceRegistry.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
 import {
   firstExchange,
@@ -319,7 +320,7 @@ const workspace = await Workspace.create({
   },
   watchFiles: config.files.watch,
   unconfinedTools: [structuredExchangeTool, workPlanTool],
-  onDirectoryChanged: (relPath) => broadcast({ type: "directory_changed", path: relPath }),
+  onDirectoryChanged: (relPath) => broadcast(workspace, { type: "directory_changed", path: relPath }),
   createRuntime: () => {
     throw new Error("the runtime is built in index.ts and attached; Workspace.open() is not used here yet");
   },
@@ -934,6 +935,14 @@ const builtRuntime: AgentRuntime = await (async () => {
 // handler from driving the wrong project once the server holds more than one.
 workspace.attachRuntime(builtRuntime);
 
+/**
+ * The open projects. One today — the registry is what the second one arrives into,
+ * and what makes "already open" a lookup rather than a duplicate.
+ */
+const workspaces = new WorkspaceRegistry();
+// Nothing to race with at boot: this is the first, so it is its own winner.
+workspaces.add(workspace);
+
 workspace.workPlan = await loadWorkPlan(workspace.agent.snapshot().sessionFile);
 workspace.workPlanSessionFile = workspace.agent.snapshot().sessionFile;
 
@@ -959,8 +968,8 @@ function queueWorkPlanSessionSync(): Promise<void> {
     if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
     workspace.workPlan = plan;
     workspace.workPlanSessionFile = sessionFile;
-    broadcast({ type: "session_replaced", ...snapshot() });
-    if (inherited) broadcast({ type: "work_plan_changed", workPlan: plan });
+    broadcast(workspace, { type: "session_replaced", ...snapshot() });
+    if (inherited) broadcast(workspace, { type: "work_plan_changed", workPlan: plan });
     console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
   });
   workspace.workPlanSync.catch(reportError);
@@ -979,7 +988,7 @@ function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
     if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
     workspace.workPlan = plan;
     workspace.workPlanSessionFile = sessionFile;
-    if (changed) broadcast({ type: "work_plan_changed", workPlan: plan });
+    if (changed) broadcast(workspace, { type: "work_plan_changed", workPlan: plan });
   });
   workspace.workPlanSync.catch(reportError);
 }
@@ -1089,20 +1098,60 @@ function snapshot(): SessionSnapshot {
 
 // --- WebSocket broadcast -------------------------------------------------------
 
-const clients = new Set<WebSocket>();
+/**
+ * Every connected client, and the workspace it is bound to.
+ *
+ * A set before this: one workspace meant one audience, so "connected" and
+ * "interested in this project" were the same fact. They stop being the same fact
+ * as soon as the server holds a second project, and a message that reaches a
+ * client bound elsewhere is the failure this map exists to make unstatable.
+ */
+const clients = new Map<WebSocket, Workspace>();
 
 const WS_LOG_PATH = process.env.WS_LOG_PATH ? path.resolve(process.env.WS_LOG_PATH) : undefined;
 
-function broadcast(message: ServerMessage): void {
+function sendToSockets(sockets: Iterable<WebSocket>, message: ServerMessage): void {
   const data = JSON.stringify(message);
   // Optional file logging for debugging WebSocket payloads
   if (WS_LOG_PATH) {
     // Best-effort write; don't block the event loop on failures
     fs.appendFile(WS_LOG_PATH, data + "\n").catch(() => {});
   }
-  for (const socket of clients) {
+  for (const socket of sockets) {
     if (socket.readyState === socket.OPEN) socket.send(data);
   }
+}
+
+/**
+ * Tell the clients watching THIS workspace. The default shape, and the one that
+ * takes its audience as an argument: a message carrying one project's content has
+ * no business reaching a client looking at another.
+ */
+function broadcast(workspace: Workspace, message: ServerMessage): void {
+  const sockets: WebSocket[] = [];
+  for (const [socket, bound] of clients) if (bound === workspace) sockets.push(socket);
+  sendToSockets(sockets, message);
+}
+
+/**
+ * Tell every client on the server, whatever it is bound to.
+ *
+ * Deliberately the longer name. A server-wide send is the exception — it is for
+ * facts about the server rather than about a project — and naming it plainly is
+ * what makes a wrong choice visible at the call site instead of in a bug report.
+ *
+ * No call site yet, and that is the finding rather than an oversight: every message
+ * broadcast today carries one project's content. The one that looked server-wide,
+ * `credentials_changed`, mixes a server-wide fact (which providers are configured)
+ * with a project-scoped one (`modelName()`, this session's model) — sending it to
+ * every client would tell one project's viewer that another project changed model.
+ * Splitting that payload is a protocol change, not a routing choice.
+ *
+ * What this is waiting for is workspace activity and attention: the spec requires
+ * those to reach clients bound elsewhere, which is exactly a fact about the server.
+ */
+function broadcastServerWide(message: ServerMessage): void {
+  sendToSockets(clients.keys(), message);
 }
 
 function send(socket: WebSocket, message: ServerMessage): void {
@@ -1153,7 +1202,7 @@ async function announceFileChange(args: unknown): Promise<void> {
     }
     const relPath = path.relative(workspace.browserRoot, resolved).split(path.sep).join("/");
     console.log("[announceFileChange] broadcasting file_changed path=", relPath);
-    broadcast({ type: "file_changed", path: relPath });
+    broadcast(workspace, { type: "file_changed", path: relPath });
   } catch (e) {
     console.log("[announceFileChange] error:", e);
     // Resolution failure (e.g. race with the tool call) — nothing to invalidate
@@ -1171,29 +1220,29 @@ async function announceFileChange(args: unknown): Promise<void> {
 function onRuntimeEvent(event: RuntimeEvent): void {
   switch (event.type) {
     case "agent_start":
-      broadcast({ type: "agent_start" });
+      broadcast(workspace, { type: "agent_start" });
       break;
     case "agent_end": {
-      broadcast({ type: "agent_end" });
+      broadcast(workspace, { type: "agent_end" });
       const usage = contextUsage();
-      if (usage) broadcast({ type: "context_usage", usage });
+      if (usage) broadcast(workspace, { type: "context_usage", usage });
       // The turn is persisted now: hand the client the entries so the bubbles it
       // echoed optimistically become editable (edit_prompt targets an entry id).
-      broadcast({ type: "user_entries", entries: branchUserEntries() });
-      broadcast({ type: "tree", roots: buildTree() });
+      broadcast(workspace, { type: "user_entries", entries: branchUserEntries() });
+      broadcast(workspace, { type: "tree", roots: buildTree() });
       // Off the prompt path on purpose: a slow title must never delay a reply
       void maybeNameSession();
       break;
     }
     case "assistant_start":
-      broadcast({ type: "assistant_start" });
+      broadcast(workspace, { type: "assistant_start" });
       break;
     case "block_delta":
-      broadcast({ type: "block_delta", block: event.block, contentIndex: event.contentIndex, delta: event.delta });
+      broadcast(workspace, { type: "block_delta", block: event.block, contentIndex: event.contentIndex, delta: event.delta });
       break;
     case "assistant_end": {
       // Full sync of the finished message (covers retries/partial rebuilds)
-      broadcast({ type: "assistant_end", item: assistantToItem(event.message as never) });
+      broadcast(workspace, { type: "assistant_end", item: assistantToItem(event.message as never) });
       // A turn that died of stack exhaustion arrives here as a message and no
       // stack: every provider's catch keeps `error.message` and drops the Error.
       // Record the input instead, while the branch that produced it is still
@@ -1204,7 +1253,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
           source: "assistant",
           message: failure,
           assistantMessage: event.message,
-          entries: runtime.contextEntries(),
+          entries: workspace.agent.contextEntries(),
           contextUsage: contextUsage(),
         });
       }
@@ -1215,11 +1264,11 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       break;
     }
     case "custom_message":
-      broadcast({ type: "custom_message", item: customMessageToItem(event.message as never) });
+      broadcast(workspace, { type: "custom_message", item: customMessageToItem(event.message as never) });
       break;
     case "tool_start": {
       const callHtml = renderToolCallHtml(event.toolCallId, event.toolName, event.args);
-      broadcast({
+      broadcast(workspace, {
         type: "tool_start",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
@@ -1233,7 +1282,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
     }
     case "tool_update": {
       const text = contentText(event.content as never);
-      if (text) broadcast({ type: "tool_update", toolCallId: event.toolCallId, text: truncate(text) });
+      if (text) broadcast(workspace, { type: "tool_update", toolCallId: event.toolCallId, text: truncate(text) });
       break;
     }
     case "tool_end": {
@@ -1247,7 +1296,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
         event.details,
         event.isError,
       );
-      broadcast({
+      broadcast(workspace, {
         type: "tool_end",
         toolCallId: event.toolCallId,
         isError: event.isError,
@@ -1283,30 +1332,30 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       break;
     }
     case "queue":
-      broadcast({ type: "queue", steering: event.steering, followUp: event.followUp });
+      broadcast(workspace, { type: "queue", steering: event.steering, followUp: event.followUp });
       break;
     case "thinking_changed":
-      broadcast({ type: "thinking_changed", level: event.level });
+      broadcast(workspace, { type: "thinking_changed", level: event.level });
       break;
     case "compaction_start":
-      broadcast({ type: "compaction_start" });
+      broadcast(workspace, { type: "compaction_start" });
       noteCompaction("start");
       break;
     case "compaction_end": {
-      broadcast({ type: "compaction_end", ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}) });
+      broadcast(workspace, { type: "compaction_end", ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}) });
       // Compaction summarizes the branch with a model call of its own, so it
       // fails the same ways a turn does — and reaches the same red list.
       if (event.errorMessage && isStackExhaustion(event.errorMessage)) {
         recordTurnFailure(AGENT_DIR, {
           source: "compaction",
           message: event.errorMessage,
-          entries: runtime.contextEntries(),
+          entries: workspace.agent.contextEntries(),
           contextUsage: contextUsage(),
         });
       }
       noteCompaction("end", event.errorMessage);
       const usage = contextUsage();
-      if (usage) broadcast({ type: "context_usage", usage });
+      if (usage) broadcast(workspace, { type: "context_usage", usage });
       break;
     }
     case "session_replaced":
@@ -1316,17 +1365,17 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       void queueWorkPlanSessionSync();
       break;
     case "extension_ui_request":
-      broadcast(event.request);
+      broadcast(workspace, event.request);
       break;
     case "error":
       // Same treatment as an assistant turn's own failure: a provider reached
       // through a proxy answers with an HTML page, and the reader gets markup.
-      broadcast({ type: "error", message: describeProviderError(event.message) });
+      broadcast(workspace, { type: "error", message: describeProviderError(event.message) });
       if (isStackExhaustion(event.message)) {
         recordTurnFailure(AGENT_DIR, {
           source: "runtime",
           message: event.message,
-          entries: runtime.contextEntries(),
+          entries: workspace.agent.contextEntries(),
           contextUsage: contextUsage(),
         });
       }
@@ -1335,7 +1384,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       // Fail closed: /health already reports unready, and this is the one visible
       // notice. No restart, no replay — a prompt or tool may have had side effects.
       console.error(`[pi] agent runtime failed: ${event.message}`);
-      broadcast({ type: "error", message: `Agent runtime failed: ${event.message}` });
+      broadcast(workspace, { type: "error", message: `Agent runtime failed: ${event.message}` });
       // Fail-closed means nothing runs after this, so the census is written
       // synchronously or not at all.
       if (isStackExhaustion(event.message)) {
@@ -1633,7 +1682,7 @@ async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDec
  */
 async function adoptUsableModel(socket: WebSocket): Promise<void> {
   const announce = () =>
-    broadcast({ type: "credentials_changed", models: availableModels(), model: modelName(), credentials: credentialStatus() });
+    broadcast(workspace, { type: "credentials_changed", models: availableModels(), model: modelName(), credentials: credentialStatus() });
 
   const choices = availableModels();
   if (choices.length === 0) {
@@ -1708,7 +1757,7 @@ async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
     // never for what the user sees — see historyToItems for the reload side of
     // the same rule.
     onAccepted: (accepted) => {
-      if (accepted) broadcast({ type: "user", text, ...(images?.length ? { images } : {}) });
+      if (accepted) broadcast(workspace, { type: "user", text, ...(images?.length ? { images } : {}) });
     },
   });
   // The entries and tree are announced when the turn settles, not here: an RPC
@@ -1750,7 +1799,7 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
       send(socket, { type: "error", message: "Edit cancelled — the conversation was not rewound" });
       return;
     }
-    broadcast({ type: "session_replaced", ...snapshot() });
+    broadcast(workspace, { type: "session_replaced", ...snapshot() });
   } finally {
     replacingSession = false;
   }
@@ -1831,7 +1880,7 @@ async function listSessions(socket: WebSocket): Promise<void> {
 
 /** A name change is visible to everyone: all clients watch the same agent. */
 async function broadcastSessions(): Promise<void> {
-  broadcast({ type: "sessions", sessions: await sessionList() });
+  broadcast(workspace, { type: "sessions", sessions: await sessionList() });
 }
 
 /**
@@ -1946,7 +1995,7 @@ function reportError(error: unknown): void {
   // nested in `cause` — say what broke and how to fix it, rather than leaving the
   // user to guess that their employer's proxy is in the way.
   const message = tlsHint(error) ?? (error instanceof Error ? error.message : String(error));
-  broadcast({ type: "error", message });
+  broadcast(workspace, { type: "error", message });
 }
 
 // --- Fork / tree navigation -------------------------------------------------------
@@ -2072,9 +2121,9 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
   try {
     const { cancelled, editorText } = await navigate.call(workspace.agent, entryId);
     if (cancelled) return;
-    broadcast({ type: "session_replaced", ...snapshot() });
+    broadcast(workspace, { type: "session_replaced", ...snapshot() });
     if (editorText) send(socket, { type: "editor_prefill", text: editorText });
-    broadcast({ type: "tree", roots: buildTree() });
+    broadcast(workspace, { type: "tree", roots: buildTree() });
   } finally {
     replacingSession = false;
   }
@@ -2113,7 +2162,7 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
     if (ownsInheritance) workspace.workPlanInheritanceSource = undefined;
   }
   if (selectedText) send(socket, { type: "editor_prefill", text: selectedText });
-  broadcast({ type: "tree", roots: buildTree() });
+  broadcast(workspace, { type: "tree", roots: buildTree() });
 }
 
 /** File-browser sidebar: list a directory, confined to workspace.browserRoot. */
@@ -2186,7 +2235,7 @@ async function handleWriteFile(
   try {
     const { size, mtimeMs } = await writeFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, content, expectedMtimeMs, force);
     send(socket, { type: "file_written", requestId, path: filePath, size, mtimeMs });
-    broadcast({ type: "file_changed", path: filePath });
+    broadcast(workspace, { type: "file_changed", path: filePath });
   } catch (error) {
     if (error instanceof FileBrowserError) {
       send(socket, { type: "file_browser_error", requestId, path: filePath, message: error.message, reason: error.reason });
@@ -2204,7 +2253,7 @@ async function handleCreateFile(socket: WebSocket, filePath: string, requestId: 
   try {
     const { size, mtimeMs } = await createFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath);
     send(socket, { type: "file_written", requestId, path: filePath, size, mtimeMs });
-    broadcast({ type: "file_changed", path: filePath });
+    broadcast(workspace, { type: "file_changed", path: filePath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, filePath, error);
   }
@@ -2219,7 +2268,7 @@ async function handleCreateDirectory(socket: WebSocket, dirPath: string, request
     await createDirectoryFromBrowser(workspace.browserRoot, workspace.writableRoot, dirPath);
     const entries = await listDirectory(workspace.browserRoot, dirPath);
     send(socket, { type: "directory_listing", requestId, path: dirPath, entries });
-    broadcast({ type: "file_changed", path: dirPath });
+    broadcast(workspace, { type: "file_changed", path: dirPath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, dirPath, error);
   }
@@ -2238,8 +2287,8 @@ async function handleRenameFile(socket: WebSocket, filePath: string, name: strin
   try {
     const renamedPath = await renameFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, name);
     send(socket, { type: "file_operation_result", requestId, operation: "rename_file", path: renamedPath, previousPath: filePath });
-    broadcast({ type: "file_changed", path: filePath });
-    broadcast({ type: "file_changed", path: renamedPath });
+    broadcast(workspace, { type: "file_changed", path: filePath });
+    broadcast(workspace, { type: "file_changed", path: renamedPath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, filePath, error);
   }
@@ -2249,7 +2298,7 @@ async function handleDeleteFile(socket: WebSocket, filePath: string, requestId: 
   try {
     await deleteFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath);
     send(socket, { type: "file_operation_result", requestId, operation: "delete_file", path: filePath });
-    broadcast({ type: "file_changed", path: filePath });
+    broadcast(workspace, { type: "file_changed", path: filePath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, filePath, error);
   }
@@ -2259,8 +2308,8 @@ async function handleMoveFile(socket: WebSocket, filePath: string, destinationDi
   try {
     const movedPath = await moveFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, destinationDirectory);
     send(socket, { type: "file_operation_result", requestId, operation: "move_file", path: movedPath, previousPath: filePath });
-    broadcast({ type: "file_changed", path: filePath });
-    broadcast({ type: "file_changed", path: movedPath });
+    broadcast(workspace, { type: "file_changed", path: filePath });
+    broadcast(workspace, { type: "file_changed", path: movedPath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, filePath, error);
   }
@@ -2282,7 +2331,7 @@ async function handleUploadFile(
   try {
     const writtenPath = await uploadFileFromBrowser(workspace.browserRoot, workspace.writableRoot, destinationDirectory, name, contentBase64);
     send(socket, { type: "file_uploaded", requestId, path: writtenPath });
-    broadcast({ type: "file_changed", path: writtenPath });
+    broadcast(workspace, { type: "file_changed", path: writtenPath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, requestedPath, error);
   }
@@ -2292,7 +2341,7 @@ async function handleCopyFile(socket: WebSocket, filePath: string, destinationDi
   try {
     const copiedPath = await copyFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, destinationDirectory);
     send(socket, { type: "file_operation_result", requestId, operation: "copy_file", path: copiedPath });
-    broadcast({ type: "file_changed", path: copiedPath });
+    broadcast(workspace, { type: "file_changed", path: copiedPath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, filePath, error);
   }
@@ -2493,7 +2542,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       const { provider, id } = message;
       workspace.agent
         .setModel(provider, id)
-        .then((model) => broadcast({ type: "model_changed", model: modelName(), reasoning: model.reasoning ?? false }))
+        .then((model) => broadcast(workspace, { type: "model_changed", model: modelName(), reasoning: model.reasoning ?? false }))
         .catch((error) => {
           if (!refuseUnsupported(socket, error)) {
             send(socket, { type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -2508,7 +2557,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         .setThinkingLevel(level)
         // The runtime is the authority on what it settled at — a model without the
         // requested level lands elsewhere, and the UI must show what it landed on.
-        .then(() => broadcast({ type: "thinking_changed", level: workspace.agent.snapshot().thinkingLevel }))
+        .then(() => broadcast(workspace, { type: "thinking_changed", level: workspace.agent.snapshot().thinkingLevel }))
         .catch(reportError);
       break;
     }
@@ -2737,7 +2786,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
 // --- Wire up the real /ws and /health handlers, now that the runtime is ready ------
 
 handleWsConnection = (socket) => {
-  clients.add(socket);
+  clients.set(socket, workspace);
   send(socket, { type: "hello", ...snapshot() });
   socket.on("message", (data: Buffer) => handleClientMessage(socket, data.toString()));
   socket.on("close", () => {
@@ -2747,7 +2796,13 @@ handleWsConnection = (socket) => {
     // a dialog is up — so without this the child waits on a question no one can see,
     // with no watchdog left to end it, and the way out (a new session) is itself a
     // command to the blocked child.
-    if (clients.size === 0) workspace.agent.cancelPendingExtensionRequests();
+    // No clients ON THE SERVER, not on this workspace. Under multi-project a
+    // workspace nobody is watching is the normal state — an agent is meant to keep
+    // working there — so cancelling on "nobody is looking at this one" would
+    // discard the very requests the attention badge exists to surface. Only when
+    // the last client of the whole server leaves is there truly nobody who could
+    // ever answer, and then every workspace's pending requests go.
+    if (clients.size === 0) for (const open of workspaces.all()) open.agent.cancelPendingExtensionRequests();
   });
 };
 // A failed runtime reports unready: /health answers 503 and the operator's probe

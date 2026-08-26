@@ -8,11 +8,11 @@
 
 ## 2. Route by workspace
 
-- [ ] 2.1 Replace `clients: Set<WebSocket>` (l.1094) with a map from socket to workspace
-- [ ] 2.2 Split `broadcast()` (l.1098) into a workspace-scoped form taking the workspace explicitly and a server-wide form; make the workspace-scoped one the default shape so a global send is visible at the call site
-- [ ] 2.3 Walk all 21 `broadcast()` call sites and choose deliberately for each; record the few that are genuinely server-wide
-- [ ] 2.4 Move `runtime.cancelPendingExtensionRequests()` (l.2718) from "last client of the server disconnected" to "no clients on the server at all", so a workspace nobody is viewing keeps its pending requests
-- [ ] 2.5 Add a `WorkspaceRegistry` holding the open workspaces, resolving one by its root path
+- [x] 2.1 Replace `clients: Set<WebSocket>` (l.1094) with a map from socket to workspace
+- [x] 2.2 Split `broadcast()` (l.1098) into a workspace-scoped form taking the workspace explicitly and a server-wide form; make the workspace-scoped one the default shape so a global send is visible at the call site
+- [x] 2.3 Walk all 21 `broadcast()` call sites and choose deliberately for each; record the few that are genuinely server-wide
+- [x] 2.4 Move `runtime.cancelPendingExtensionRequests()` (l.2718) from "last client of the server disconnected" to "no clients on the server at all", so a workspace nobody is viewing keeps its pending requests
+- [x] 2.5 Add a `WorkspaceRegistry` holding the open workspaces, resolving one by its root path
 
 ## 3. Protocol and connection binding
 
