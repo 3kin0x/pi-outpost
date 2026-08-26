@@ -90,14 +90,12 @@ import {
   readFileForPreview,
   readFileRaw,
   renameFileFromBrowser,
-  resolveBrowserRoot,
   resolveConfined,
-  resolveWritableRoot,
   searchFiles,
   uploadFileFromBrowser,
   writeFileFromBrowser,
 } from "./fileBrowser.ts";
-import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus, probeGit } from "./git.ts";
+import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus } from "./git.ts";
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
@@ -107,8 +105,8 @@ import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
 import { copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile } from "./workPlanStore.ts";
 import { composeAppendSystemPrompt } from "./systemPrompt.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
-import { createDirectoryWatcher, type DirectoryWatcher } from "./fileWatcher.ts";
-import { createSandboxedTools, isWithin, realResolve } from "./sandbox.ts";
+import { Workspace } from "./workspace.ts";
+import { isWithin, realResolve } from "./sandbox.ts";
 import {
   firstExchange,
   generateSessionTitle,
@@ -297,39 +295,36 @@ if (cli.command === "login") {
 const structuredExchangeTool = createStructuredExchangeToolDefinition();
 const workPlanTool = createWorkPlanToolDefinition();
 
-let sandboxedTools = config.sandbox
-  ? [
-      ...(await createSandboxedTools(
-        config.sandbox,
-        config.pdf.maxBytes,
-        config.docx.maxBytes,
-        config.xlsx.maxBytes,
-        config.pptx.maxBytes,
-        config.structuredExchange.maxBytes,
-      )),
-      structuredExchangeTool,
-      workPlanTool,
-    ]
-  : undefined;
-let BROWSER_ROOT = await resolveBrowserRoot(config);
-let WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
-let GIT = await probeGit(BROWSER_ROOT);
-
 /**
- * Watches the directories the browser has listed, so the tree follows the disk
- * whoever changed it — this process, the agent through bash, or nothing here at
- * all. Rebuilt when the sandbox root moves: a watch is a handle on a path under
- * the *old* root, and the client drops its cached tree on a session replace for
- * the same reason.
+ * The project this server is serving, and everything rooted at it: the browser and
+ * writable roots, the git probe, the file watcher and the sandboxed toolset.
+ *
+ * One for now. The bindings these fields replaced were what made a server serve
+ * exactly one project — there was no second copy of any of them to hand a second
+ * one. The runtime is attached below, once it exists: the HTTP server deliberately
+ * starts before the agent, so a workspace whose resources are ready and whose
+ * session is not yet built is a real state.
+ *
+ * The watcher's changes go to `broadcast` — every client, because there is exactly
+ * one workspace to hear about. That is the call that becomes workspace-scoped when
+ * the server holds more than one.
  */
-function buildFileWatcher(): DirectoryWatcher | undefined {
-  if (!config.files.watch) return undefined;
-  return createDirectoryWatcher({
-    root: BROWSER_ROOT,
-    onChange: (relPath) => broadcast({ type: "directory_changed", path: relPath }),
-  });
-}
-let fileWatcher = buildFileWatcher();
+const workspace = await Workspace.create({
+  settings: { cwd: config.cwd, sandbox: config.sandbox },
+  limits: {
+    pdfMaxBytes: config.pdf.maxBytes,
+    docxMaxBytes: config.docx.maxBytes,
+    xlsxMaxBytes: config.xlsx.maxBytes,
+    pptxMaxBytes: config.pptx.maxBytes,
+    structuredExchangeMaxBytes: config.structuredExchange.maxBytes,
+  },
+  watchFiles: config.files.watch,
+  unconfinedTools: [structuredExchangeTool, workPlanTool],
+  onDirectoryChanged: (relPath) => broadcast({ type: "directory_changed", path: relPath }),
+  createRuntime: () => {
+    throw new Error("the runtime is built in index.ts and attached; Workspace.open() is not used here yet");
+  },
+});
 
 // --- HTTP server ---------------------------------------------------------------
 //
@@ -572,7 +567,7 @@ app.get("/files/raw", async (req, reply) => {
   if (!relPath) return reply.code(400).send({ error: "missing path" });
   try {
     // PDFs are measured against their own ceiling; everything else keeps 1 MB.
-    const bytes = await readFileRaw(BROWSER_ROOT, relPath, config.pdf.maxBytes);
+    const bytes = await readFileRaw(workspace.browserRoot, relPath, config.pdf.maxBytes);
     reply.header("X-Content-Type-Options", "nosniff");
     // Workspace content may be stale seconds later (agent regenerates a plot)
     reply.header("Cache-Control", "no-store");
@@ -823,12 +818,12 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       sessionManager,
       sessionStartEvent,
       // Sandbox replaces the built-in toolset with path-scoped equivalents
-      ...(sandboxedTools ? { noTools: "builtin" as const, customTools: sandboxedTools } : {}),
-      ...(!sandboxedTools && config.tools ? { tools: config.tools } : {}),
+      ...(workspace.sandboxedTools ? { noTools: "builtin" as const, customTools: workspace.sandboxedTools } : {}),
+      ...(!workspace.sandboxedTools && config.tools ? { tools: config.tools } : {}),
       // No sandbox: the built-in toolset stands, and pdf_extract joins it — it is
       // not one of pi's built-ins, so nothing else would supply it. It stays
       // confined to the workspace, which is the only root there is to name here.
-      ...(sandboxedTools
+      ...(workspace.sandboxedTools
         ? {}
         : {
             customTools: [
@@ -1051,7 +1046,7 @@ function snapshot(): SessionSnapshot {
       state.messages as never,
       state.isStreaming,
       branchUserEntries().map((entry) => entry.entryId),
-      BROWSER_ROOT,
+      workspace.browserRoot,
     ),
     models: availableModels(),
     commands: state.commands,
@@ -1059,8 +1054,8 @@ function snapshot(): SessionSnapshot {
     // A runtime replacement is synchronous but its sidecar read is not. Never
     // combine the new transcript/session id with the previous session's plan.
     workPlan: sameSessionFile(state.sessionFile, activeWorkPlanSessionFile) ? activeWorkPlan : null,
-    writableRoot: WRITABLE_ROOT,
-    gitAvailable: GIT !== null,
+    writableRoot: workspace.writableRoot,
+    gitAvailable: workspace.git !== null,
     credentials: credentialStatus(),
     extensionPaths: state.extensionPaths,
     // What is configured, not what got loaded — built-in skills reach the menu
@@ -1141,7 +1136,7 @@ const pendingFileMutations = new Map<string, unknown>();
 
 /**
  * Best-effort file-browser invalidation: if an edit/write tool touched a path inside
- * BROWSER_ROOT, tell clients so an expanded directory or open preview can refresh.
+ * the browser root, tell clients so an expanded directory or open preview can refresh.
  * Not a security boundary — resolution failures or out-of-root paths are just skipped.
  */
 async function announceFileChange(args: unknown): Promise<void> {
@@ -1149,12 +1144,12 @@ async function announceFileChange(args: unknown): Promise<void> {
   console.log("[announceFileChange] args type=", typeof args, "targetPath=", targetPath);
   if (typeof targetPath !== "string") return;
   try {
-    const resolved = await realResolve(path.resolve(BROWSER_ROOT, targetPath));
-    if (!isWithin(BROWSER_ROOT, resolved)) {
-      console.log("[announceFileChange] not within BROWSER_ROOT, skipping");
+    const resolved = await realResolve(path.resolve(workspace.browserRoot, targetPath));
+    if (!isWithin(workspace.browserRoot, resolved)) {
+      console.log("[announceFileChange] not within the browser root, skipping");
       return;
     }
-    const relPath = path.relative(BROWSER_ROOT, resolved).split(path.sep).join("/");
+    const relPath = path.relative(workspace.browserRoot, resolved).split(path.sep).join("/");
     console.log("[announceFileChange] broadcasting file_changed path=", relPath);
     broadcast({ type: "file_changed", path: relPath });
   } catch (e) {
@@ -1567,26 +1562,10 @@ async function handleUpdateConfig(
         ...config.extensionScripts,
       ];
     }
-    BROWSER_ROOT = await resolveBrowserRoot(config);
-    WRITABLE_ROOT = await resolveWritableRoot(config, BROWSER_ROOT);
-    GIT = await probeGit(BROWSER_ROOT);
-    // Every watched path was relative to the root that just moved.
-    fileWatcher?.close();
-    fileWatcher = buildFileWatcher();
-    sandboxedTools = config.sandbox
-      ? [
-          ...(await createSandboxedTools(
-            config.sandbox,
-            config.pdf.maxBytes,
-            config.docx.maxBytes,
-            config.xlsx.maxBytes,
-            config.pptx.maxBytes,
-            config.structuredExchange.maxBytes,
-          )),
-          structuredExchangeTool,
-          workPlanTool,
-        ]
-      : undefined;
+    // Roots, git, watcher and toolset in one call: every watched path was relative
+    // to the root that just moved, and the workspace rebuilds them together or not
+    // at all — a half-applied boundary is the failure this used to risk.
+    await workspace.rebuildResources({ cwd: config.cwd, sandbox: config.sandbox });
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
     await rebuildTools.call(runtime);
@@ -1709,7 +1688,7 @@ function validImages(images: unknown): WireImage[] | undefined {
 async function absolutizeMentions(text: string): Promise<string> {
   return rewriteMentionedPaths(text, async (relPath) => {
     try {
-      const absolute = await resolveConfined(BROWSER_ROOT, relPath);
+      const absolute = await resolveConfined(workspace.browserRoot, relPath);
       await fs.stat(absolute);
       return absolute;
     } catch {
@@ -2135,10 +2114,10 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
   broadcast({ type: "tree", roots: buildTree() });
 }
 
-/** File-browser sidebar: list a directory, confined to BROWSER_ROOT. */
+/** File-browser sidebar: list a directory, confined to workspace.browserRoot. */
 async function handleListDirectory(socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
   try {
-    const entries = await listDirectory(BROWSER_ROOT, dirPath);
+    const entries = await listDirectory(workspace.browserRoot, dirPath);
     // After a *successful* listing, so "watched" still means exactly "displayed
     // somewhere" — a directory the client was refused is one it is not showing, and
     // watching it would announce changes nobody can act on.
@@ -2150,7 +2129,7 @@ async function handleListDirectory(socket: WebSocket, dirPath: string, requestId
     // what made the watcher tests time out on CI while passing on every developer's
     // machine. Watching stays best-effort, so a failure to arm never turns a good
     // listing into an error.
-    await fileWatcher?.watch(dirPath).catch(() => {});
+    await workspace.fileWatcher?.watch(dirPath).catch(() => {});
     send(socket, { type: "directory_listing", requestId, path: dirPath, entries });
   } catch (error) {
     const message = error instanceof FileBrowserError ? error.message : `Unexpected error: ${(error as Error).message}`;
@@ -2173,10 +2152,10 @@ function documentIssuesFor(content: string): { rule: string; path: string; messa
   return verdict.issues.map((issue) => ({ rule: issue.rule, path: issue.path, message: issue.message }));
 }
 
-/** File-browser sidebar: read a file for preview, confined to BROWSER_ROOT. */
+/** File-browser sidebar: read a file for preview, confined to workspace.browserRoot. */
 async function handleReadFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
-    const { content, size, mtimeMs } = await readFileForPreview(BROWSER_ROOT, filePath, config.structuredExchange.maxBytes);
+    const { content, size, mtimeMs } = await readFileForPreview(workspace.browserRoot, filePath, config.structuredExchange.maxBytes);
     const documentIssues = documentIssuesFor(content);
     send(socket, {
       type: "file_content",
@@ -2193,7 +2172,7 @@ async function handleReadFile(socket: WebSocket, filePath: string, requestId: st
   }
 }
 
-/** File viewer's editor: save a buffer back, confined to the writable zone (WRITABLE_ROOT). */
+/** File viewer's editor: save a buffer back, confined to the writable zone. */
 async function handleWriteFile(
   socket: WebSocket,
   filePath: string,
@@ -2203,7 +2182,7 @@ async function handleWriteFile(
   requestId: string,
 ): Promise<void> {
   try {
-    const { size, mtimeMs } = await writeFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, content, expectedMtimeMs, force);
+    const { size, mtimeMs } = await writeFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, content, expectedMtimeMs, force);
     send(socket, { type: "file_written", requestId, path: filePath, size, mtimeMs });
     broadcast({ type: "file_changed", path: filePath });
   } catch (error) {
@@ -2221,7 +2200,7 @@ async function handleWriteFile(
  */
 async function handleCreateFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
-    const { size, mtimeMs } = await createFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath);
+    const { size, mtimeMs } = await createFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath);
     send(socket, { type: "file_written", requestId, path: filePath, size, mtimeMs });
     broadcast({ type: "file_changed", path: filePath });
   } catch (error) {
@@ -2235,8 +2214,8 @@ async function handleCreateFile(socket: WebSocket, filePath: string, requestId: 
  */
 async function handleCreateDirectory(socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
   try {
-    await createDirectoryFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, dirPath);
-    const entries = await listDirectory(BROWSER_ROOT, dirPath);
+    await createDirectoryFromBrowser(workspace.browserRoot, workspace.writableRoot, dirPath);
+    const entries = await listDirectory(workspace.browserRoot, dirPath);
     send(socket, { type: "directory_listing", requestId, path: dirPath, entries });
     broadcast({ type: "file_changed", path: dirPath });
   } catch (error) {
@@ -2246,7 +2225,7 @@ async function handleCreateDirectory(socket: WebSocket, dirPath: string, request
 
 async function handleOpenNative(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
-    await openFileNative(BROWSER_ROOT, filePath);
+    await openFileNative(workspace.browserRoot, filePath);
     send(socket, { type: "file_operation_result", requestId, operation: "open_native", path: filePath });
   } catch (error) {
     sendFileBrowserError(socket, requestId, filePath, error);
@@ -2255,7 +2234,7 @@ async function handleOpenNative(socket: WebSocket, filePath: string, requestId: 
 
 async function handleRenameFile(socket: WebSocket, filePath: string, name: string, requestId: string): Promise<void> {
   try {
-    const renamedPath = await renameFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, name);
+    const renamedPath = await renameFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, name);
     send(socket, { type: "file_operation_result", requestId, operation: "rename_file", path: renamedPath, previousPath: filePath });
     broadcast({ type: "file_changed", path: filePath });
     broadcast({ type: "file_changed", path: renamedPath });
@@ -2266,7 +2245,7 @@ async function handleRenameFile(socket: WebSocket, filePath: string, name: strin
 
 async function handleDeleteFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
-    await deleteFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath);
+    await deleteFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath);
     send(socket, { type: "file_operation_result", requestId, operation: "delete_file", path: filePath });
     broadcast({ type: "file_changed", path: filePath });
   } catch (error) {
@@ -2276,7 +2255,7 @@ async function handleDeleteFile(socket: WebSocket, filePath: string, requestId: 
 
 async function handleMoveFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
   try {
-    const movedPath = await moveFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, destinationDirectory);
+    const movedPath = await moveFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, destinationDirectory);
     send(socket, { type: "file_operation_result", requestId, operation: "move_file", path: movedPath, previousPath: filePath });
     broadcast({ type: "file_changed", path: filePath });
     broadcast({ type: "file_changed", path: movedPath });
@@ -2299,7 +2278,7 @@ async function handleUploadFile(
 ): Promise<void> {
   const requestedPath = destinationDirectory ? `${destinationDirectory}/${name}` : name;
   try {
-    const writtenPath = await uploadFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, destinationDirectory, name, contentBase64);
+    const writtenPath = await uploadFileFromBrowser(workspace.browserRoot, workspace.writableRoot, destinationDirectory, name, contentBase64);
     send(socket, { type: "file_uploaded", requestId, path: writtenPath });
     broadcast({ type: "file_changed", path: writtenPath });
   } catch (error) {
@@ -2309,7 +2288,7 @@ async function handleUploadFile(
 
 async function handleCopyFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
   try {
-    const copiedPath = await copyFileFromBrowser(BROWSER_ROOT, WRITABLE_ROOT, filePath, destinationDirectory);
+    const copiedPath = await copyFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, destinationDirectory);
     send(socket, { type: "file_operation_result", requestId, operation: "copy_file", path: copiedPath });
     broadcast({ type: "file_changed", path: copiedPath });
   } catch (error) {
@@ -2325,7 +2304,7 @@ function sendFileBrowserError(socket: WebSocket, requestId: string, targetPath: 
   }
 }
 
-// --- Git (read-only, confined to BROWSER_ROOT via `-- .` pathspec) --------------
+// --- Git (read-only, confined to workspace.browserRoot via `-- .` pathspec) --------------
 
 function gitErrorMessage(error: unknown): string {
   return error instanceof GitError || error instanceof FileBrowserError
@@ -2334,9 +2313,9 @@ function gitErrorMessage(error: unknown): string {
 }
 
 async function handleGitStatus(socket: WebSocket, requestId: string): Promise<void> {
-  if (GIT === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const { branch, ahead, behind, files } = await gitStatus(BROWSER_ROOT);
+    const { branch, ahead, behind, files } = await gitStatus(workspace.browserRoot);
     send(socket, { type: "git_status", requestId, branch, ahead, behind, files });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
@@ -2345,16 +2324,16 @@ async function handleGitStatus(socket: WebSocket, requestId: string): Promise<vo
 
 /** Worktree-vs-HEAD contents of one file; missing sides (untracked/deleted) are "". */
 async function handleGitDiff(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
-  if (GIT === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     let after = "";
     try {
-      after = (await readFileForPreview(BROWSER_ROOT, filePath)).content;
+      after = (await readFileForPreview(workspace.browserRoot, filePath)).content;
     } catch (error) {
       // A deleted file legitimately has no worktree side; confinement/size/binary still refuse
       if (!(error instanceof FileBrowserError) || error.reason !== "not-found") throw error;
     }
-    const before = await gitHeadContent(BROWSER_ROOT, GIT.toplevel, filePath);
+    const before = await gitHeadContent(workspace.browserRoot, workspace.git.toplevel, filePath);
     if (before.includes("\0")) throw new FileBrowserError("binary", "Binary file — diff not supported");
     if (Buffer.byteLength(before, "utf8") > 1_048_576) {
       throw new FileBrowserError("too-large", "HEAD version is larger than the 1 MB limit");
@@ -2366,9 +2345,9 @@ async function handleGitDiff(socket: WebSocket, filePath: string, requestId: str
 }
 
 async function handleGitLog(socket: WebSocket, limit: number, requestId: string): Promise<void> {
-  if (GIT === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    send(socket, { type: "git_log", requestId, entries: await gitLog(BROWSER_ROOT, limit) });
+    send(socket, { type: "git_log", requestId, entries: await gitLog(workspace.browserRoot, limit) });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }
@@ -2381,12 +2360,12 @@ function isGitRevision(value: unknown): value is GitRevision {
 
 /** Commits touching one file, for the history graph. */
 async function handleGitFileLog(socket: WebSocket, filePath: string, limit: number, requestId: string): Promise<void> {
-  if (GIT === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     // Confine before spawning: this path goes straight into a pathspec. Only
     // confinement applies — a deleted or oversized file still has a history.
-    await assertWithinRoot(BROWSER_ROOT, filePath);
-    const entries = await gitFileLog(BROWSER_ROOT, GIT.toplevel, filePath, limit);
+    await assertWithinRoot(workspace.browserRoot, filePath);
+    const entries = await gitFileLog(workspace.browserRoot, workspace.git.toplevel, filePath, limit);
     send(socket, { type: "git_file_log", requestId, path: filePath, entries });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
@@ -2402,7 +2381,7 @@ async function handleGitFileLog(socket: WebSocket, filePath: string, limit: numb
 async function readRevisionSide(revision: GitRevision, toplevel: string): Promise<string> {
   if (revision.rev === WORKTREE_REVISION) {
     try {
-      return (await readFileForPreview(BROWSER_ROOT, revision.path)).content;
+      return (await readFileForPreview(workspace.browserRoot, revision.path)).content;
     } catch (error) {
       // A file deleted since that commit legitimately has no worktree side
       if (error instanceof FileBrowserError && error.reason === "not-found") return "";
@@ -2410,8 +2389,8 @@ async function readRevisionSide(revision: GitRevision, toplevel: string): Promis
     }
   }
   // Confine before spawning: the path becomes part of a `<rev>:<path>` argument
-  await assertWithinRoot(BROWSER_ROOT, revision.path);
-  const content = await gitRevisionContent(BROWSER_ROOT, toplevel, revision.rev, revision.path);
+  await assertWithinRoot(workspace.browserRoot, revision.path);
+  const content = await gitRevisionContent(workspace.browserRoot, toplevel, revision.rev, revision.path);
   if (content.includes("\0")) throw new FileBrowserError("binary", "Binary file — diff not supported");
   if (Buffer.byteLength(content, "utf8") > MAX_PREVIEW_BYTES) {
     throw new FileBrowserError("too-large", `${revision.rev.slice(0, 7)} is larger than the 1 MB limit`);
@@ -2420,9 +2399,9 @@ async function readRevisionSide(revision: GitRevision, toplevel: string): Promis
 }
 
 async function handleGitFileDiff(socket: WebSocket, base: GitRevision, target: GitRevision, requestId: string): Promise<void> {
-  if (GIT === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const [beforeText, afterText] = await Promise.all([readRevisionSide(base, GIT.toplevel), readRevisionSide(target, GIT.toplevel)]);
+    const [beforeText, afterText] = await Promise.all([readRevisionSide(base, workspace.git.toplevel), readRevisionSide(target, workspace.git.toplevel)]);
     send(socket, { type: "git_file_diff", requestId, base, target, beforeText, afterText });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
@@ -2430,18 +2409,18 @@ async function handleGitFileDiff(socket: WebSocket, base: GitRevision, target: G
 }
 
 async function handleGitShow(socket: WebSocket, sha: string, requestId: string): Promise<void> {
-  if (GIT === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const { patch, truncated } = await gitShow(BROWSER_ROOT, sha);
+    const { patch, truncated } = await gitShow(workspace.browserRoot, sha);
     send(socket, { type: "git_show", requestId, sha, patch, truncated });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }
 }
 
-/** Composer's `@` mention autocomplete: recursive name search, confined to BROWSER_ROOT. */
+/** Composer's `@` mention autocomplete: recursive name search, confined to workspace.browserRoot. */
 async function handleSearchFiles(socket: WebSocket, query: string, requestId: string): Promise<void> {
-  const results = await searchFiles(BROWSER_ROOT, query);
+  const results = await searchFiles(workspace.browserRoot, query);
   send(socket, { type: "file_search_results", requestId, query, results });
 }
 
@@ -2790,7 +2769,7 @@ if (config.sandbox) {
   ].join(", ");
   console.log(`[pi] sandbox ${config.sandbox.root} · ${extras}`);
 }
-console.log(`[pi] file browser root ${BROWSER_ROOT}`);
+console.log(`[pi] file browser root ${workspace.browserRoot}`);
 // Worth a line: it changes where models come from, and its absence is what makes
 // credential changes hang for 20 s on a host that cannot reach the catalogs.
 if (config.offline) console.log("[pi] offline — model catalogs are not fetched");

@@ -79,7 +79,14 @@ export class Workspace {
    */
   readonly root: string;
 
-  runtime: AgentRuntime;
+  /**
+   * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
+   * server starts before the agent (branding must not wait behind model, extension
+   * and skill loading), and a workspace's session is built on first open rather
+   * than at startup — so "resources exist, runtime does not yet" is a real state,
+   * not a construction artefact.
+   */
+  runtime: AgentRuntime | undefined;
   settings: WorkspaceSettings;
 
   browserRoot: string;
@@ -97,7 +104,7 @@ export class Workspace {
 
   private constructor(
     root: string,
-    runtime: AgentRuntime,
+    runtime: AgentRuntime | undefined,
     resources: WorkspaceResources,
     options: WorkspaceOptions,
   ) {
@@ -116,15 +123,25 @@ export class Workspace {
    * Build every resource, then the runtime on top of them — the toolset has to
    * exist before the session that is given it.
    */
-  static async open(options: WorkspaceOptions): Promise<Workspace> {
+  static async create(options: WorkspaceOptions): Promise<Workspace> {
     // Identity is the PROJECT directory, never the browser root: a sandbox may be
     // rooted somewhere else entirely, and keying on that would make a workspace
     // answer to a path its sessions are not stored under — SessionManager is keyed
     // by cwd — and let two different projects collide on one sandbox subtree.
     const root = await fs.realpath(options.settings.cwd);
     const resources = await buildResources(options);
-    const runtime = await options.createRuntime(options.settings, resources.sandboxedTools);
-    return new Workspace(root, runtime, resources, options);
+    return new Workspace(root, undefined, resources, options);
+  }
+
+  /** Resources first, then the session built on top of them. */
+  static async open(options: WorkspaceOptions): Promise<Workspace> {
+    const workspace = await Workspace.create(options);
+    workspace.attachRuntime(await options.createRuntime(options.settings, workspace.sandboxedTools));
+    return workspace;
+  }
+
+  attachRuntime(runtime: AgentRuntime): void {
+    this.runtime = runtime;
   }
 
   /**
@@ -133,7 +150,7 @@ export class Workspace {
    * so "unused" can never be allowed to mean "unwatched".
    */
   isBusy(): boolean {
-    return this.runtime.snapshot().isStreaming;
+    return this.runtime?.snapshot().isStreaming ?? false;
   }
 
   /**
@@ -168,7 +185,8 @@ export class Workspace {
     this.stopped = true;
     this.fileWatcher?.close();
     this.fileWatcher = undefined;
-    await this.runtime.dispose();
+    await this.runtime?.dispose();
+    this.runtime = undefined;
   }
 }
 
