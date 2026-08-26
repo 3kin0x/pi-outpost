@@ -90,6 +90,14 @@ export class Workspace {
   /** Loaded from the runtime's session file by the caller; null until then. */
   workPlan: WorkPlan | null = null;
   workPlanSessionFile: string | undefined;
+  /**
+   * Serialises writes to THIS workspace's plan. Per-workspace rather than global:
+   * a shared chain would make two projects wait on each other's plan writes, which
+   * is a queue neither of them has any reason to be in.
+   */
+  workPlanSync: Promise<void> = Promise.resolve();
+  /** Session file a fork is inheriting its plan from, while that is in flight. */
+  workPlanInheritanceSource: string | undefined;
 
   /**
    * Undefined until the runtime is attached. Deliberately late-bound: the HTTP

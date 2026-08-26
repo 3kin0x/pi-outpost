@@ -934,10 +934,8 @@ const builtRuntime: AgentRuntime = await (async () => {
 // handler from driving the wrong project once the server holds more than one.
 workspace.attachRuntime(builtRuntime);
 
-let activeWorkPlan: WorkPlan | null = await loadWorkPlan(workspace.agent.snapshot().sessionFile);
-let activeWorkPlanSessionFile = workspace.agent.snapshot().sessionFile;
-let workPlanSessionSync: Promise<void> = Promise.resolve();
-let workPlanInheritanceSource: string | undefined;
+workspace.workPlan = await loadWorkPlan(workspace.agent.snapshot().sessionFile);
+workspace.workPlanSessionFile = workspace.agent.snapshot().sessionFile;
 
 /**
  * Session replacement events are synchronous, while their sidecar reads are not.
@@ -947,8 +945,8 @@ let workPlanInheritanceSource: string | undefined;
  */
 function queueWorkPlanSessionSync(): Promise<void> {
   const sessionFile = workspace.agent.snapshot().sessionFile;
-  workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
-    const inheritanceSource = workPlanInheritanceSource;
+  workspace.workPlanSync = workspace.workPlanSync.catch(() => {}).then(async () => {
+    const inheritanceSource = workspace.workPlanInheritanceSource;
     const inherited =
       inheritanceSource !== undefined && !sameSessionFile(inheritanceSource, sessionFile);
     let plan: WorkPlan | null = null;
@@ -959,18 +957,18 @@ function queueWorkPlanSessionSync(): Promise<void> {
       reportError(error);
     }
     if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
-    activeWorkPlan = plan;
-    activeWorkPlanSessionFile = sessionFile;
+    workspace.workPlan = plan;
+    workspace.workPlanSessionFile = sessionFile;
     broadcast({ type: "session_replaced", ...snapshot() });
     if (inherited) broadcast({ type: "work_plan_changed", workPlan: plan });
     console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
   });
-  workPlanSessionSync.catch(reportError);
-  return workPlanSessionSync;
+  workspace.workPlanSync.catch(reportError);
+  return workspace.workPlanSync;
 }
 
 function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
-  workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
+  workspace.workPlanSync = workspace.workPlanSync.catch(() => {}).then(async () => {
     let plan: WorkPlan | null;
     try {
       plan = await loadWorkPlan(sessionFile);
@@ -979,11 +977,11 @@ function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
       return;
     }
     if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
-    activeWorkPlan = plan;
-    activeWorkPlanSessionFile = sessionFile;
+    workspace.workPlan = plan;
+    workspace.workPlanSessionFile = sessionFile;
     if (changed) broadcast({ type: "work_plan_changed", workPlan: plan });
   });
-  workPlanSessionSync.catch(reportError);
+  workspace.workPlanSync.catch(reportError);
 }
 
 function modelName(): string {
@@ -1057,7 +1055,7 @@ function snapshot(): SessionSnapshot {
     contextUsage: state.contextUsage,
     // A runtime replacement is synchronous but its sidecar read is not. Never
     // combine the new transcript/session id with the previous session's plan.
-    workPlan: sameSessionFile(state.sessionFile, activeWorkPlanSessionFile) ? activeWorkPlan : null,
+    workPlan: sameSessionFile(state.sessionFile, workspace.workPlanSessionFile) ? workspace.workPlan : null,
     writableRoot: workspace.writableRoot,
     gitAvailable: workspace.git !== null,
     credentials: credentialStatus(),
@@ -1368,7 +1366,7 @@ async function replaceSession(socket: WebSocket, action: () => Promise<{ cancell
     // The runtime rebinds and emits `session_replaced` itself; this only has to
     // decide whether a replacement happened at all.
     const result = await action();
-    if (!result.cancelled) await workPlanSessionSync;
+    if (!result.cancelled) await workspace.workPlanSync;
   } catch (error) {
     reportError(error);
     // The old session may be disposed — land on a fresh one instead. A runtime that
@@ -1573,7 +1571,7 @@ async function handleUpdateConfig(
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
     await rebuildTools.call(workspace.agent);
-    await workPlanSessionSync;
+    await workspace.workPlanSync;
     // Only now: the settings are on disk and the session in front of the user was
     // built from them.
     send(socket, { type: "update_config_ack", ...snapshot() });
@@ -2099,20 +2097,20 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
       // `replaceSession` calls this action only after acquiring the global
       // replacement lock. A concurrent rejected fork must never clear the
       // inheritance marker owned by this invocation.
-      workPlanInheritanceSource = sourceSessionFile;
+      workspace.workPlanInheritanceSource = sourceSessionFile;
       ownsInheritance = true;
       try {
         const result = await workspace.agent.fork(entryId);
         selectedText = result.selectedText;
         return result;
       } catch (error) {
-        workPlanInheritanceSource = undefined;
+        workspace.workPlanInheritanceSource = undefined;
         ownsInheritance = false;
         throw error;
       }
     });
   } finally {
-    if (ownsInheritance) workPlanInheritanceSource = undefined;
+    if (ownsInheritance) workspace.workPlanInheritanceSource = undefined;
   }
   if (selectedText) send(socket, { type: "editor_prefill", text: selectedText });
   broadcast({ type: "tree", roots: buildTree() });

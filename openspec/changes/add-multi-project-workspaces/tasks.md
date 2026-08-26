@@ -2,9 +2,9 @@
 
 - [x] 1.1 Add a `Workspace` type in `server/src/` owning what `index.ts` holds at module level: agent runtime, sandbox settings, browser root, writable root, git state, file watcher, sandboxed toolset, session manager, work plan
 - [x] 1.2 Give it a lifecycle: `open()` builds those resources for a root directory, `stop()` releases them (watcher closed, session disposed), `isBusy()` reports whether a turn is running
-- [ ] 1.3 Move `AGENT_CWD` (l.263), `sandboxedTools` (l.299), `BROWSER_ROOT`/`WRITABLE_ROOT`/`GIT` (l.313-315), `fileWatcher` (l.331), `runtime` (l.888) and `activeWorkPlan` (l.937) into the workspace, leaving the server holding exactly one
-- [ ] 1.4 Re-scope every read of those bindings to go through the workspace the request belongs to
-- [ ] 1.5 Verify the existing server suite passes unchanged — this step is a no-op by construction and the suite is the proof
+- [x] 1.3 Move `AGENT_CWD` (l.263), `sandboxedTools` (l.299), `BROWSER_ROOT`/`WRITABLE_ROOT`/`GIT` (l.313-315), `fileWatcher` (l.331), `runtime` (l.888) and `activeWorkPlan` (l.937) into the workspace, leaving the server holding exactly one
+- [x] 1.4 Re-scope every read of those bindings to go through the workspace the request belongs to
+- [x] 1.5 Verify the existing server suite passes unchanged — this step is a no-op by construction and the suite is the proof
 
 ## 2. Route by workspace
 
