@@ -1,0 +1,48 @@
+{
+  "pages": [
+    { "id": "page-1", "name": "Le menu" },
+    { "id": "page-2", "name": "États & bascule" }
+  ],
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1200, "h": 720, "title": "Menu ouvert", "page": "page-1" },
+    { "file": "HeaderClosed.dc.html", "x": 1300, "y": 0, "w": 900, "h": 560, "title": "Bouton, menu fermé", "page": "page-1" },
+    { "file": "States.dc.html", "x": 0, "y": 0, "w": 980, "h": 600, "title": "Les cinq états", "page": "page-2" },
+    { "file": "Attention.dc.html", "x": 1100, "y": 0, "w": 900, "h": 440, "title": "Paliers d'attention", "page": "page-2" },
+    { "file": "Switch.dc.html", "x": 0, "y": 740, "w": 1240, "h": 470, "title": "Pendant la bascule", "page": "page-2" }
+  ],
+  "annotations": [
+    {
+      "id": "chosen-note",
+      "page": "page-1",
+      "x": 0,
+      "y": -160,
+      "w": 420,
+      "text": "Option retenue : le menu dans le header.\nPlus d'initiales — le nom complet porte l'identité, le chemin lève l'ambiguïté entre deux projets homonymes, le mot d'état (« travaille », « t'attend ») porte le sens et la pastille ne fait que le répéter.\nLes deux autres placements (rail, onglets) sont écartés."
+    },
+    {
+      "id": "closed-note",
+      "page": "page-1",
+      "x": 1300,
+      "y": -160,
+      "w": 420,
+      "text": "La contrepartie assumée du menu : fermé, il ne montre qu'un projet.\nD'où les points muets après le séparateur — un par autre projet ouvert, halo bleu pour celui qui travaille. Sans eux, un agent qui tourne en fond serait totalement invisible tant qu'il ne bloque pas, et c'est justement le scénario qui a lancé la fonctionnalité."
+    },
+    {
+      "id": "states-note",
+      "page": "page-2",
+      "x": 0,
+      "y": -130,
+      "w": 420,
+      "text": "La forme porte l'information autant que la couleur : trait discontinu pour arrêté, arc qui tourne pour démarrage, point plein pour au repos, halo pulsé pour travaille, glyphe pour l'attention. Lisible en niveaux de gris."
+    },
+    {
+      "id": "switch-note",
+      "page": "page-2",
+      "x": 1300,
+      "y": 740,
+      "w": 400,
+      "text": "Tranché : l'état de vue n'est PAS conservé. Fichier ouvert, scroll, panneau de diff — oubliés à la bascule. On revient sur la conversation, pas sur l'écran qu'on avait laissé.\nSeule exception, le brouillon tapé dans le composeur : gardé par projet, parce que perdre du texte n'est pas une remise à zéro de vue."
+    }
+  ],
+  "launch": { "view": "canvas", "page": "page-1" }
+}

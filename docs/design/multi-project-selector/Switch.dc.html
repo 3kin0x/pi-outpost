@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Inter", ui-sans-serif, system-ui, sans-serif; }
+    a { color: #1d4ed8; } a:hover { color: #1e40af; }
+    @keyframes dc-pulse { 0% { transform: scale(1); opacity: 0.45; } 70% { transform: scale(2.2); opacity: 0; } 100% { transform: scale(2.2); opacity: 0; } }
+    .dc-halo { animation: dc-pulse 1.8s ease-out infinite; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; gap: 16px; width: 1240px; height: 470px; padding: 28px; box-sizing: border-box; background: #ffffff; color: #18181b">
+
+  <div style="display: flex; flex-direction: column; gap: 4px">
+    <span style="font-size: 18px; font-weight: 600; letter-spacing: -0.02em">Ce que voit l'œil pendant une bascule</span>
+    <span style="font-size: 13px; line-height: 20px; color: #71717a">La chrome ne bouge pas. Seules deux zones changent, en fondu court — si tout se vide, la bascule ressemble à un rechargement.</span>
+  </div>
+
+  <div style="display: flex; align-items: stretch; gap: 14px; flex-grow: 1; min-height: 0">
+
+    <!-- FRAME 1 -->
+    <div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-width: 0">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #a1a1aa">t = 0 · pi-outpost</span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1; border: 1px solid #e4e4e7; border-radius: 6px; overflow: hidden">
+        <div style="display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-bottom: 1px solid #e4e4e7">
+          <span style="display: flex; align-items: center; gap: 5px; border-radius: 4px; border: 1px solid #a1a1aa; background: #f4f4f5; padding: 2px 6px; font-size: 10px; color: #3f3f46">
+            <span style="position: relative; display: flex; width: 6px; height: 6px">
+              <span class="dc-halo" style="position: absolute; width: 6px; height: 6px; border-radius: 9999px; background: #1d4ed8"></span>
+              <span style="position: relative; width: 6px; height: 6px; border-radius: 9999px; background: #1d4ed8"></span>
+            </span>
+            pi-outpost
+          </span>
+          <span style="font-size: 10px; color: #a1a1aa">◨ files</span>
+          <span style="font-size: 12px; font-weight: 600; color: #1d4ed8; margin-left: auto">π</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px; padding: 12px 10px; flex-grow: 1">
+          <span style="align-self: flex-end; width: 62%; height: 9px; border-radius: 3px; background: #f4f4f5"></span>
+          <span style="width: 86%; height: 9px; border-radius: 3px; background: #e4e4e7"></span>
+          <span style="width: 70%; height: 9px; border-radius: 3px; background: #e4e4e7"></span>
+        </div>
+        <div style="padding: 8px 10px; border-top: 1px solid #e4e4e7">
+          <span style="display: block; height: 20px; border-radius: 4px; border: 1px solid #d4d4d8"></span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; padding-top: 22px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
+    </div>
+
+    <!-- FRAME 2 -->
+    <div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-width: 0">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #d97706">t ≈ 120 ms · fondu</span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1; border: 1px solid #e4e4e7; border-radius: 6px; overflow: hidden">
+        <div style="display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-bottom: 1px solid #e4e4e7">
+          <span style="display: flex; align-items: center; gap: 5px; border-radius: 4px; border: 1px solid #a1a1aa; background: #f4f4f5; padding: 2px 6px; font-size: 10px; color: #3f3f46">
+            <span style="width: 6px; height: 6px; border-radius: 9999px; background: #a1a1aa"></span>
+            spec-gen
+          </span>
+          <span style="font-size: 10px; color: #a1a1aa">◨ files</span>
+          <span style="font-size: 12px; font-weight: 600; color: #1d4ed8; margin-left: auto">π</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px; padding: 12px 10px; flex-grow: 1; opacity: 0.35">
+          <span style="align-self: flex-end; width: 62%; height: 9px; border-radius: 3px; background: #f4f4f5"></span>
+          <span style="width: 86%; height: 9px; border-radius: 3px; background: #e4e4e7"></span>
+          <span style="width: 70%; height: 9px; border-radius: 3px; background: #e4e4e7"></span>
+        </div>
+        <div style="padding: 8px 10px; border-top: 1px solid #e4e4e7">
+          <span style="display: block; height: 20px; border-radius: 4px; border: 1px solid #d4d4d8"></span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; padding-top: 22px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
+    </div>
+
+    <!-- FRAME 3 -->
+    <div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-width: 0">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #a1a1aa">t ≈ 240 ms · spec-gen</span>
+      <div style="display: flex; flex-direction: column; flex-grow: 1; border: 1px solid #e4e4e7; border-radius: 6px; overflow: hidden">
+        <div style="display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-bottom: 1px solid #e4e4e7">
+          <span style="display: flex; align-items: center; gap: 5px; border-radius: 4px; border: 1px solid #a1a1aa; background: #f4f4f5; padding: 2px 6px; font-size: 10px; color: #3f3f46">
+            <span style="width: 6px; height: 6px; border-radius: 9999px; background: #a1a1aa"></span>
+            spec-gen
+            <span style="width: 1px; height: 9px; background: #d4d4d8"></span>
+            <span style="position: relative; display: flex; width: 5px; height: 5px">
+              <span class="dc-halo" style="position: absolute; width: 5px; height: 5px; border-radius: 9999px; background: #1d4ed8"></span>
+              <span style="position: relative; width: 5px; height: 5px; border-radius: 9999px; background: #1d4ed8"></span>
+            </span>
+          </span>
+          <span style="font-size: 10px; color: #a1a1aa">◨ files</span>
+          <span style="font-size: 12px; font-weight: 600; color: #1d4ed8; margin-left: auto">π</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px; padding: 12px 10px; flex-grow: 1">
+          <span style="width: 78%; height: 9px; border-radius: 3px; background: #e4e4e7"></span>
+          <span style="align-self: flex-end; width: 54%; height: 9px; border-radius: 3px; background: #f4f4f5"></span>
+          <span style="width: 66%; height: 9px; border-radius: 3px; background: #e4e4e7"></span>
+        </div>
+        <div style="padding: 8px 10px; border-top: 1px solid #e4e4e7">
+          <span style="display: block; height: 20px; border-radius: 4px; border: 1px solid #d4d4d8"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 20px; border-top: 1px solid #e4e4e7; padding-top: 12px">
+    <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; flex-basis: 0">
+      <span style="font-size: 12px; font-weight: 600; color: #18181b">Ne bouge pas</span>
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">Header, thème, largeur des panneaux. Le cadre reste, on change ce qu'il y a dedans. Seul le nom dans le bouton est remplacé.</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; flex-basis: 0">
+      <span style="font-size: 12px; font-weight: 600; color: #18181b">Change en fondu</span>
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">La conversation et l'arborescence, ensemble. Pas de squelette de chargement : l'ancien contenu tient jusqu'à l'arrivée du nouveau.</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; flex-basis: 0">
+      <span style="font-size: 12px; font-weight: 600; color: #18181b">Est oublié</span>
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">Fichier ouvert, position de scroll, panneau de diff. On revient sur la conversation, pas sur l'écran qu'on avait laissé. Le brouillon tapé, lui, est gardé par projet.</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; flex-basis: 0">
+      <span style="font-size: 12px; font-weight: 600; color: #18181b">Continue derrière</span>
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">L'agent quitté garde son tour. Sa pastille bleue passe après le séparateur — c'est la seule trace visible menu fermé.</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

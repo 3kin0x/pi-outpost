@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Inter", ui-sans-serif, system-ui, sans-serif; }
+    a { color: #1d4ed8; } a:hover { color: #1e40af; }
+    @keyframes dc-pulse { 0% { transform: scale(1); opacity: 0.45; } 70% { transform: scale(2.2); opacity: 0; } 100% { transform: scale(2.2); opacity: 0; } }
+    .dc-halo { animation: dc-pulse 1.8s ease-out infinite; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; gap: 18px; width: 900px; height: 560px; padding: 28px; box-sizing: border-box; background: #ffffff; color: #18181b">
+
+  <div style="display: flex; flex-direction: column; gap: 4px">
+    <span style="font-size: 18px; font-weight: 600; letter-spacing: -0.02em">Le bouton, menu fermé</span>
+    <span style="font-size: 13px; line-height: 20px; color: #71717a">C'est le point faible de cette option : 99 % du temps le menu est fermé. Voilà tout ce que le bouton dit sans être ouvert — quatre apparences, pas une de plus.</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 0; flex-grow: 1; min-height: 0">
+
+    <!-- 1 -->
+    <div style="display: flex; align-items: center; gap: 20px; padding: 13px 0; border-top: 1px solid #e4e4e7">
+      <div style="width: 250px; flex-shrink: 0; display: flex">
+        <div style="display: flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid #d4d4d8; padding: 4px 8px; font-size: 12px; line-height: 16px; color: #3f3f46">
+          <span style="width: 6px; height: 6px; border-radius: 9999px; background: #a1a1aa; margin: 0 1px"></span>
+          <span style="font-weight: 500">pi-outpost</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 13px; font-weight: 500">Tout au repos</span>
+        <span style="font-size: 12px; line-height: 18px; color: #71717a">Le nom du projet courant, un point neutre. Rien ne se passe nulle part.</span>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div style="display: flex; align-items: center; gap: 20px; padding: 13px 0; border-top: 1px solid #e4e4e7">
+      <div style="width: 250px; flex-shrink: 0; display: flex">
+        <div style="display: flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid #a1a1aa; background: #f4f4f5; padding: 4px 8px; font-size: 12px; line-height: 16px; color: #3f3f46">
+          <span style="position: relative; display: flex; align-items: center; justify-content: center; width: 8px; height: 8px">
+            <span class="dc-halo" style="position: absolute; width: 8px; height: 8px; border-radius: 9999px; background: #1d4ed8"></span>
+            <span style="position: relative; width: 8px; height: 8px; border-radius: 9999px; background: #1d4ed8"></span>
+          </span>
+          <span style="font-weight: 500">pi-outpost</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 13px; font-weight: 500">Le projet courant travaille</span>
+        <span style="font-size: 12px; line-height: 18px; color: #71717a">Le halo pulse. Redondant avec la conversation qui défile sous les yeux — mais gratuit.</span>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div style="display: flex; align-items: center; gap: 20px; padding: 13px 0; border-top: 1px solid #e4e4e7">
+      <div style="width: 250px; flex-shrink: 0; display: flex">
+        <div style="display: flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid #d4d4d8; padding: 4px 8px; font-size: 12px; line-height: 16px; color: #3f3f46">
+          <span style="width: 6px; height: 6px; border-radius: 9999px; background: #a1a1aa; margin: 0 1px"></span>
+          <span style="font-weight: 500">pi-outpost</span>
+          <span style="width: 1px; height: 12px; background: #d4d4d8; margin: 0 1px"></span>
+          <span style="display: flex; align-items: center; gap: 3px">
+            <span style="position: relative; display: flex; align-items: center; justify-content: center; width: 6px; height: 6px">
+              <span class="dc-halo" style="position: absolute; width: 6px; height: 6px; border-radius: 9999px; background: #1d4ed8"></span>
+              <span style="position: relative; width: 6px; height: 6px; border-radius: 9999px; background: #1d4ed8"></span>
+            </span>
+            <span style="width: 4px; height: 4px; border-radius: 9999px; background: #d4d4d8"></span>
+          </span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 13px; font-weight: 500">Un <em>autre</em> projet travaille</span>
+        <span style="font-size: 12px; line-height: 18px; color: #71717a">Des points après le séparateur, un par autre projet ouvert : halo bleu pour celui qui travaille, gris inerte pour les autres. Rien à décoder — ils disent « il se passe quelque chose ailleurs », pas « où ». Le détail est à un clic.</span>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div style="display: flex; align-items: center; gap: 20px; padding: 13px 0; border-top: 1px solid #e4e4e7; border-bottom: 1px solid #e4e4e7">
+      <div style="width: 250px; flex-shrink: 0; display: flex">
+        <div style="display: flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid #f59e0b; background: #fffbeb; padding: 4px 8px; font-size: 12px; line-height: 16px; color: #3f3f46">
+          <span style="width: 6px; height: 6px; border-radius: 9999px; background: #a1a1aa; margin: 0 1px"></span>
+          <span style="font-weight: 500">pi-outpost</span>
+          <span style="display: flex; align-items: center; gap: 4px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round"><path d="M12 6v7"></path><path d="M12 18h.01"></path></svg>
+            <span style="font-size: 11px; font-weight: 600; color: #d97706">2</span>
+          </span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 13px; font-weight: 500">Deux projets réclament l'attention</span>
+        <span style="font-size: 12px; line-height: 18px; color: #71717a">Le bouton entier se teinte — c'est le seul cas qui mérite de changer la forme du contrôle, parce que c'est le seul qui demande une action.</span>
+      </div>
+    </div>
+  </div>
+
+  <span style="font-size: 12px; line-height: 18px; color: #71717a">Un seul projet ouvert : le bouton disparaît. Rien de neuf n'apparaît dans le header tant qu'il n'y a rien à choisir.</span>
+</div>
+</x-dc>
+</body>
+</html>

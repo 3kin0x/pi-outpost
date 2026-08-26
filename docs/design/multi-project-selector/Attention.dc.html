@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Inter", ui-sans-serif, system-ui, sans-serif; }
+    a { color: #1d4ed8; } a:hover { color: #1e40af; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; gap: 18px; width: 900px; height: 440px; padding: 28px; box-sizing: border-box; background: #ffffff; color: #18181b">
+
+  <div style="display: flex; flex-direction: column; gap: 4px">
+    <span style="font-size: 18px; font-weight: 600; letter-spacing: -0.02em">L'attention, par paliers</span>
+    <span style="font-size: 13px; line-height: 20px; color: #71717a">Le palier dépend de ce que fait l'utilisateur, pas de l'urgence de l'agent.</span>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; flex-grow: 1; min-height: 0">
+
+    <!-- 1 -->
+    <div style="display: flex; flex-direction: column; gap: 12px; border: 1px solid #e4e4e7; border-radius: 6px; padding: 16px">
+      <div style="display: flex; align-items: center; gap: 8px">
+        <span style="display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 9999px; background: #f4f4f5; font-size: 11px; font-weight: 600; color: #3f3f46">1</span>
+        <span style="font-size: 13px; font-weight: 600">Onglet au premier plan</span>
+      </div>
+
+      <div style="display: flex; justify-content: center; padding: 14px 0">
+        <div style="display: flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid #f59e0b; background: #fffbeb; padding: 4px 8px; font-size: 12px; line-height: 16px; color: #3f3f46">
+          <span style="width: 6px; height: 6px; border-radius: 9999px; background: #a1a1aa; margin: 0 1px"></span>
+          <span style="font-weight: 500">pi-outpost</span>
+          <span style="display: flex; align-items: center; gap: 4px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round"><path d="M12 6v7"></path><path d="M12 18h.01"></path></svg>
+            <span style="font-size: 11px; font-weight: 600; color: #d97706">1</span>
+          </span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+        </div>
+      </div>
+
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">Le bouton se teinte, rien de plus. Rien ne bouge, rien ne s'ouvre, le focus reste où il est. Le nom du projet qui attend s'obtient en ouvrant le menu.</span>
+    </div>
+
+    <!-- 2 -->
+    <div style="display: flex; flex-direction: column; gap: 12px; border: 1px solid #e4e4e7; border-radius: 6px; padding: 16px">
+      <div style="display: flex; align-items: center; gap: 8px">
+        <span style="display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 9999px; background: #f4f4f5; font-size: 11px; font-weight: 600; color: #3f3f46">2</span>
+        <span style="font-size: 13px; font-weight: 600">Onglet en arrière-plan</span>
+      </div>
+
+      <div style="display: flex; justify-content: center; padding: 4px 0">
+        <div style="display: flex; gap: 9px; width: 100%; border-radius: 6px; border: 1px solid #d4d4d8; background: #fafafa; padding: 10px; box-shadow: 0 6px 16px rgba(24, 24, 27, 0.08)">
+          <span style="display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px; background: #1d4ed8; color: #ffffff; font-size: 12px; font-weight: 600; flex-shrink: 0">π</span>
+          <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+            <span style="font-size: 12px; font-weight: 600; color: #18181b">spec-gen t'attend</span>
+            <span style="font-size: 11px; line-height: 16px; color: #71717a">L'agent demande d'écrire dans src/cli/</span>
+          </div>
+        </div>
+      </div>
+
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">Badge <em>et</em> notification système. Le titre nomme le projet — sinon on ne sait pas où cliquer.</span>
+    </div>
+
+    <!-- 3 -->
+    <div style="display: flex; flex-direction: column; gap: 12px; border: 1px solid #e4e4e7; border-radius: 6px; padding: 16px; background: #fafafa">
+      <div style="display: flex; align-items: center; gap: 8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9"></circle><path d="M15 9 9 15"></path><path d="m9 9 6 6"></path>
+        </svg>
+        <span style="font-size: 13px; font-weight: 600; color: #18181b">Jamais</span>
+      </div>
+
+      <div style="display: flex; justify-content: center; padding: 4px 0">
+        <div style="display: flex; flex-direction: column; gap: 6px; width: 100%; border-radius: 6px; border: 1px solid #d4d4d8; background: #ffffff; padding: 10px; opacity: 0.55">
+          <span style="font-size: 12px; font-weight: 600; color: #18181b">Autoriser l'écriture ?</span>
+          <div style="display: flex; gap: 6px">
+            <span style="border-radius: 6px; border: 1px solid #d4d4d8; padding: 3px 8px; font-size: 11px; color: #71717a">Refuser</span>
+            <span style="border-radius: 6px; border: 1px solid #6ee7b7; padding: 3px 8px; font-size: 11px; color: #047857">Autoriser</span>
+          </div>
+        </div>
+      </div>
+
+      <span style="font-size: 12px; line-height: 18px; color: #71717a">Pas de modale par-dessus le projet courant. Une question venue d'ailleurs ne prend pas la main sur ce qu'on est en train de lire.</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
