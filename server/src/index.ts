@@ -259,7 +259,6 @@ if (cli.command === "config") {
 
 const PORT = config.port;
 const HOST = config.host;
-const AGENT_CWD = config.cwd;
 const AGENT_DIR = config.agentDir ?? getAgentDir();
 // Own agentDir ⇒ own session store, fully separate from ~/.pi/agent
 const SESSION_DIR = config.agentDir ? path.join(config.agentDir, "sessions") : undefined;
@@ -881,7 +880,7 @@ if (config.offline) process.env.PI_OFFLINE = "1";
  * falling back to the other runtime would silently run something the operator did
  * not configure.
  */
-const runtime: AgentRuntime = await (async () => {
+const builtRuntime: AgentRuntime = await (async () => {
   try {
     if (config.agentRuntime.mode === "rpc") {
       // The child builds its own toolset, so everything the embedded runtime hands
@@ -891,7 +890,7 @@ const runtime: AgentRuntime = await (async () => {
       const toolsExtension = await resolveToolsExtension();
       return await createRpcRuntime({
         settings: config.agentRuntime,
-        cwd: AGENT_CWD,
+        cwd: workspace.settings.cwd,
         agentDir: AGENT_DIR,
         sessionDir: SESSION_DIR,
         resourceArgs: [
@@ -904,7 +903,7 @@ const runtime: AgentRuntime = await (async () => {
         ],
         env: {
           [TOOLS_ENV_VAR]: JSON.stringify({
-            cwd: AGENT_CWD,
+            cwd: workspace.settings.cwd,
             maxBytes: {
               pdf: config.pdf.maxBytes,
               docx: config.docx.maxBytes,
@@ -918,9 +917,9 @@ const runtime: AgentRuntime = await (async () => {
     }
     return await createEmbeddedRuntime({
       factory: createRuntime,
-      cwd: AGENT_CWD,
+      cwd: workspace.settings.cwd,
       agentDir: AGENT_DIR,
-      sessionManager: SessionManager.create(AGENT_CWD, SESSION_DIR),
+      sessionManager: SessionManager.create(workspace.settings.cwd, SESSION_DIR),
       onModelFallback: (message) => console.warn(`[pi] ${message}`),
     });
   } catch (error) {
@@ -930,8 +929,13 @@ const runtime: AgentRuntime = await (async () => {
   }
 })();
 
-let activeWorkPlan: WorkPlan | null = await loadWorkPlan(runtime.snapshot().sessionFile);
-let activeWorkPlanSessionFile = runtime.snapshot().sessionFile;
+// The session exists now, so the workspace is whole. Everything below reaches the
+// agent through it: there is no second name for the runtime, which is what stops a
+// handler from driving the wrong project once the server holds more than one.
+workspace.attachRuntime(builtRuntime);
+
+let activeWorkPlan: WorkPlan | null = await loadWorkPlan(workspace.agent.snapshot().sessionFile);
+let activeWorkPlanSessionFile = workspace.agent.snapshot().sessionFile;
 let workPlanSessionSync: Promise<void> = Promise.resolve();
 let workPlanInheritanceSource: string | undefined;
 
@@ -942,7 +946,7 @@ let workPlanInheritanceSource: string | undefined;
  * could overwrite the copied plan with null.
  */
 function queueWorkPlanSessionSync(): Promise<void> {
-  const sessionFile = runtime.snapshot().sessionFile;
+  const sessionFile = workspace.agent.snapshot().sessionFile;
   workPlanSessionSync = workPlanSessionSync.catch(() => {}).then(async () => {
     const inheritanceSource = workPlanInheritanceSource;
     const inherited =
@@ -954,12 +958,12 @@ function queueWorkPlanSessionSync(): Promise<void> {
     } catch (error) {
       reportError(error);
     }
-    if (!sameSessionFile(runtime.snapshot().sessionFile, sessionFile)) return;
+    if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
     activeWorkPlan = plan;
     activeWorkPlanSessionFile = sessionFile;
     broadcast({ type: "session_replaced", ...snapshot() });
     if (inherited) broadcast({ type: "work_plan_changed", workPlan: plan });
-    console.log(`[pi] session ${runtime.snapshot().sessionId}`);
+    console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
   });
   workPlanSessionSync.catch(reportError);
   return workPlanSessionSync;
@@ -974,7 +978,7 @@ function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
       reportError(error);
       return;
     }
-    if (!sameSessionFile(runtime.snapshot().sessionFile, sessionFile)) return;
+    if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
     activeWorkPlan = plan;
     activeWorkPlanSessionFile = sessionFile;
     if (changed) broadcast({ type: "work_plan_changed", workPlan: plan });
@@ -983,16 +987,16 @@ function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
 }
 
 function modelName(): string {
-  const model = runtime.snapshot().model;
+  const model = workspace.agent.snapshot().model;
   return model ? `${model.provider}/${model.id}` : "unknown";
 }
 
 function contextUsage(): ContextUsage | undefined {
-  return runtime.snapshot().contextUsage;
+  return workspace.agent.snapshot().contextUsage;
 }
 
 function availableModels(): ModelChoice[] {
-  const models = runtime.snapshot().models;
+  const models = workspace.agent.snapshot().models;
   if (!config.allowedModels) return models;
   const allowed = config.allowedModels;
   return models.filter((m) => allowed.some((a) => a.provider === m.provider && a.id === m.id));
@@ -1009,7 +1013,7 @@ function availableModels(): ModelChoice[] {
 function credentialStatus(): CredentialStatus {
   const usableModel = availableModels().length > 0;
   return {
-    providers: runtime.snapshot().providers,
+    providers: workspace.agent.snapshot().providers,
     usableModel,
     // Only while onboarding needs it: an absolute path names the server's OS account,
     // and there is no reason for a working server to tell every client where it lives.
@@ -1025,7 +1029,7 @@ function credentialStatus(): CredentialStatus {
  */
 /** User messages persisted on the current branch, oldest first — lets the UI edit a past prompt. */
 function branchUserEntries(): { entryId: string; text: string }[] {
-  return runtime
+  return workspace.agent
     .contextEntries()
     .filter((e) => e.type === "message" && e.message?.role === "user")
     .map((e) => ({ entryId: e.id, text: contentText(e.message!.content as never) }));
@@ -1035,7 +1039,7 @@ function branchUserEntries(): { entryId: string; text: string }[] {
 let lastAnnouncedSandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | undefined;
 
 function snapshot(): SessionSnapshot {
-  const state = runtime.snapshot();
+  const state = workspace.agent.snapshot();
   return {
     branding: config.branding,
     sessionId: state.sessionId,
@@ -1067,7 +1071,7 @@ function snapshot(): SessionSnapshot {
     // One line for what answers prompts: the SDK in this process, or the child.
     versions: {
       piOutpost: VERSION,
-      ...(runtime.agentLabel ? { agent: runtime.agentLabel } : { piSdk: PI_SDK_VERSION }),
+      ...(workspace.agent.agentLabel ? { agent: workspace.agent.agentLabel } : { piSdk: PI_SDK_VERSION }),
     },
     sandbox: (() => {
       const v = config.sandbox
@@ -1116,17 +1120,17 @@ function send(socket: WebSocket, message: ServerMessage): void {
 // Requests reach the browser the same way whichever runtime produced them: the
 // embedded session drives them through ExtensionUiBridge, an RPC child emits them
 // on stdout, and both surface as an `extension_ui_request` runtime event that this
-// file broadcasts. Answers travel back through runtime.answerExtensionUI.
+// file broadcasts. Answers travel back through workspace.agent.answerExtensionUI.
 
 /** Wire extension TUI renderers into the HTML bridge used by the web UI. */
 function refreshExtensionRender(): void {
-  const renderers = runtime.renderers;
+  const renderers = workspace.agent.renderers;
   configureExtensionRender({
     // An RPC child cannot hand its renderer objects across the pipe, so tool cards
     // fall back to the built-in rendering rather than an extension-supplied one.
     getToolDefinition: (name) => renderers?.getToolDefinition(name) as never,
     getMessageRenderer: (customType) => renderers?.getMessageRenderer(customType) as never,
-    cwd: AGENT_CWD,
+    cwd: workspace.settings.cwd,
     themeName: "dark",
   });
 }
@@ -1266,7 +1270,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
         !event.isError &&
         workPlanDetails?.type === "work_plan" &&
         typeof workPlanDetails.sessionFile === "string" &&
-        sameSessionFile(workPlanDetails.sessionFile, runtime.snapshot().sessionFile)
+        sameSessionFile(workPlanDetails.sessionFile, workspace.agent.snapshot().sessionFile)
       ) {
         try {
           // Reject malformed tool details at the runtime boundary, then reload
@@ -1343,7 +1347,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
   }
 }
 
-runtime.subscribe(onRuntimeEvent);
+workspace.agent.subscribe(onRuntimeEvent);
 refreshExtensionRender();
 
 // --- Client message handling -----------------------------------------------------
@@ -1369,9 +1373,9 @@ async function replaceSession(socket: WebSocket, action: () => Promise<{ cancell
     reportError(error);
     // The old session may be disposed — land on a fresh one instead. A runtime that
     // has failed closed cannot supply one, so don't ask it to.
-    if (!runtime.ok) return;
+    if (!workspace.agent.ok) return;
     try {
-      await runtime.newSession();
+      await workspace.agent.newSession();
     } catch (recoveryError) {
       reportError(recoveryError);
     }
@@ -1418,9 +1422,9 @@ function refuseUnsupported(socket: WebSocket, error: unknown): boolean {
 const CREDENTIAL_SYNC_TIMEOUT_MS = 20_000;
 
 async function handleSetCredential(socket: WebSocket, provider: string, apiKey: string): Promise<void> {
-  const credentials = runtime.credentials;
+  const credentials = workspace.agent.credentials;
   if (!credentials) {
-    send(socket, { type: "error", message: new RuntimeUnsupportedError("Storing credentials", runtime.kind).message });
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Storing credentials", workspace.agent.kind).message });
     return;
   }
   // Neither of the two SDK calls below carries a deadline of its own. Onboarding is a
@@ -1486,12 +1490,12 @@ async function handleUpdateConfig(
     send(socket, { type: "error", message: "Session change already in progress" });
     return;
   }
-  const rebuildTools = runtime.rebuildTools;
+  const rebuildTools = workspace.agent.rebuildTools;
   if (!rebuildTools) {
     // These settings describe resources this server builds. An RPC child builds its
     // own, so accepting the change would leave the UI showing a boundary nothing
     // enforces and skills the child never loaded.
-    send(socket, { type: "error", message: new RuntimeUnsupportedError("Changing runtime settings", runtime.kind).message });
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Changing runtime settings", workspace.agent.kind).message });
     return;
   }
   if (update.sandbox && config.sandbox === undefined) {
@@ -1568,7 +1572,7 @@ async function handleUpdateConfig(
     await workspace.rebuildResources({ cwd: config.cwd, sandbox: config.sandbox });
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
-    await rebuildTools.call(runtime);
+    await rebuildTools.call(workspace.agent);
     await workPlanSessionSync;
     // Only now: the settings are on disk and the session in front of the user was
     // built from them.
@@ -1577,7 +1581,7 @@ async function handleUpdateConfig(
     reportError(error);
     send(socket, { type: "error", message: `Settings saved, but the session could not be rebuilt: ${error instanceof Error ? error.message : String(error)}` });
     try {
-      await rebuildTools.call(runtime);
+      await rebuildTools.call(workspace.agent);
     } catch (recoveryError) {
       reportError(recoveryError);
     }
@@ -1603,9 +1607,9 @@ async function handleBrowseServerDirectory(socket: WebSocket, requestedPath: str
 
 /** Declare an OpenAI-compatible endpoint: live for this session, and persisted for the next. */
 async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDeclaration): Promise<void> {
-  const credentials = runtime.credentials;
+  const credentials = workspace.agent.credentials;
   if (!credentials) {
-    send(socket, { type: "error", message: new RuntimeUnsupportedError("Declaring a provider", runtime.kind).message });
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Declaring a provider", workspace.agent.kind).message });
     return;
   }
   try {
@@ -1642,9 +1646,9 @@ async function adoptUsableModel(socket: WebSocket): Promise<void> {
     announce();
     return;
   }
-  const current = runtime.snapshot().model;
+  const current = workspace.agent.snapshot().model;
   const usable = choices.some((choice) => choice.provider === current?.provider && choice.id === current?.id);
-  if (!usable) await runtime.credentials?.adoptModel(choices[0]);
+  if (!usable) await workspace.agent.credentials?.adoptModel(choices[0]);
   announce();
 }
 
@@ -1699,7 +1703,7 @@ async function absolutizeMentions(text: string): Promise<string> {
 
 async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
   const promptText = await absolutizeMentions(text);
-  await runtime.prompt(promptText, {
+  await workspace.agent.prompt(promptText, {
     ...(images?.length ? { images } : {}),
     // Echo the user message only once accepted (avoids ghost bubbles on reject).
     // The *original* text, not promptText: the absolute path is for the model,
@@ -1721,14 +1725,14 @@ async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
  * stays reachable in the tree (that's the whole point of editing here).
  */
 async function editPrompt(socket: WebSocket, entryId: string, text: string, images?: WireImage[]): Promise<void> {
-  const navigate = runtime.navigateTree;
+  const navigate = workspace.agent.navigateTree;
   if (!navigate) {
     // Editing rewinds the leaf to just before a past message. Pi RPC forks and
     // clones but does not move the leaf, so there is no equivalent to offer.
-    send(socket, { type: "error", message: new RuntimeUnsupportedError("Editing a past message", runtime.kind).message });
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Editing a past message", workspace.agent.kind).message });
     return;
   }
-  if (runtime.snapshot().isStreaming) {
+  if (workspace.agent.snapshot().isStreaming) {
     send(socket, { type: "error", message: "Cannot edit a message while the agent is running" });
     return;
   }
@@ -1742,7 +1746,7 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
   }
   replacingSession = true;
   try {
-    const { cancelled } = await navigate.call(runtime, entryId);
+    const { cancelled } = await navigate.call(workspace.agent, entryId);
     if (cancelled) {
       // An extension vetoed the rewind — say so: the client already dropped the draft
       send(socket, { type: "error", message: "Edit cancelled — the conversation was not rewound" });
@@ -1761,7 +1765,7 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
  * reading/persisting to attacker-chosen files via switch_session).
  */
 async function isKnownSessionPath(path: string): Promise<boolean> {
-  const sessions = await SessionManager.list(AGENT_CWD, SESSION_DIR);
+  const sessions = await SessionManager.list(workspace.settings.cwd, SESSION_DIR);
   return sessions.some((info) => info.path === path);
 }
 
@@ -1791,7 +1795,7 @@ async function switchSession(socket: WebSocket, path: string): Promise<void> {
     send(socket, { type: "error", message: "Unknown session" });
     return;
   }
-  await replaceSession(socket, () => runtime.switchSession(path));
+  await replaceSession(socket, () => workspace.agent.switchSession(path));
 }
 
 const SESSION_LIST_LIMIT = 50;
@@ -1805,7 +1809,7 @@ let sessionScan: { at: number; sessions: SessionInfo[] } | null = null;
 
 async function scanSessions(): Promise<SessionInfo[]> {
   if (sessionScan && Date.now() - sessionScan.at < SESSION_SCAN_TTL_MS) return sessionScan.sessions;
-  const sessions = await SessionManager.list(AGENT_CWD, SESSION_DIR);
+  const sessions = await SessionManager.list(workspace.settings.cwd, SESSION_DIR);
   sessionScan = { at: Date.now(), sessions };
   return sessions;
 }
@@ -1852,9 +1856,9 @@ async function renameSession(socket: WebSocket, path: string, rawName: string): 
     // Through the live runtime, so the running session and its file agree. A second
     // SessionManager over the live file would be a disaster: opening one can rewrite
     // the file wholesale (version migration), racing the live appends.
-    await runtime.setSessionName(name);
+    await workspace.agent.setSessionName(name);
   } else {
-    SessionManager.open(path, SESSION_DIR, AGENT_CWD).appendSessionInfo(name);
+    SessionManager.open(path, SESSION_DIR, workspace.settings.cwd).appendSessionInfo(name);
   }
   invalidateSessionScan();
   await broadcastSessions();
@@ -1873,7 +1877,7 @@ async function renameSession(socket: WebSocket, path: string, rawName: string): 
  * Both sides are resolved: they come from different normalizers.
  */
 function liveSessionMatch(candidate: string): "live" | "not-live" | "unknown" {
-  const live = runtime.snapshot().sessionFile;
+  const live = workspace.agent.snapshot().sessionFile;
   if (live === undefined) return "unknown";
   return path.resolve(candidate) === path.resolve(live) ? "live" : "not-live";
 }
@@ -1912,12 +1916,12 @@ async function maybeNameSession(): Promise<void> {
   // Titling needs one direct model call with the session's own credentials. Only the
   // embedded runtime can make it; under RPC the session keeps the UI's fallback (its
   // first message) unless the user renames it by hand.
-  const titles = runtime.titles;
+  const titles = workspace.agent.titles;
   if (!titles) return;
-  const file = runtime.snapshot().sessionFile;
+  const file = workspace.agent.snapshot().sessionFile;
   if (file === undefined || namingSessions.has(file)) return;
-  if (hasBeenNamed(runtime.entries() as never)) return;
-  const exchange = firstExchange(runtime.contextEntries() as never);
+  if (hasBeenNamed(workspace.agent.entries() as never)) return;
+  const exchange = firstExchange(workspace.agent.contextEntries() as never);
   if (!exchange) return;
   namingSessions.add(file);
   try {
@@ -1927,9 +1931,9 @@ async function maybeNameSession(): Promise<void> {
     // `replacingSession` covers the window where the old session is already disposed
     // but the runtime still reports it: writing there would emit into a torn-down
     // extension runner.
-    if (replacingSession || runtime.snapshot().sessionFile !== file) return;
-    if (hasBeenNamed(runtime.entries() as never)) return;
-    await runtime.setSessionName(title);
+    if (replacingSession || workspace.agent.snapshot().sessionFile !== file) return;
+    if (hasBeenNamed(workspace.agent.entries() as never)) return;
+    await workspace.agent.setSessionName(title);
     invalidateSessionScan();
     await broadcastSessions();
   } catch (error) {
@@ -1956,7 +1960,7 @@ function reportError(error: unknown): void {
  * leaf lives in its subtree, i.e. it is on the active branch.
  */
 function buildTree(): TreeNode[] {
-  const { roots, leafId } = runtime.tree();
+  const { roots, leafId } = workspace.agent.tree();
 
   function subtreeHasLeaf(node: RuntimeTreeNode): boolean {
     return node.entry.id === leafId || node.children.some(subtreeHasLeaf);
@@ -2033,7 +2037,7 @@ function sendTree(socket: WebSocket): void {
 
 /** Fork targets must be user-message entries (both runtimes reject anything else). */
 function isUserMessageEntry(entryId: string): boolean {
-  const entry = runtime.entries().find((candidate) => candidate.id === entryId);
+  const entry = workspace.agent.entries().find((candidate) => candidate.id === entryId);
   return entry?.type === "message" && entry.message?.role === "user";
 }
 
@@ -2045,12 +2049,12 @@ function isUserMessageEntry(entryId: string): boolean {
  * TUI) or a reply tip (restore that exchange in full, reply included).
  */
 async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
-  const navigate = runtime.navigateTree;
+  const navigate = workspace.agent.navigateTree;
   if (!navigate) {
-    send(socket, { type: "error", message: new RuntimeUnsupportedError("Tree navigation", runtime.kind).message });
+    send(socket, { type: "error", message: new RuntimeUnsupportedError("Tree navigation", workspace.agent.kind).message });
     return;
   }
-  if (runtime.snapshot().isStreaming) {
+  if (workspace.agent.snapshot().isStreaming) {
     send(socket, { type: "error", message: "Cannot navigate the tree while the agent is running" });
     return;
   }
@@ -2068,7 +2072,7 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
   }
   replacingSession = true;
   try {
-    const { cancelled, editorText } = await navigate.call(runtime, entryId);
+    const { cancelled, editorText } = await navigate.call(workspace.agent, entryId);
     if (cancelled) return;
     broadcast({ type: "session_replaced", ...snapshot() });
     if (editorText) send(socket, { type: "editor_prefill", text: editorText });
@@ -2081,14 +2085,14 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
 /** Fork a new session file starting just before the given user message. */
 async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
   if (!isUserMessageEntry(entryId)) {
-    // Also protects replaceSession's recovery path: runtime.fork throws on
+    // Also protects replaceSession's recovery path: workspace.agent.fork throws on
     // non-user entries BEFORE teardown, and recovery would needlessly swap
     // the healthy live session for a fresh one.
     send(socket, { type: "error", message: "Unknown tree node" });
     return;
   }
   let selectedText: string | undefined;
-  const sourceSessionFile = runtime.snapshot().sessionFile;
+  const sourceSessionFile = workspace.agent.snapshot().sessionFile;
   let ownsInheritance = false;
   try {
     await replaceSession(socket, async () => {
@@ -2098,7 +2102,7 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
       workPlanInheritanceSource = sourceSessionFile;
       ownsInheritance = true;
       try {
-        const result = await runtime.fork(entryId);
+        const result = await workspace.agent.fork(entryId);
         selectedText = result.selectedText;
         return result;
       } catch (error) {
@@ -2425,7 +2429,7 @@ async function handleSearchFiles(socket: WebSocket, query: string, requestId: st
 }
 
 /**
- * Browser messages that need a working agent runtime. Everything absent from this
+ * Browser messages that need a working agent workspace.agent. Everything absent from this
  * set — the file browser, git, session listing and search — keeps working after a
  * runtime failure, because none of it goes through the agent.
  */
@@ -2459,8 +2463,8 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
   if (typeof message !== "object" || message === null) return;
   // Fail closed. A prompt sent to a dead runtime must be refused where the user can
   // see it, not queued for a process that is never coming back.
-  if (!runtime.ok && AGENT_COMMANDS.has(message.type)) {
-    send(socket, { type: "error", message: `Agent runtime unavailable: ${runtime.failure ?? "the runtime stopped"}` });
+  if (!workspace.agent.ok && AGENT_COMMANDS.has(message.type)) {
+    send(socket, { type: "error", message: `Agent runtime unavailable: ${workspace.agent.failure ?? "the runtime stopped"}` });
     return;
   }
   switch (message.type) {
@@ -2484,12 +2488,12 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       break;
     }
     case "abort":
-      runtime.abort().catch(() => {});
+      workspace.agent.abort().catch(() => {});
       break;
     case "set_model": {
       if (typeof message.provider !== "string" || typeof message.id !== "string") return;
       const { provider, id } = message;
-      runtime
+      workspace.agent
         .setModel(provider, id)
         .then((model) => broadcast({ type: "model_changed", model: modelName(), reasoning: model.reasoning ?? false }))
         .catch((error) => {
@@ -2502,16 +2506,16 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     case "set_thinking": {
       if (!THINKING_LEVELS.includes(message.level)) return;
       const level = message.level;
-      runtime
+      workspace.agent
         .setThinkingLevel(level)
         // The runtime is the authority on what it settled at — a model without the
         // requested level lands elsewhere, and the UI must show what it landed on.
-        .then(() => broadcast({ type: "thinking_changed", level: runtime.snapshot().thinkingLevel }))
+        .then(() => broadcast({ type: "thinking_changed", level: workspace.agent.snapshot().thinkingLevel }))
         .catch(reportError);
       break;
     }
     case "new_session":
-      void replaceSession(socket, () => runtime.newSession());
+      void replaceSession(socket, () => workspace.agent.newSession());
       break;
     case "switch_session":
       if (typeof message.path !== "string") return;
@@ -2537,7 +2541,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       break;
     case "compact":
       // Failures surface via the compaction_end event (errorMessage) — avoid double-reporting.
-      runtime.compact().catch(() => {});
+      workspace.agent.compact().catch(() => {});
       break;
     case "extension_ui_response": {
       // Every other case here checks its fields; this one used to pass the parsed
@@ -2548,7 +2552,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       if (typeof message.id !== "string") return;
       const answer = extensionUiAnswer(message);
       if (answer === undefined) return;
-      runtime.answerExtensionUI(answer);
+      workspace.agent.answerExtensionUI(answer);
       break;
     }
     case "list_directory":
@@ -2745,22 +2749,22 @@ handleWsConnection = (socket) => {
     // a dialog is up — so without this the child waits on a question no one can see,
     // with no watchdog left to end it, and the way out (a new session) is itself a
     // command to the blocked child.
-    if (clients.size === 0) runtime.cancelPendingExtensionRequests();
+    if (clients.size === 0) workspace.agent.cancelPendingExtensionRequests();
   });
 };
 // A failed runtime reports unready: /health answers 503 and the operator's probe
 // sees the process is no longer serving an agent, even though HTTP still answers.
-getHealth = () => (runtime.ok ? { ok: true, sessionId: runtime.snapshot().sessionId } : { ok: false });
+getHealth = () => (workspace.agent.ok ? { ok: true, sessionId: workspace.agent.snapshot().sessionId } : { ok: false });
 
-console.log(`[pi] session ${runtime.snapshot().sessionId}`);
-console.log(`[pi] agent runtime ${runtime.kind}`);
-console.log(`[pi] model ${modelName()} · cwd ${AGENT_CWD} · agentDir ${AGENT_DIR}`);
-const runtimeTools = runtime.snapshot().tools;
+console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
+console.log(`[pi] agent runtime ${workspace.agent.kind}`);
+console.log(`[pi] model ${modelName()} · cwd ${workspace.settings.cwd} · agentDir ${AGENT_DIR}`);
+const runtimeTools = workspace.agent.snapshot().tools;
 if (runtimeTools) {
   console.log(`[pi] tools active: ${runtimeTools.filter((tool) => tool.active).map((tool) => tool.name).join(", ") || "(none)"}`);
   console.log(`[pi] tools inactive: ${runtimeTools.filter((tool) => !tool.active).map((tool) => tool.name).join(", ") || "(none)"}`);
 }
-const runtimeSkills = runtime.snapshot().commands.filter((command) => command.source === "skill").map((command) => command.name);
+const runtimeSkills = workspace.agent.snapshot().commands.filter((command) => command.source === "skill").map((command) => command.name);
 console.log(`[pi] skills: ${runtimeSkills.join(", ") || "(none)"}`);
 if (config.sandbox) {
   const extras = [
@@ -2788,7 +2792,7 @@ if (!credentialStatus().usableModel) {
 // --- Shutdown -------------------------------------------------------------------------
 
 async function shutdown(): Promise<void> {
-  await runtime.dispose();
+  await workspace.agent.dispose();
   await app.close();
   process.exit(0);
 }

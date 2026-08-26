@@ -79,14 +79,6 @@ export class Workspace {
    */
   readonly root: string;
 
-  /**
-   * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
-   * server starts before the agent (branding must not wait behind model, extension
-   * and skill loading), and a workspace's session is built on first open rather
-   * than at startup — so "resources exist, runtime does not yet" is a real state,
-   * not a construction artefact.
-   */
-  runtime: AgentRuntime | undefined;
   settings: WorkspaceSettings;
 
   browserRoot: string;
@@ -99,6 +91,18 @@ export class Workspace {
   workPlan: WorkPlan | null = null;
   workPlanSessionFile: string | undefined;
 
+  /**
+   * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
+   * server starts before the agent (branding must not wait behind model, extension
+   * and skill loading), and a workspace's session is built on first open rather
+   * than at startup — so "resources exist, runtime does not yet" is a real state,
+   * not a construction artefact.
+   *
+   * Private, and reached through `agent`: a caller that has one of these in hand
+   * wants the runtime, not a question about whether there is one.
+   */
+  private _runtime: AgentRuntime | undefined;
+
   private readonly options: WorkspaceOptions;
   private stopped = false;
 
@@ -109,7 +113,7 @@ export class Workspace {
     options: WorkspaceOptions,
   ) {
     this.root = root;
-    this.runtime = runtime;
+    this._runtime = runtime;
     this.settings = options.settings;
     this.browserRoot = resources.browserRoot;
     this.writableRoot = resources.writableRoot;
@@ -141,7 +145,26 @@ export class Workspace {
   }
 
   attachRuntime(runtime: AgentRuntime): void {
-    this.runtime = runtime;
+    this._runtime = runtime;
+  }
+
+  /** Whether the session has been built yet — the `starting` state, seen from here. */
+  get started(): boolean {
+    return this._runtime !== undefined;
+  }
+
+  /**
+   * The agent, for the handlers that exist to drive it.
+   *
+   * Throws rather than returning undefined: reaching this before the runtime is
+   * attached means a request was served by a handler that should still have been
+   * stubbed out, which is a wiring bug and not a state to code around. Every caller
+   * here runs behind the real /ws handler, which is only installed once the runtime
+   * is ready.
+   */
+  get agent(): AgentRuntime {
+    if (!this._runtime) throw new Error(`workspace ${this.root} has no runtime yet`);
+    return this._runtime;
   }
 
   /**
@@ -150,7 +173,7 @@ export class Workspace {
    * so "unused" can never be allowed to mean "unwatched".
    */
   isBusy(): boolean {
-    return this.runtime?.snapshot().isStreaming ?? false;
+    return this._runtime?.snapshot().isStreaming ?? false;
   }
 
   /**
@@ -185,8 +208,8 @@ export class Workspace {
     this.stopped = true;
     this.fileWatcher?.close();
     this.fileWatcher = undefined;
-    await this.runtime?.dispose();
-    this.runtime = undefined;
+    await this._runtime?.dispose();
+    this._runtime = undefined;
   }
 }
 
