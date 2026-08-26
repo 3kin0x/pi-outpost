@@ -7,7 +7,15 @@ const objectOptions = { additionalProperties: false } as const;
 const boundedText = (maxLength: number, description?: string) => Type.String({
   minLength: 1,
   maxLength,
-  pattern: "\\S",
+  // Rejects whitespace-only strings. Anchored (`^`…`$`) rather than the bare
+  // `\S` this replaced: JSON Schema `pattern` is a "contains a match" test so
+  // both reject the same strings, but automatic parser/grammar generation for
+  // structured output (constrained decoding on some providers) requires every
+  // pattern to be fully anchored and rejects the schema outright otherwise —
+  // as a 400 on every call once a tool carries one, this field appears on most
+  // of the work_plan schema's string properties, so the error repeated once
+  // per occurrence.
+  pattern: "^[\\s\\S]*\\S[\\s\\S]*$",
   ...(description === undefined ? {} : { description }),
 });
 const identifierSchema = boundedText(WORK_PLAN_LIMITS.title);
