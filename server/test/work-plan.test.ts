@@ -461,6 +461,43 @@ describe("work_plan tool", () => {
     }
   });
 
+  it("anchors every pattern, so a provider can generate a parser for the schema", () => {
+    // The schema goes to the provider on every request — work_plan is registered
+    // unconditionally, whether or not the session has a plan — so a schema a
+    // provider cannot compile fails every message, not every work_plan call.
+    // Providers that build a parser or grammar from the tool schema for
+    // constrained decoding require each `pattern` to be fully anchored and
+    // refuse the schema otherwise ("Pattern must start with '^' and end with
+    // '$'"), once per occurrence: the bounded-text pattern appears on 48 fields.
+    const patterns: string[] = [];
+    const walk = (value: unknown): void => {
+      if (typeof value !== "object" || value === null) return;
+      const record = value as Record<string, unknown>;
+      if (typeof record.pattern === "string") patterns.push(record.pattern);
+      for (const child of Object.values(record)) {
+        if (Array.isArray(child)) child.forEach(walk);
+        else walk(child);
+      }
+    };
+    walk(createWorkPlanToolDefinition().parameters);
+
+    assert.ok(patterns.length > 0, "the schema still constrains text with a pattern");
+    const unanchored = [...new Set(patterns)].filter((pattern) => !pattern.startsWith("^") || !pattern.endsWith("$"));
+    assert.deepEqual(unanchored, [], `every pattern must start with '^' and end with '$': ${unanchored.join(", ")}`);
+  });
+
+  it("still refuses blank text through the anchored pattern", () => {
+    // Anchoring is only correct if it rejects what the bare `\S` rejected: JSON
+    // Schema `pattern` searches rather than matches, so the two agree only when
+    // the anchored form is written to span the whole string.
+    const validator = Compile(createWorkPlanToolDefinition().parameters as never);
+    for (const title of ["", " ", "\t\n"]) {
+      assert.equal(validator.Check({ action: "create", title, tasks: [{ title: "First" }] }), false, `blank title ${JSON.stringify(title)}`);
+    }
+    assert.equal(validator.Check({ action: "create", title: "Ship it", tasks: [{ title: "First" }] }), true);
+    assert.equal(validator.Check({ action: "create", title: "  padded  ", tasks: [{ title: "First" }] }), true, "text with surrounding space is not blank");
+  });
+
   it("answers a refused property by naming it, and says nothing about other actions", () => {
     // The failure this change exists for. pi validates a tool call against the
     // published schema and hands the model every error it collects, so the shape
