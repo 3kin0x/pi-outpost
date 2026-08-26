@@ -11,14 +11,19 @@
  * Every word a reader needs is in there, wrapped in markup that is not for them.
  * This turns such a body into one line, and leaves anything that was already a
  * sentence alone — a provider that writes a plain message is the normal case and
- * must not be reworded.
+ * must not be reworded or cut. Only text recovered from a page is bounded.
  *
  * Deliberately not a parser: the input is whatever an unknown intermediary chose
  * to send, so this reads as "recover the words", never "understand the document".
  */
 
-/** Long enough for a real explanation, short enough to stay a bubble. */
-const MAX_LENGTH = 300;
+/**
+ * Bounds what is recovered from a page, and nothing else.
+ *
+ * A page is furniture around a sentence, and the sentence is near the top, so
+ * cutting the rest costs nothing. Prose is not bounded at all: see below.
+ */
+const MAX_RECOVERED_LENGTH = 300;
 
 const ENTITIES: Record<string, string> = {
   amp: "&",
@@ -64,7 +69,13 @@ function textFromMarkup(markup: string): string {
 export function describeProviderError(raw: string): string {
   const input = raw?.trim() ?? "";
   if (input === "") return input;
-  if (!looksLikeMarkup(input)) return input.length > MAX_LENGTH ? `${input.slice(0, MAX_LENGTH - 1).trimEnd()}…` : input;
+  // Untouched, at any length. A provider that writes prose is explaining itself,
+  // and the explanation is the whole value of the bubble: a tool-call parser
+  // quoting the 2 KB of model output it choked on is the diagnosis, not noise to
+  // be capped — a 300-character cut lands mid-quote and hides the offending byte.
+  // A pathologically long answer is information about the provider in its own
+  // right, so it is shown rather than summarized away.
+  if (!looksLikeMarkup(input)) return input;
 
   const start = input.search(/<\s*(!doctype|html|body|head|h[1-6]|p|div|title|center|pre)\b/i);
   const prefix = input.slice(0, start).trim();
@@ -75,5 +86,5 @@ export function describeProviderError(raw: string): string {
   // "504" then "504 Gateway Time-out": the page already opens with the code.
   const body = status !== "" && recovered.startsWith(`${status} `) ? recovered.slice(status.length + 1) : recovered;
   const line = [status !== "" ? status : prefix, body].filter((part) => part !== "").join(" ");
-  return line.length > MAX_LENGTH ? `${line.slice(0, MAX_LENGTH - 1).trimEnd()}…` : line;
+  return line.length > MAX_RECOVERED_LENGTH ? `${line.slice(0, MAX_RECOVERED_LENGTH - 1).trimEnd()}…` : line;
 }

@@ -27,6 +27,28 @@ describe("describeProviderError", () => {
     }
   });
 
+  it("never cuts prose, however long — the long one is the one worth reading", () => {
+    // The failure this guard exists for. A tool-call parser refusing the model's
+    // output quotes that output back, and the quote is the diagnosis: which byte
+    // it choked on, and what surrounded it. The old 300-character bound landed
+    // mid-quote and threw exactly that away, leaving a position with nothing to
+    // look at. Bounding is for a page's furniture, never for a sentence.
+    const quoted = [
+      'Failed to parse input at pos 2040: <tool_call>',
+      '<function=write>',
+      '<parameter=content>',
+      '# Specification: ci-taskfile'.padEnd(2400, ' .'),
+      '</parameter>',
+    ].join('\n');
+    assert.ok(quoted.length > 2000, `the case is a long one, got ${quoted.length}`);
+    assert.equal(describeProviderError(quoted), quoted);
+
+    // Nothing in a Qwen tool call reads as a page: <parameter> is not <p>, so
+    // this must not fall into the markup branch and be flattened either.
+    assert.ok(describeProviderError(quoted).includes('<function=write>'), 'tags survive');
+    assert.ok(describeProviderError(quoted).includes('\n'), 'line structure survives');
+  });
+
   it("keeps a status the caller prefixed, without repeating it", () => {
     assert.equal(
       describeProviderError("502 <html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>"),
