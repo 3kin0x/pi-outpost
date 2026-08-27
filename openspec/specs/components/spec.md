@@ -199,7 +199,10 @@ The History width SHALL use a local browser-storage preference distinct from the
 The component layer SHALL provide distinct surfaces for extension dialogs, notifications, and
 widgets. `ExtensionDialog` SHALL render a supplied dialog request and report a dialog response.
 Notification and widget components SHALL render the corresponding extension state supplied by the
-application.
+application. A notification is an overlay above the rest of the interface, so `ExtensionNotifications`
+SHALL report each notification's dismissal a fixed interval after that notification arrived — measured
+from its arrival and unaffected by how often the application around it re-renders — and SHALL also
+offer a dismiss control on each notification.
 
 #### Scenario: RespondToExtensionDialog
 - **GIVEN** a dialog request supplied to `ExtensionDialog`
@@ -210,6 +213,16 @@ application.
 - **GIVEN** extension notification state supplied by the application
 - **WHEN** `ExtensionNotifications` renders
 - **THEN** the notifications are presented by the dedicated extension surface
+
+#### Scenario: DismissExtensionNotificationsOnSchedule
+- **GIVEN** a notification presented by `ExtensionNotifications`
+- **WHEN** the application around it re-renders repeatedly while the dismissal interval runs
+- **THEN** the component reports that notification's dismissal once the interval has elapsed since it arrived
+
+#### Scenario: DismissExtensionNotificationOnDemand
+- **GIVEN** a notification presented by `ExtensionNotifications`
+- **WHEN** the user activates that notification's dismiss control
+- **THEN** the component reports that notification's dismissal
 
 #### Scenario: RenderExtensionWidgets
 - **GIVEN** extension widget state supplied by the application

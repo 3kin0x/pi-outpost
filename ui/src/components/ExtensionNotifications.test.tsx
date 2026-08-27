@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { ExtensionNotifications } from "./ExtensionNotifications";
 import type { ExtensionNotification } from "../useAgent";
 
@@ -43,5 +43,33 @@ describe("ExtensionNotifications", () => {
     vi.advanceTimersByTime(6000);
     expect(onDismiss).toHaveBeenCalledWith("1");
     vi.useRealTimers();
+  });
+
+  // The bug this guards: the parent re-creates `onDismiss` on every render, so an
+  // effect keyed on the callback restarted the six-second timer each time. A
+  // streaming answer re-renders far faster than that, and the toast became
+  // permanent — sitting on top of the Work Plan panel.
+  it("auto-dismisses on schedule even while the parent keeps re-rendering", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      const notifications: ExtensionNotification[] = [{ id: "1", message: "Auto", notifyType: "info" }];
+      const { rerender } = render(<ExtensionNotifications notifications={notifications} onDismiss={onDismiss} />);
+      // A fresh inline callback per render, exactly as App passes one down.
+      for (let elapsed = 0; elapsed < 6000; elapsed += 100) {
+        vi.advanceTimersByTime(100);
+        rerender(<ExtensionNotifications notifications={notifications} onDismiss={(id) => onDismiss(id)} />);
+      }
+      expect(onDismiss).toHaveBeenCalledWith("1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dismisses on demand from the close button", () => {
+    const onDismiss = vi.fn();
+    render(<ExtensionNotifications notifications={[{ id: "1", message: "Manual", notifyType: "info" }]} onDismiss={onDismiss} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    expect(onDismiss).toHaveBeenCalledWith("1");
   });
 });
