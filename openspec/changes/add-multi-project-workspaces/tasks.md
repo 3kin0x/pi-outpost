@@ -25,12 +25,18 @@
 
 ## 4. Opening and closing projects
 
-- [ ] 4.1 Persist the open set alongside editable runtime settings, writing before the workspace is opened or stopped, abandoning the operation if the write fails
+- [x] 4.1 Persist the open set alongside editable runtime settings, writing before the workspace is opened or stopped, abandoning the operation if the write fails
 - [ ] 4.2 Add `open_project`: take a directory chosen through the existing `browse_server_directory` picker, resolve it, reject an unreadable path, return the existing workspace if that directory is already open
 - [ ] 4.3 Add `close_project`: refuse while the agent is streaming, refuse for the last open project, otherwise stop the workspace, remove it from the set, and move any bound client to another open project
-- [ ] 4.4 Load the persisted open set at startup without building any session
-- [ ] 4.5 Re-scope `handleUpdateConfig` (l.1438) to act on one workspace rather than the server
-- [ ] 4.6 Add the lock that forbids opening, closing and switching, following the `sandboxLocks` convention (`config.ts:658`)
+- [x] 4.4 Load the persisted open set at startup without building any session
+- [x] 4.5 Re-scope `handleUpdateConfig` (l.1438) to act on one workspace rather than the server
+- [x] 4.6 Add the lock that forbids opening, closing and switching, following the `sandboxLocks` convention (`config.ts:658`)
+
+> **Blocked on threading.** 46 top-level handlers in `index.ts` still read the
+> module-level `workspace` rather than the connection's, so a second project would
+> be served by the first one's runtime — and, worse, handed the first one's
+> sandboxed tools. Opening is gated off (`MULTI_PROJECT_OPEN_ENABLED`) until each
+> of those takes its workspace explicitly. Everything else in this group is done.
 
 ## 5. Workspace lifecycle
 

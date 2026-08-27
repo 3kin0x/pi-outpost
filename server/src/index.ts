@@ -107,7 +107,7 @@ import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
 import { copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile } from "./workPlanStore.ts";
 import { composeAppendSystemPrompt } from "./systemPrompt.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
-import { Workspace } from "./workspace.ts";
+import { Workspace, type WorkspaceOptions, type WorkspaceSettings } from "./workspace.ts";
 import { WorkspaceRegistry } from "./workspaceRegistry.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
 import {
@@ -298,33 +298,48 @@ const structuredExchangeTool = createStructuredExchangeToolDefinition();
 const workPlanTool = createWorkPlanToolDefinition();
 
 /**
- * The project this server is serving, and everything rooted at it: the browser and
- * writable roots, the git probe, the file watcher and the sandboxed toolset.
+ * Everything a workspace needs that is the server's rather than the project's:
+ * limits, whether to watch, the unconfined tools, and where its file changes go.
  *
- * One for now. The bindings these fields replaced were what made a server serve
- * exactly one project — there was no second copy of any of them to hand a second
- * one. The runtime is attached below, once it exists: the HTTP server deliberately
- * starts before the agent, so a workspace whose resources are ready and whose
- * session is not yet built is a real state.
+ * One factory so a project opened at runtime is built exactly like the one the
+ * server booted with — a second construction site is where the two would drift.
  *
- * The watcher's changes go to `broadcast` — every client, because there is exactly
- * one workspace to hear about. That is the call that becomes workspace-scoped when
- * the server holds more than one.
+ * A sandbox is inherited when the project declares none: a sandboxed server must
+ * not open an unsandboxed project, and the inherited settings are rooted at the
+ * new project, never at the one the server started in.
+ */
+function workspaceOptions(settings: WorkspaceSettings): Omit<WorkspaceOptions, "createRuntime"> {
+  const sandbox = settings.sandbox ?? (config.sandbox ? { ...config.sandbox, root: settings.cwd, writableRoot: undefined } : undefined);
+  return {
+    settings: { cwd: settings.cwd, ...(sandbox ? { sandbox } : {}) },
+    limits: {
+      pdfMaxBytes: config.pdf.maxBytes,
+      docxMaxBytes: config.docx.maxBytes,
+      xlsxMaxBytes: config.xlsx.maxBytes,
+      pptxMaxBytes: config.pptx.maxBytes,
+      structuredExchangeMaxBytes: config.structuredExchange.maxBytes,
+    },
+    watchFiles: config.files.watch,
+    unconfinedTools: [structuredExchangeTool, workPlanTool],
+    // Bound to the workspace being built, so a tree change reaches the clients
+    // watching THAT project and no others.
+    onDirectoryChanged: () => {},
+  };
+}
+
+/**
+ * The project this server booted with, and everything rooted at it.
+ *
+ * Its runtime is attached below rather than built here: the HTTP server
+ * deliberately starts before the agent, so a workspace whose resources are ready
+ * and whose session is not yet built is a real state. A project opened later takes
+ * the shorter path — Workspace.open builds both at once.
  */
 const workspace = await Workspace.create({
-  settings: { cwd: config.cwd, sandbox: config.sandbox },
-  limits: {
-    pdfMaxBytes: config.pdf.maxBytes,
-    docxMaxBytes: config.docx.maxBytes,
-    xlsxMaxBytes: config.xlsx.maxBytes,
-    pptxMaxBytes: config.pptx.maxBytes,
-    structuredExchangeMaxBytes: config.structuredExchange.maxBytes,
-  },
-  watchFiles: config.files.watch,
-  unconfinedTools: [structuredExchangeTool, workPlanTool],
+  ...workspaceOptions({ cwd: config.cwd, ...(config.sandbox ? { sandbox: config.sandbox } : {}) }),
   onDirectoryChanged: (relPath) => broadcast(workspace, { type: "directory_changed", path: relPath }),
   createRuntime: () => {
-    throw new Error("the runtime is built in index.ts and attached; Workspace.open() is not used here yet");
+    throw new Error("the boot workspace's runtime is built in index.ts and attached");
   },
 });
 
@@ -888,48 +903,66 @@ if (config.offline) process.env.PI_OFFLINE = "1";
  * falling back to the other runtime would silently run something the operator did
  * not configure.
  */
+/**
+ * Build an agent runtime rooted at one project.
+ *
+ * Takes its cwd rather than reading the server's: this is what a second project
+ * calls to get a session of its own. Everything else it needs — extensions,
+ * skills, prompt templates, the tool allowlist — is server-wide configuration and
+ * is the same for every project.
+ */
+async function buildRuntimeFor(cwd: string): Promise<AgentRuntime> {
+  if (config.agentRuntime.mode === "rpc") {
+    // The child builds its own toolset, so everything the embedded runtime hands
+    // to the SDK has to be said on the command line instead: the same skills,
+    // extensions, prompt templates, tool allowlist and system prompt — plus
+    // pi-outpost's own tools, which exist nowhere else and travel as an extension.
+    const toolsExtension = await resolveToolsExtension();
+    return await createRpcRuntime({
+      settings: config.agentRuntime,
+      cwd,
+      agentDir: AGENT_DIR,
+      sessionDir: SESSION_DIR,
+      resourceArgs: [
+        ...rpcResourceArgs(config, {
+          bundledSkills: config.noSkills ? [] : BUNDLED_SKILLS,
+          appendSystemPrompt: composeAppendSystemPrompt(config),
+        }),
+        "--extension",
+        toolsExtension,
+      ],
+      env: {
+        [TOOLS_ENV_VAR]: JSON.stringify({
+          cwd,
+          maxBytes: {
+            pdf: config.pdf.maxBytes,
+            docx: config.docx.maxBytes,
+            xlsx: config.xlsx.maxBytes,
+            pptx: config.pptx.maxBytes,
+            structuredExchange: config.structuredExchange.maxBytes,
+          },
+        } satisfies PiOutpostToolsSettings),
+      },
+    });
+  }
+  return await createEmbeddedRuntime({
+    factory: createRuntime,
+    cwd,
+    agentDir: AGENT_DIR,
+    sessionManager: SessionManager.create(cwd, SESSION_DIR),
+    onModelFallback: (message) => console.warn(`[pi] ${message}`),
+  });
+}
+
+/**
+ * The server's own project. A failure here is fatal on purpose — falling back to
+ * the other runtime would silently run something the operator did not configure —
+ * whereas a failure opening a *second* project is reported to the client that
+ * asked and leaves the server running.
+ */
 const builtRuntime: AgentRuntime = await (async () => {
   try {
-    if (config.agentRuntime.mode === "rpc") {
-      // The child builds its own toolset, so everything the embedded runtime hands
-      // to the SDK has to be said on the command line instead: the same skills,
-      // extensions, prompt templates, tool allowlist and system prompt — plus
-      // pi-outpost's own tools, which exist nowhere else and travel as an extension.
-      const toolsExtension = await resolveToolsExtension();
-      return await createRpcRuntime({
-        settings: config.agentRuntime,
-        cwd: workspace.settings.cwd,
-        agentDir: AGENT_DIR,
-        sessionDir: SESSION_DIR,
-        resourceArgs: [
-          ...rpcResourceArgs(config, {
-            bundledSkills: config.noSkills ? [] : BUNDLED_SKILLS,
-            appendSystemPrompt: composeAppendSystemPrompt(config),
-          }),
-          "--extension",
-          toolsExtension,
-        ],
-        env: {
-          [TOOLS_ENV_VAR]: JSON.stringify({
-            cwd: workspace.settings.cwd,
-            maxBytes: {
-              pdf: config.pdf.maxBytes,
-              docx: config.docx.maxBytes,
-              xlsx: config.xlsx.maxBytes,
-              pptx: config.pptx.maxBytes,
-              structuredExchange: config.structuredExchange.maxBytes,
-            },
-          } satisfies PiOutpostToolsSettings),
-        },
-      });
-    }
-    return await createEmbeddedRuntime({
-      factory: createRuntime,
-      cwd: workspace.settings.cwd,
-      agentDir: AGENT_DIR,
-      sessionManager: SessionManager.create(workspace.settings.cwd, SESSION_DIR),
-      onModelFallback: (message) => console.warn(`[pi] ${message}`),
-    });
+    return await buildRuntimeFor(workspace.settings.cwd);
   } catch (error) {
     complain(error);
     await app.close();
@@ -947,8 +980,32 @@ workspace.attachRuntime(builtRuntime);
  * and what makes "already open" a lookup rather than a duplicate.
  */
 const workspaces = new WorkspaceRegistry();
-// Nothing to race with at boot: this is the first, so it is its own winner.
+// Nothing to race with at boot: this is the first, so it is its own winner — and
+// the default, which is what an unnamed connection and a pinned embed both get.
 workspaces.add(workspace);
+
+/**
+ * Projects opened in an earlier run. Their resources are built, their sessions are
+ * not: startup time must not grow with the number of open projects, and a project
+ * nobody opens in this run should never cost a model, extension and skill load.
+ *
+ * A project that has gone missing is dropped with a warning rather than being
+ * fatal: a server must still start when a directory was moved or unmounted, and
+ * the one it booted with is always there.
+ */
+for (const root of config.openProjects) {
+  if (workspaces.get(root)) continue;
+  try {
+    const restored = await Workspace.create({
+      ...workspaceOptions({ cwd: root }),
+      onDirectoryChanged: (relPath) => broadcast(restored, { type: "directory_changed", path: relPath }),
+      createRuntime: (settings) => buildRuntimeFor(settings.cwd),
+    });
+    workspaces.add(restored);
+  } catch (error) {
+    console.warn(`[pi] could not reopen ${root}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 workspace.workPlan = await loadWorkPlan(workspace.agent.snapshot().sessionFile);
 workspace.workPlanSessionFile = workspace.agent.snapshot().sessionFile;
@@ -959,7 +1016,7 @@ workspace.workPlanSessionFile = workspace.agent.snapshot().sessionFile;
  * copying and announcing its inherited plan. Without the queue, a late ENOENT read
  * could overwrite the copied plan with null.
  */
-function queueWorkPlanSessionSync(): Promise<void> {
+function queueWorkPlanSessionSync(workspace: Workspace): Promise<void> {
   const sessionFile = workspace.agent.snapshot().sessionFile;
   workspace.workPlanSync = workspace.workPlanSync.catch(() => {}).then(async () => {
     const inheritanceSource = workspace.workPlanInheritanceSource;
@@ -1000,16 +1057,16 @@ function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
   workspace.workPlanSync.catch(reportError);
 }
 
-function modelName(): string {
+function modelName(workspace: Workspace): string {
   const model = workspace.agent.snapshot().model;
   return model ? `${model.provider}/${model.id}` : "unknown";
 }
 
-function contextUsage(): ContextUsage | undefined {
+function contextUsage(workspace: Workspace): ContextUsage | undefined {
   return workspace.agent.snapshot().contextUsage;
 }
 
-function availableModels(): ModelChoice[] {
+function availableModels(workspace: Workspace): ModelChoice[] {
   const models = workspace.agent.snapshot().models;
   if (!config.allowedModels) return models;
   const allowed = config.allowedModels;
@@ -1025,7 +1082,7 @@ function availableModels(): ModelChoice[] {
  * list, which conflates the two.
  */
 function credentialStatus(): CredentialStatus {
-  const usableModel = availableModels().length > 0;
+  const usableModel = availableModels(workspace).length > 0;
   return {
     providers: workspace.agent.snapshot().providers,
     usableModel,
@@ -1042,7 +1099,7 @@ function credentialStatus(): CredentialStatus {
  * without a result yet.
  */
 /** User messages persisted on the current branch, oldest first — lets the UI edit a past prompt. */
-function branchUserEntries(): { entryId: string; text: string }[] {
+function branchUserEntries(workspace: Workspace): { entryId: string; text: string }[] {
   return workspace.agent
     .contextEntries()
     .filter((e) => e.type === "message" && e.message?.role === "user")
@@ -1103,17 +1160,18 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     // Absent while a single unnamed project is open: an existing client meets no
     // selector where there is nothing to select.
     ...(workspaces.size > 1 ? { workspace: workspaceInfo(workspace), workspaces: workspaceInfos() } : {}),
+    ...(config.workspaceLock ? { workspaceLocked: true } : {}),
     sessionId: state.sessionId,
-    model: modelName(),
+    model: modelName(workspace),
     thinkingLevel: state.thinkingLevel,
     isStreaming: state.isStreaming,
     items: historyToItems(
       state.messages as never,
       state.isStreaming,
-      branchUserEntries().map((entry) => entry.entryId),
+      branchUserEntries(workspace).map((entry) => entry.entryId),
       workspace.browserRoot,
     ),
-    models: availableModels(),
+    models: availableModels(workspace),
     commands: state.commands,
     contextUsage: state.contextUsage,
     // A runtime replacement is synchronous but its sidecar read is not. Never
@@ -1197,7 +1255,7 @@ function broadcast(workspace: Workspace, message: ServerMessage): void {
  * No call site yet, and that is the finding rather than an oversight: every message
  * broadcast today carries one project's content. The one that looked server-wide,
  * `credentials_changed`, mixes a server-wide fact (which providers are configured)
- * with a project-scoped one (`modelName()`, this session's model) — sending it to
+ * with a project-scoped one (`modelName(workspace)`, this session's model) — sending it to
  * every client would tell one project's viewer that another project changed model.
  * Splitting that payload is a protocol change, not a routing choice.
  *
@@ -1271,18 +1329,25 @@ async function announceFileChange(args: unknown): Promise<void> {
  * one is running — a divergence here is what "the frontend is unaware of the
  * runtime" would cost.
  */
-function onRuntimeEvent(event: RuntimeEvent): void {
+/**
+ * Route one project's runtime events to the clients watching it.
+ *
+ * Takes its workspace rather than closing over the server's: a second project's
+ * session emits through this too, and a closure over the boot workspace would send
+ * its stream to the wrong audience — or to nobody.
+ */
+function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
   switch (event.type) {
     case "agent_start":
       broadcast(workspace, { type: "agent_start" });
       break;
     case "agent_end": {
       broadcast(workspace, { type: "agent_end" });
-      const usage = contextUsage();
+      const usage = contextUsage(workspace);
       if (usage) broadcast(workspace, { type: "context_usage", usage });
       // The turn is persisted now: hand the client the entries so the bubbles it
       // echoed optimistically become editable (edit_prompt targets an entry id).
-      broadcast(workspace, { type: "user_entries", entries: branchUserEntries() });
+      broadcast(workspace, { type: "user_entries", entries: branchUserEntries(workspace) });
       broadcast(workspace, { type: "tree", roots: buildTree() });
       // Off the prompt path on purpose: a slow title must never delay a reply
       void maybeNameSession();
@@ -1308,7 +1373,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
           message: failure,
           assistantMessage: event.message,
           entries: workspace.agent.contextEntries(),
-          contextUsage: contextUsage(),
+          contextUsage: contextUsage(workspace),
         });
       }
       // After the census, so a turn does not appear in its own run-up: every
@@ -1404,11 +1469,11 @@ function onRuntimeEvent(event: RuntimeEvent): void {
           source: "compaction",
           message: event.errorMessage,
           entries: workspace.agent.contextEntries(),
-          contextUsage: contextUsage(),
+          contextUsage: contextUsage(workspace),
         });
       }
       noteCompaction("end", event.errorMessage);
-      const usage = contextUsage();
+      const usage = contextUsage(workspace);
       if (usage) broadcast(workspace, { type: "context_usage", usage });
       break;
     }
@@ -1416,7 +1481,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       // The runtime has already rebound itself; renderers may belong to a new
       // extension runner, so refresh the HTML bridge before the snapshot goes out.
       refreshExtensionRender();
-      void queueWorkPlanSessionSync();
+      void queueWorkPlanSessionSync(workspace);
       break;
     case "extension_ui_request":
       broadcast(workspace, event.request);
@@ -1430,7 +1495,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
           source: "runtime",
           message: event.message,
           entries: workspace.agent.contextEntries(),
-          contextUsage: contextUsage(),
+          contextUsage: contextUsage(workspace),
         });
       }
       break;
@@ -1448,7 +1513,7 @@ function onRuntimeEvent(event: RuntimeEvent): void {
   }
 }
 
-workspace.agent.subscribe(onRuntimeEvent);
+workspace.agent.subscribe((event) => onRuntimeEvent(workspace, event));
 refreshExtensionRender();
 
 // --- Client message handling -----------------------------------------------------
@@ -1584,6 +1649,7 @@ async function handleSetCredential(socket: WebSocket, provider: string, apiKey: 
  * The running turn (if any) continues under the old sandbox.
  */
 async function handleUpdateConfig(
+  workspace: Workspace,
   socket: WebSocket,
   update: { sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }; userSkillPaths?: string[] },
 ): Promise<void> {
@@ -1670,7 +1736,10 @@ async function handleUpdateConfig(
     // Roots, git, watcher and toolset in one call: every watched path was relative
     // to the root that just moved, and the workspace rebuilds them together or not
     // at all — a half-applied boundary is the failure this used to risk.
-    await workspace.rebuildResources({ cwd: config.cwd, sandbox: config.sandbox });
+    // This workspace's own cwd, not the server's: Settings edits the project the
+    // connection is looking at. `config.sandbox` stays the server's default, which
+    // is what a project opened later inherits.
+    await workspace.rebuildResources({ cwd: workspace.settings.cwd, ...(config.sandbox ? { sandbox: config.sandbox } : {}) });
     // Replace the current session so the new runtime picks up the updated tools
     // and re-runs skill discovery over the new paths.
     await rebuildTools.call(workspace.agent);
@@ -1688,6 +1757,196 @@ async function handleUpdateConfig(
     }
   } finally {
     replacingSession = false;
+  }
+}
+
+
+/**
+ * Opening a second project is wired but not yet safe to enable.
+ *
+ * 46 top-level handlers still read the module-level `workspace` rather than the
+ * connection's — `handleClientMessage` shadows it for its own body, but the helpers
+ * it calls capture the boot workspace. Two consequences, one of them a boundary
+ * failure rather than a bug:
+ *
+ *  - `createRuntime` builds every session with `workspace.sandboxedTools`, so a
+ *    second project would be handed tools confined to the FIRST project's root —
+ *    an agent in B able to read and write A. That is the sandbox not holding.
+ *  - prompts, tree, sessions and git from a client bound to B would be served by
+ *    A's runtime and broadcast to A's clients.
+ *
+ * The remedy is threading the bound workspace through those helpers, which is the
+ * rest of this group's work. Until then this refuses rather than shipping a switch
+ * that quietly crosses the sandbox: everything else here — the persisted set, the
+ * protocol, the lock, the lazy start — is finished and exercised by the suite.
+ */
+const MULTI_PROJECT_OPEN_ENABLED = false;
+
+/**
+ * Open a directory as a project.
+ *
+ * Persist before building, and give up on the whole thing if the write fails: a
+ * project the user watched appear must still be there at the next start, and a set
+ * that cannot be saved leaves the server exactly as it was. Same order, and the
+ * same reason, as handleUpdateConfig.
+ */
+async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<void> {
+  if (!MULTI_PROJECT_OPEN_ENABLED) {
+    send(socket, { type: "workspace_error", message: "Opening a second project is not enabled in this build" });
+    return;
+  }
+  if (config.workspaceLock) {
+    send(socket, { type: "workspace_error", message: "This server is pinned to one project" });
+    return;
+  }
+  let root: string;
+  try {
+    root = await fs.realpath(path.resolve(rawRoot));
+    const stats = await fs.stat(root);
+    if (!stats.isDirectory()) throw new Error("not a directory");
+  } catch (error) {
+    send(socket, { type: "workspace_error", message: `Cannot open ${rawRoot}: ${error instanceof Error ? error.message : String(error)}` });
+    return;
+  }
+
+  // Already open is a lookup, not a duplicate: two workspaces sharing a root would
+  // share a session store while believing they did not.
+  const already = workspaces.get(root);
+  if (already) {
+    clients.set(socket, already);
+    await ensureStarted(already);
+    send(socket, { type: "workspace_switched", ...snapshot(already) });
+    return;
+  }
+
+  try {
+    persistEditableSettings(config, { openProjects: [...config.openProjects, root] });
+  } catch (error) {
+    reportError(error);
+    send(socket, {
+      type: "workspace_error",
+      message: error instanceof ConfigWriteError ? error.message : `Could not save the open projects: ${String(error)}`,
+    });
+    return;
+  }
+  config.openProjects = [...config.openProjects, root];
+
+  let opened: Workspace;
+  try {
+    opened = await Workspace.open({
+      ...workspaceOptions({ cwd: root }),
+      onDirectoryChanged: (relPath) => broadcast(opened, { type: "directory_changed", path: relPath }),
+      createRuntime: (settings) => buildRuntimeFor(settings.cwd),
+    });
+  } catch (error) {
+    // The set on disk now names a project that would not build. Put it back rather
+    // than leaving a server that fails the same way at every start.
+    config.openProjects = config.openProjects.filter((p) => p !== root);
+    try {
+      persistEditableSettings(config, { openProjects: config.openProjects });
+    } catch (writeError) {
+      reportError(writeError);
+    }
+    reportError(error);
+    send(socket, { type: "workspace_error", message: `Could not open ${root}: ${error instanceof Error ? error.message : String(error)}` });
+    return;
+  }
+
+  // A concurrent open of the same directory may have won while this one built.
+  const registered = workspaces.add(opened);
+  if (registered !== opened) await opened.stop();
+  clients.set(socket, registered);
+  send(socket, { type: "workspace_switched", ...snapshot(registered) });
+  announceWorkspaceActivity();
+}
+
+/**
+ * Close an open project. Its sessions on disk are left alone, so reopening the
+ * same directory finds them again.
+ */
+async function handleCloseProject(socket: WebSocket, rawRoot: string): Promise<void> {
+  if (config.workspaceLock) {
+    send(socket, { type: "workspace_error", message: "This server is pinned to one project" });
+    return;
+  }
+  const target = workspaces.get(path.resolve(rawRoot));
+  if (!target) {
+    send(socket, { type: "workspace_error", message: `No open project at ${rawRoot}` });
+    return;
+  }
+  if (workspaces.size < 2) {
+    send(socket, { type: "workspace_error", message: "The last open project cannot be closed" });
+    return;
+  }
+  // Refused rather than queued behind the turn: cancelling someone's work to
+  // satisfy a close is worse than asking them to stop it first.
+  if (target.isBusy()) {
+    send(socket, { type: "workspace_error", message: `${path.basename(target.root)} is working — stop the turn before closing it` });
+    return;
+  }
+
+  const remaining = config.openProjects.filter((p) => p !== target.root);
+  try {
+    persistEditableSettings(config, { openProjects: remaining });
+  } catch (error) {
+    reportError(error);
+    send(socket, {
+      type: "workspace_error",
+      message: error instanceof ConfigWriteError ? error.message : `Could not save the open projects: ${String(error)}`,
+    });
+    return;
+  }
+  config.openProjects = remaining;
+  workspaces.remove(target.root);
+
+  // Move anyone watching it before the session goes: a client left bound to a
+  // stopped workspace would reach `agent` and throw on its next message.
+  const fallback = workspaces.default;
+  if (fallback) {
+    await ensureStarted(fallback);
+    for (const [socketOnIt, bound] of clients) {
+      if (bound !== target) continue;
+      clients.set(socketOnIt, fallback);
+      send(socketOnIt, { type: "workspace_switched", ...snapshot(fallback) });
+    }
+  }
+  await target.stop();
+  announceWorkspaceActivity();
+}
+
+
+/**
+ * Make sure a project has a session, building it on first use.
+ *
+ * This is the lazy start: a project restored from the persisted set has its
+ * resources but no runtime, so startup cost does not grow with the number of open
+ * projects. Whoever is about to show that project pays for the session instead —
+ * and only once.
+ *
+ * Concurrent callers share one build rather than racing two sessions onto the same
+ * directory, which would mean two writers on one session store.
+ */
+const starting = new Map<string, Promise<void>>();
+
+async function ensureStarted(target: Workspace): Promise<void> {
+  if (target.started) return;
+  const inFlight = starting.get(target.root);
+  if (inFlight) return inFlight;
+  const build = (async () => {
+    const runtime = await buildRuntimeFor(target.settings.cwd);
+    target.attachRuntime(runtime);
+    runtime.subscribe((event) => onRuntimeEvent(target, event));
+    target.workPlan = await loadWorkPlan(runtime.snapshot().sessionFile);
+    target.workPlanSessionFile = runtime.snapshot().sessionFile;
+  })();
+  starting.set(target.root, build);
+  // Tell everyone it is starting, and again when it is ready or failed.
+  announceWorkspaceActivity();
+  try {
+    await build;
+  } finally {
+    starting.delete(target.root);
+    announceWorkspaceActivity();
   }
 }
 
@@ -1736,9 +1995,9 @@ async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDec
  */
 async function adoptUsableModel(socket: WebSocket): Promise<void> {
   const announce = () =>
-    broadcast(workspace, { type: "credentials_changed", models: availableModels(), model: modelName(), credentials: credentialStatus() });
+    broadcast(workspace, { type: "credentials_changed", models: availableModels(workspace), model: modelName(workspace), credentials: credentialStatus() });
 
-  const choices = availableModels();
+  const choices = availableModels(workspace);
   if (choices.length === 0) {
     send(socket, {
       type: "error",
@@ -2580,6 +2839,10 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
   switch (message.type) {
     case "switch_workspace": {
       if (typeof message.root !== "string") return;
+      if (config.workspaceLock) {
+        send(socket, { type: "workspace_error", message: "This server is pinned to one project" });
+        return;
+      }
       const target = workspaces.get(message.root);
       // Only a project already open. A path named here must never open one: that is
       // open_project's job, and it persists the open set before anything is built.
@@ -2591,9 +2854,22 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       // left keeps its session, its watcher and any turn in flight — which is what
       // lets an agent keep working while the user looks somewhere else.
       clients.set(socket, target);
-      send(socket, { type: "workspace_switched", ...snapshot(target) });
+      ensureStarted(target)
+        .then(() => send(socket, { type: "workspace_switched", ...snapshot(target) }))
+        .catch((error: unknown) => {
+          reportError(error);
+          send(socket, { type: "workspace_error", message: `Could not start ${path.basename(target.root)}: ${error instanceof Error ? error.message : String(error)}` });
+        });
       return;
     }
+    case "open_project":
+      if (typeof message.root !== "string") return;
+      handleOpenProject(socket, message.root).catch(reportError);
+      return;
+    case "close_project":
+      if (typeof message.root !== "string") return;
+      handleCloseProject(socket, message.root).catch(reportError);
+      return;
     case "prompt": {
       if (typeof message.text !== "string") return;
       // A prompt landing mid-navigation would append under the OLD leaf, and the
@@ -2621,7 +2897,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       const { provider, id } = message;
       workspace.agent
         .setModel(provider, id)
-        .then((model) => broadcast(workspace, { type: "model_changed", model: modelName(), reasoning: model.reasoning ?? false }))
+        .then((model) => broadcast(workspace, { type: "model_changed", model: modelName(workspace), reasoning: model.reasoning ?? false }))
         .catch((error) => {
           if (!refuseUnsupported(socket, error)) {
             send(socket, { type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -2853,7 +3129,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         send(socket, { type: "error", message: "Nothing to update" });
         return;
       }
-      handleUpdateConfig(socket, {
+      handleUpdateConfig(workspace, socket, {
         ...(message.sandbox ? { sandbox: message.sandbox } : {}),
         ...(message.userSkillPaths ? { userSkillPaths: message.userSkillPaths } : {}),
       }).catch(reportError);
@@ -2867,7 +3143,14 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
 handleWsConnection = (socket, workspaceRoot) => {
   const bound = (workspaceRoot ? workspaces.get(workspaceRoot) : undefined) ?? workspaces.default ?? workspace;
   clients.set(socket, bound);
-  send(socket, { type: "hello", ...snapshot(bound) });
+  // A named project restored from the persisted set has no session yet. Build it
+  // before the snapshot, which is what asks the runtime for its state.
+  ensureStarted(bound)
+    .then(() => send(socket, { type: "hello", ...snapshot(bound) }))
+    .catch((error: unknown) => {
+      reportError(error);
+      send(socket, { type: "workspace_error", message: `Could not start ${path.basename(bound.root)}: ${error instanceof Error ? error.message : String(error)}` });
+    });
   socket.on("message", (data: Buffer) => handleClientMessage(socket, data.toString()));
   socket.on("close", () => {
     clients.delete(socket);
@@ -2891,7 +3174,7 @@ getHealth = () => (workspace.agent.ok ? { ok: true, sessionId: workspace.agent.s
 
 console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
 console.log(`[pi] agent runtime ${workspace.agent.kind}`);
-console.log(`[pi] model ${modelName()} · cwd ${workspace.settings.cwd} · agentDir ${AGENT_DIR}`);
+console.log(`[pi] model ${modelName(workspace)} · cwd ${workspace.settings.cwd} · agentDir ${AGENT_DIR}`);
 const runtimeTools = workspace.agent.snapshot().tools;
 if (runtimeTools) {
   console.log(`[pi] tools active: ${runtimeTools.filter((tool) => tool.active).map((tool) => tool.name).join(", ") || "(none)"}`);

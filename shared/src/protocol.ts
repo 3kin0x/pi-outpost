@@ -349,6 +349,11 @@ export interface SessionSnapshot {
    */
   workspace?: WorkspaceInfo;
   /**
+   * Opening, closing and switching are forbidden by configuration. The client
+   * offers no affordance for them — this is what pins an embedded widget.
+   */
+  workspaceLocked?: boolean;
+  /**
    * Every open project, this one included. Absent for the same reason as above.
    * Kept current by `workspace_activity`, which reaches every client regardless of
    * what it is bound to.
@@ -598,6 +603,19 @@ export type ClientMessage =
    * or rebuilt, and a turn running in the project being left runs to completion.
    */
   | { type: "switch_workspace"; root: string }
+  /**
+   * Open a directory as a project. The path comes from the same picker the sandbox
+   * root uses (`browse_server_directory`), so the boundary is the configured lock
+   * rather than an enumeration of allowed roots — exactly as it already is for
+   * moving the sandbox.
+   */
+  | { type: "open_project"; root: string }
+  /**
+   * Close an open project: its workspace stops, it leaves the open set, and its
+   * session history on disk is untouched. Refused while its agent is streaming,
+   * and refused for the last remaining project.
+   */
+  | { type: "close_project"; root: string }
   | { type: "prompt"; text: string; images?: WireImage[] }
   | { type: "abort" }
   | { type: "set_model"; provider: string; id: string }

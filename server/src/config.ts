@@ -276,6 +276,22 @@ export interface AppConfig {
   sandbox?: SandboxConfig;
   /** Which sandbox fields the user's settings menu may not change. */
   sandboxLocks?: SandboxLocks;
+  /**
+   * Projects held open, by resolved root. Written by the server when one is opened
+   * or closed — not hand-authored: it is a record of what the user did, the way
+   * `userSkillPaths` is, and belongs to the interface rather than the deployment.
+   *
+   * Empty or absent means the single-project server this has always been: `cwd`
+   * alone, and no selector anywhere.
+   */
+  openProjects: string[];
+  /**
+   * Forbid opening, closing and switching projects, binding the server to one.
+   * Follows the `sandboxLocks` convention: the deployment decides, and the
+   * interface offers no affordance for what it forbids. This is what an embedding
+   * host sets to pin its widget to a project.
+   */
+  workspaceLock?: boolean;
   /** Tool name allowlist (non-sandbox mode), e.g. ["read","grep","find","ls"]. */
   tools?: string[];
   /** Skip loading extensions entirely. */
@@ -555,6 +571,7 @@ export function loadConfig(
   const config: AppConfig = {
     configFile: filePath,
     cwd: launchDir,
+    openProjects: [],
     agentRuntime: {
       mode: "embedded",
       args: [],
@@ -654,6 +671,14 @@ export function loadConfig(
       fail(`sandbox.writableRoot does not exist: ${config.sandbox.writableRoot}`);
     }
   }
+
+  const openProjects = optionalStringArray(raw, "openProjects");
+  if (openProjects !== undefined) {
+    // Resolved against the config file's directory, like every other configured
+    // path, so a relative entry means the same thing here as it does there.
+    config.openProjects = openProjects.map((p) => path.resolve(path.dirname(filePath), p));
+  }
+  config.workspaceLock = optionalBoolean(raw, "workspaceLock", false);
 
   if (raw.sandboxLocks !== undefined) {
     const locks = asObject(raw.sandboxLocks, "sandboxLocks");
@@ -980,6 +1005,8 @@ export interface EditableSettings {
    * The operator's `skillPaths` are never written here and never removed.
    */
   userSkillPaths?: string[];
+  /** Projects held open (absolute, resolved). Absent leaves them untouched. */
+  openProjects?: string[];
 }
 
 /**
@@ -1062,6 +1089,10 @@ export function persistEditableSettings(
   // Written under its own key: `skillPaths` belongs to whoever wrote the file, and
   // an apply must never be able to drop one of theirs.
   if (update.userSkillPaths) raw.userSkillPaths = update.userSkillPaths.map((p) => path.resolve(p));
+  // The last project cannot be closed, so an empty array never reaches here — but
+  // it is written rather than deleted if it does, since "no projects open" and "this
+  // key was never set" mean the same thing to the loader.
+  if (update.openProjects) raw.openProjects = update.openProjects.map((p) => path.resolve(p));
 
   const serialized = `${JSON.stringify(raw, null, 2)}\n`;
   const candidate = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
