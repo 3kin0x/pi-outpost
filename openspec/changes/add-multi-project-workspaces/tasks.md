@@ -16,12 +16,12 @@
 
 ## 3. Protocol and connection binding
 
-- [ ] 3.1 Add workspace addressing to `ClientMessage`/`ServerMessage` in `shared/src/protocol.ts`
-- [ ] 3.2 Add the open-project list and per-workspace activity state to the snapshot
-- [ ] 3.3 Bind a `/ws` connection to the workspace named in the upgrade, defaulting to the server's default workspace when none is named
-- [ ] 3.4 Add `switch_workspace`: rebind the socket, reply with that workspace's snapshot, disturb nothing else
-- [ ] 3.5 Scope session listing, opening, renaming and searching to the connection's workspace; refuse a session file belonging to another
-- [ ] 3.6 Update the `@pi-outpost/embed` published type surface for the protocol change
+- [x] 3.1 Add workspace addressing to `ClientMessage`/`ServerMessage` in `shared/src/protocol.ts`
+- [x] 3.2 Add the open-project list and per-workspace activity state to the snapshot
+- [x] 3.3 Bind a `/ws` connection to the workspace named in the upgrade, defaulting to the server's default workspace when none is named
+- [x] 3.4 Add `switch_workspace`: rebind the socket, reply with that workspace's snapshot, disturb nothing else
+- [x] 3.5 Scope session listing, opening, renaming and searching to the connection's workspace; refuse a session file belonging to another
+- [x] 3.6 Update the `@pi-outpost/embed` published type surface for the protocol change
 
 ## 4. Opening and closing projects
 

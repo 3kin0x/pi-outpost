@@ -100,6 +100,15 @@ export class Workspace {
   workPlanInheritanceSource: string | undefined;
 
   /**
+   * A turn here is blocked on a question only the user can answer.
+   *
+   * Stored rather than derived: the runtime knows a request is outstanding, but not
+   * that it is one a human must resolve, and a client bound to another project must
+   * be able to learn this without subscribing to the conversation carrying it.
+   */
+  needsAttention = false;
+
+  /**
    * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
    * server starts before the agent (branding must not wait behind model, extension
    * and skill loading), and a workspace's session is built on first open rather

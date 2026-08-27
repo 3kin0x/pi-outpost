@@ -29,6 +29,8 @@ import {
   type ModelChoice,
   type ServerMessage,
   type SessionSnapshot,
+  type WorkspaceActivity,
+  type WorkspaceInfo,
   type SessionSummary,
   THINKING_LEVELS,
   type TreeNode,
@@ -367,7 +369,7 @@ function tokenValid(candidate: unknown): boolean {
 /** WS close code for a bad/missing token (app-reserved range): tells the client to show the token screen instead of retrying. */
 const WS_CLOSE_UNAUTHORIZED = 4401;
 
-let handleWsConnection: (socket: WebSocket) => void = (socket) => {
+let handleWsConnection: (socket: WebSocket, workspaceRoot?: string) => void = (socket) => {
   socket.close(1013, "starting up");
 };
 let getHealth: () => { ok: boolean; sessionId?: string } = () => ({ ok: false });
@@ -491,13 +493,18 @@ app.get("/ws", { websocket: true }, (socket, req) => {
   // Browsers cannot set headers on WebSockets, so the token rides a query
   // parameter. Close AFTER the handshake with an app code — a pre-handshake
   // rejection reads as an opaque 1006 that the client can't act on.
-  const token = new URL(req.url ?? "/ws", "http://localhost").searchParams.get("token");
+  const url = new URL(req.url ?? "/ws", "http://localhost");
+  const token = url.searchParams.get("token");
   if (!tokenValid(token ?? undefined)) {
     console.warn(`[server] rejected ws connection with bad or missing token from ${req.ip}`);
     socket.close(WS_CLOSE_UNAUTHORIZED, "unauthorized");
     return;
   }
-  handleWsConnection(socket);
+  // Which project this connection watches. An unknown or absent name lands on the
+  // default rather than failing: a client from before this existed names nothing,
+  // and an embed host pinned to a project that has since closed should still get a
+  // working widget instead of a dead socket.
+  handleWsConnection(socket, url.searchParams.get("workspace") ?? undefined);
 });
 app.get("/health", (req, reply) => {
   const health = getHealth();
@@ -968,7 +975,7 @@ function queueWorkPlanSessionSync(): Promise<void> {
     if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
     workspace.workPlan = plan;
     workspace.workPlanSessionFile = sessionFile;
-    broadcast(workspace, { type: "session_replaced", ...snapshot() });
+    broadcast(workspace, { type: "session_replaced", ...snapshot(workspace) });
     if (inherited) broadcast(workspace, { type: "work_plan_changed", workPlan: plan });
     console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
   });
@@ -1042,13 +1049,60 @@ function branchUserEntries(): { entryId: string; text: string }[] {
     .map((e) => ({ entryId: e.id, text: contentText(e.message!.content as never) }));
 }
 
+/**
+ * How a project appears in the selector.
+ *
+ * `activity` is derived, never stored: a stored copy is a second source of truth
+ * that drifts the first time a turn ends without anyone updating it.
+ */
+function workspaceInfo(target: Workspace): WorkspaceInfo {
+  return {
+    root: target.root,
+    name: path.basename(target.root),
+    activity: workspaceActivity(target),
+    ...(target.needsAttention ? { needsAttention: true } : {}),
+  };
+}
+
+function workspaceActivity(target: Workspace): WorkspaceActivity {
+  if (!target.started) return "stopped";
+  if (target.needsAttention) return "waiting";
+  return target.isBusy() ? "working" : "idle";
+}
+
+function workspaceInfos(): WorkspaceInfo[] {
+  return [...workspaces.all()].map(workspaceInfo);
+}
+
+/**
+ * Tell every client what each project is doing — including the clients bound
+ * elsewhere, which is the whole point: an agent working in a project nobody is
+ * watching is invisible otherwise.
+ *
+ * Silent while a single project is open: there is no selector to feed.
+ */
+function announceWorkspaceActivity(): void {
+  if (workspaces.size < 2) return;
+  broadcastServerWide({ type: "workspace_activity", workspaces: workspaceInfos() });
+}
+
 /** Sandbox paths to announce after updating. */
 let lastAnnouncedSandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | undefined;
 
-function snapshot(): SessionSnapshot {
+/**
+ * Describe one project's state for a client bound to it.
+ *
+ * Takes its workspace rather than reading the module binding: a snapshot is the
+ * answer to "what is THIS connection looking at", and the two come apart as soon
+ * as the server holds a second project.
+ */
+function snapshot(workspace: Workspace): SessionSnapshot {
   const state = workspace.agent.snapshot();
   return {
     branding: config.branding,
+    // Absent while a single unnamed project is open: an existing client meets no
+    // selector where there is nothing to select.
+    ...(workspaces.size > 1 ? { workspace: workspaceInfo(workspace), workspaces: workspaceInfos() } : {}),
     sessionId: state.sessionId,
     model: modelName(),
     thinkingLevel: state.thinkingLevel,
@@ -1623,7 +1677,7 @@ async function handleUpdateConfig(
     await workspace.workPlanSync;
     // Only now: the settings are on disk and the session in front of the user was
     // built from them.
-    send(socket, { type: "update_config_ack", ...snapshot() });
+    send(socket, { type: "update_config_ack", ...snapshot(workspace) });
   } catch (error) {
     reportError(error);
     send(socket, { type: "error", message: `Settings saved, but the session could not be rebuilt: ${error instanceof Error ? error.message : String(error)}` });
@@ -1799,7 +1853,7 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
       send(socket, { type: "error", message: "Edit cancelled — the conversation was not rewound" });
       return;
     }
-    broadcast(workspace, { type: "session_replaced", ...snapshot() });
+    broadcast(workspace, { type: "session_replaced", ...snapshot(workspace) });
   } finally {
     replacingSession = false;
   }
@@ -1811,13 +1865,13 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
  * returns for this cwd (authoritative allowlist — no path traversal, and no
  * reading/persisting to attacker-chosen files via switch_session).
  */
-async function isKnownSessionPath(path: string): Promise<boolean> {
+async function isKnownSessionPath(workspace: Workspace, path: string): Promise<boolean> {
   const sessions = await SessionManager.list(workspace.settings.cwd, SESSION_DIR);
   return sessions.some((info) => info.path === path);
 }
 
 /** Delete a saved session file (allowlisted path, never the live one). */
-async function deleteSession(socket: WebSocket, path: string): Promise<void> {
+async function deleteSession(workspace: Workspace, socket: WebSocket, path: string): Promise<void> {
   const live = liveSessionMatch(path);
   if (live === "live") {
     send(socket, { type: "error", message: "Cannot delete the active session" });
@@ -1827,18 +1881,18 @@ async function deleteSession(socket: WebSocket, path: string): Promise<void> {
     send(socket, { type: "error", message: `${UNKNOWN_LIVE_SESSION} — deleting it could remove the running conversation` });
     return;
   }
-  if (!(await isKnownSessionPath(path))) {
+  if (!(await isKnownSessionPath(workspace, path))) {
     send(socket, { type: "error", message: "Unknown session" });
     return;
   }
   await fs.unlink(path);
   await deleteWorkPlan(path);
   invalidateSessionScan();
-  await listSessions(socket);
+  await listSessions(workspace, socket);
 }
 
-async function switchSession(socket: WebSocket, path: string): Promise<void> {
-  if (!(await isKnownSessionPath(path))) {
+async function switchSession(workspace: Workspace, socket: WebSocket, path: string): Promise<void> {
+  if (!(await isKnownSessionPath(workspace, path))) {
     send(socket, { type: "error", message: "Unknown session" });
     return;
   }
@@ -1874,12 +1928,12 @@ async function sessionList(): Promise<SessionSummary[]> {
     .map((info) => toSummary(info));
 }
 
-async function listSessions(socket: WebSocket): Promise<void> {
+async function listSessions(workspace: Workspace, socket: WebSocket): Promise<void> {
   send(socket, { type: "sessions", sessions: await sessionList() });
 }
 
 /** A name change is visible to everyone: all clients watch the same agent. */
-async function broadcastSessions(): Promise<void> {
+async function broadcastSessions(workspace: Workspace): Promise<void> {
   broadcast(workspace, { type: "sessions", sessions: await sessionList() });
 }
 
@@ -1888,8 +1942,8 @@ async function broadcastSessions(): Promise<void> {
  * can be renamed, not just the live one — but the path comes from a client, so it
  * goes through the same allowlist as switch/delete: no writing to arbitrary files.
  */
-async function renameSession(socket: WebSocket, path: string, rawName: string): Promise<void> {
-  if (!(await isKnownSessionPath(path))) {
+async function renameSession(workspace: Workspace, socket: WebSocket, path: string, rawName: string): Promise<void> {
+  if (!(await isKnownSessionPath(workspace, path))) {
     send(socket, { type: "error", message: "Unknown session" });
     return;
   }
@@ -1908,7 +1962,7 @@ async function renameSession(socket: WebSocket, path: string, rawName: string): 
     SessionManager.open(path, SESSION_DIR, workspace.settings.cwd).appendSessionInfo(name);
   }
   invalidateSessionScan();
-  await broadcastSessions();
+  await broadcastSessions(workspace);
 }
 
 /**
@@ -1982,7 +2036,7 @@ async function maybeNameSession(): Promise<void> {
     if (hasBeenNamed(workspace.agent.entries() as never)) return;
     await workspace.agent.setSessionName(title);
     invalidateSessionScan();
-    await broadcastSessions();
+    await broadcastSessions(workspace);
   } catch (error) {
     console.warn(`[pi] session title failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
@@ -2121,7 +2175,7 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
   try {
     const { cancelled, editorText } = await navigate.call(workspace.agent, entryId);
     if (cancelled) return;
-    broadcast(workspace, { type: "session_replaced", ...snapshot() });
+    broadcast(workspace, { type: "session_replaced", ...snapshot(workspace) });
     if (editorText) send(socket, { type: "editor_prefill", text: editorText });
     broadcast(workspace, { type: "tree", roots: buildTree() });
   } finally {
@@ -2508,6 +2562,15 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
   }
   // JSON.parse can yield null/primitives — never crash on a malformed frame
   if (typeof message !== "object" || message === null) return;
+  /**
+   * The project THIS connection is bound to, shadowing the module-level binding for
+   * the whole handler. Every case below therefore drives the sender's project
+   * rather than the server's first one — the shadowing is the mechanism, so a case
+   * added later cannot forget to ask.
+   */
+  const workspace = clients.get(socket) ?? workspaces.default;
+  // A frame from a socket that is no longer registered: it closed mid-flight.
+  if (!workspace) return;
   // Fail closed. A prompt sent to a dead runtime must be refused where the user can
   // see it, not queued for a process that is never coming back.
   if (!workspace.agent.ok && AGENT_COMMANDS.has(message.type)) {
@@ -2515,6 +2578,22 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     return;
   }
   switch (message.type) {
+    case "switch_workspace": {
+      if (typeof message.root !== "string") return;
+      const target = workspaces.get(message.root);
+      // Only a project already open. A path named here must never open one: that is
+      // open_project's job, and it persists the open set before anything is built.
+      if (!target) {
+        send(socket, { type: "workspace_error", message: `No open project at ${message.root}` });
+        return;
+      }
+      // Rebinding is the whole switch. Nothing else is touched: the project being
+      // left keeps its session, its watcher and any turn in flight — which is what
+      // lets an agent keep working while the user looks somewhere else.
+      clients.set(socket, target);
+      send(socket, { type: "workspace_switched", ...snapshot(target) });
+      return;
+    }
     case "prompt": {
       if (typeof message.text !== "string") return;
       // A prompt landing mid-navigation would append under the OLD leaf, and the
@@ -2566,19 +2645,19 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       break;
     case "switch_session":
       if (typeof message.path !== "string") return;
-      switchSession(socket, message.path).catch(reportError);
+      switchSession(workspace, socket, message.path).catch(reportError);
       break;
     case "delete_session":
       if (typeof message.path !== "string") return;
-      deleteSession(socket, message.path).catch(reportError);
+      deleteSession(workspace, socket, message.path).catch(reportError);
       break;
     case "list_sessions":
-      listSessions(socket).catch(reportError);
+      listSessions(workspace, socket).catch(reportError);
       break;
     case "rename_session":
       if (typeof message.path !== "string" || typeof message.name !== "string") return;
       if (message.name.length > MAX_NAME_LENGTH * 4) return;
-      renameSession(socket, message.path, message.name).catch(reportError);
+      renameSession(workspace, socket, message.path, message.name).catch(reportError);
       break;
     case "search_sessions":
       if (typeof message.query !== "string" || typeof message.requestId !== "string") return;
@@ -2785,9 +2864,10 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
 
 // --- Wire up the real /ws and /health handlers, now that the runtime is ready ------
 
-handleWsConnection = (socket) => {
-  clients.set(socket, workspace);
-  send(socket, { type: "hello", ...snapshot() });
+handleWsConnection = (socket, workspaceRoot) => {
+  const bound = (workspaceRoot ? workspaces.get(workspaceRoot) : undefined) ?? workspaces.default ?? workspace;
+  clients.set(socket, bound);
+  send(socket, { type: "hello", ...snapshot(bound) });
   socket.on("message", (data: Buffer) => handleClientMessage(socket, data.toString()));
   socket.on("close", () => {
     clients.delete(socket);
