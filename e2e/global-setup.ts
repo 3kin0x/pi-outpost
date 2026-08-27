@@ -323,16 +323,71 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: planFakeConfig } },
   );
 
+  // A fifth real app server, for the extension toast stack over that same Work
+  // Plan. Its own server because its `notify` fires on every prompt: sharing the
+  // plan server would drop a toast on top of the Work Plan spec's own clicks,
+  // which is precisely what this one is here to catch.
+  const notifyRoot = await makeWorkspace({ "readme.md": "# notifications\n" });
+  const notifySessionDir = path.join(notifyRoot, ".pi-agent", "sessions");
+  await mkdir(notifySessionDir, { recursive: true });
+  const notifySession = path.join(notifySessionDir, "2026-08-23T00-03-00-000Z_notify.jsonl");
+  await writeFile(notifySession, sessionText("notify", "Formatted work"));
+  const notifyPlan = {
+    version: 1,
+    id: "notified",
+    title: "Formatting plan",
+    updatedAt: "2026-08-23T00:00:03.000Z",
+    tasks: [{ id: "format", title: "Format the workspace", status: "in_progress", dependsOn: [], resources: [] }],
+  };
+  const notifyFakeConfig = path.join(notifyRoot, "fake-rpc.json");
+  await writeFile(notifyFakeConfig, JSON.stringify({
+    state: { sessionId: "notify", sessionFile: notifySession },
+    entries: [entry],
+    tree: [{ entry, children: [] }],
+    leafId: "user-1",
+    // One script for every prompt, not a list: the spec sends more than one and
+    // neither of them should depend on which spec ran before it.
+    commands_: {
+      prompt: {
+        replacement: { state: { isStreaming: false } },
+        writes: [{ path: `${notifySession}.work-plan.json`, content: `${JSON.stringify(notifyPlan, null, 2)}\n` }],
+        after: [
+          toolEnd(notifySession, notifyPlan, "notify-plan"),
+          // The real shape an extension's ui.notify() takes on the RPC wire.
+          {
+            type: "extension_ui_request",
+            id: "notify-1",
+            method: "notify",
+            message: "pi-Lens deferred format applied to 1 file(s): readme.md",
+            notifyType: "info",
+          },
+          { type: "agent_settled" },
+        ],
+      },
+    },
+  }));
+  const notifications = await startServer(
+    notifyRoot,
+    {
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")], startupTimeoutMs: 20_000 },
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: notifyFakeConfig } },
+  );
+
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_GUARDED_URL = guarded.base;
   process.env.PI_E2E_DIAGRAMS_URL = diagrams.base;
   process.env.PI_E2E_PLANS_URL = plans.base;
+  process.env.PI_E2E_NOTIFY_URL = notifications.base;
   process.env.PI_E2E_PLAN_SOURCE = sourceSession;
   process.env.PI_E2E_PLAN_FORK = forkSession;
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await notifications.stop();
     await plans.stop();
     await diagrams.stop();
     await guarded.stop();
