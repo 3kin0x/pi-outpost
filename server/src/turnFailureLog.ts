@@ -198,6 +198,64 @@ function censusOfTurn(message: unknown): Record<string, unknown> {
   };
 }
 
+/**
+ * The run-up, kept because the failure is never the whole story.
+ *
+ * The reported sequence is three red things in a row: a `bash` or `read` card,
+ * then "Request was aborted", then the overflow. Only the last one matches
+ * `isStackExhaustion`, so a record of that one alone throws away the two events
+ * that say what the process was doing when the stack went. This ring holds the
+ * recent outcomes — tool results and failed turns — and the census carries them
+ * along, so one occurrence shows the shape of the run-up instead of its last
+ * frame.
+ *
+ * Sizes, names and flags only; no tool output and no message text.
+ */
+const RECENT_LIMIT = 32;
+const recent: Record<string, unknown>[] = [];
+
+function note(entry: Record<string, unknown>): void {
+  recent.push({ at: new Date().toISOString(), ...entry });
+  if (recent.length > RECENT_LIMIT) recent.shift();
+}
+
+/** A finished tool call: which one, whether it failed, and how much it returned. */
+export function noteToolOutcome(toolName: string, isError: boolean, content: unknown): void {
+  note({ kind: "tool", toolName, isError, bytes: serializedBytes(content) });
+}
+
+/**
+ * A finished turn that carried an error.
+ *
+ * Every failed turn, not only the exhausted ones: "Request was aborted" is not
+ * itself the bug and is exactly the context the bug is missing.
+ */
+export function noteTurnOutcome(message: unknown): void {
+  const record = (message ?? {}) as Record<string, unknown>;
+  if (typeof record.errorMessage !== "string") return;
+  note({
+    kind: "turn",
+    provider: record.provider,
+    model: record.model,
+    stopReason: record.stopReason,
+    rawStopReason: record.rawStopReason,
+    errorMessage: record.errorMessage,
+    usage: record.usage,
+  });
+}
+
+/**
+ * Compaction, which is what pi does *after* a turn fails.
+ *
+ * Every reported occurrence follows a cut request — an abort, a timeout — and
+ * never the nominal path, so what runs between the cut and the overflow is the
+ * part worth seeing. A compaction in the run-up is a model call of its own over
+ * a rebuilt branch; its absence is just as informative.
+ */
+export function noteCompaction(phase: "start" | "end", errorMessage?: string): void {
+  note({ kind: "compaction", phase, ...(errorMessage === undefined ? {} : { errorMessage }) });
+}
+
 /** Which red bubble the failure became, so a record can be matched to what was seen. */
 export type TurnFailureSource = "assistant" | "compaction" | "runtime" | "runtime_failed";
 
@@ -209,6 +267,8 @@ export interface TurnFailureReport {
   assistantMessage?: unknown;
   /** The active branch as it stood — the input the overflow is a function of. */
   entries?: readonly unknown[];
+  /** Context tokens at the moment it failed, when the server has a reading. */
+  contextUsage?: unknown;
 }
 
 /** Roll the log rather than let it grow without bound. */
@@ -246,6 +306,9 @@ function writeRecord(agentDir: string, report: TurnFailureReport): void {
     message: report.message,
     ...(report.assistantMessage === undefined ? {} : { turn: censusOfTurn(report.assistantMessage) }),
     ...(report.entries === undefined ? {} : { context: censusOfEntries(report.entries) }),
+    ...(report.contextUsage === undefined ? {} : { contextUsage: report.contextUsage }),
+    // Oldest first, so the record reads in the order the user watched it happen.
+    recent: [...recent],
   };
 
   const context = record.context as { count?: number; deepest?: EntryCensus[]; cyclic?: EntryCensus[] } | undefined;

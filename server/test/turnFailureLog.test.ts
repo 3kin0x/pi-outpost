@@ -11,7 +11,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { inspectShape, isStackExhaustion, recordTurnFailure, serializedBytes } from "../src/turnFailureLog.ts";
+import {
+  inspectShape,
+  isStackExhaustion,
+  noteCompaction,
+  noteToolOutcome,
+  noteTurnOutcome,
+  recordTurnFailure,
+  serializedBytes,
+} from "../src/turnFailureLog.ts";
 
 /** Nested `{ next: { next: … } }`, built iteratively so the fixture is not the bug. */
 function deepChain(levels: number): unknown {
@@ -156,6 +164,58 @@ describe("recordTurnFailure", () => {
       assert.equal(context.cyclic[0].index, 0);
       // Unserializable is a finding, not a gap: it is what a cycle does to JSON.
       assert.equal(context.bytes, null);
+    });
+  });
+
+  it("carries the run-up, which is where every reported occurrence actually starts", () => {
+    // The reported sequence, in order: a red tool card, a cut request, then the
+    // overflow. Only the last one matches isStackExhaustion, so a record of that
+    // one alone would throw away the two events that say what was going on.
+    withAgentDir((dir) => {
+      noteToolOutcome("bash", true, "command not found");
+      noteTurnOutcome({ provider: "openai-completions", model: "qwen3", stopReason: "aborted", errorMessage: "Request was aborted" });
+      recordTurnFailure(dir, { source: "assistant", message: "Maximum call stack size exceeded" });
+
+      const [record] = readRecords(dir);
+      const recent = record.recent as Record<string, unknown>[];
+      const tail = recent.slice(-2);
+      assert.deepEqual(
+        tail.map((one) => one.kind),
+        ["tool", "turn"],
+      );
+      assert.equal(tail[0].toolName, "bash");
+      assert.equal(tail[0].isError, true);
+      assert.equal(tail[1].errorMessage, "Request was aborted");
+      assert.equal(tail[1].provider, "openai-completions");
+    });
+  });
+
+  it("records a compaction in the run-up, since that is what runs after a turn fails", () => {
+    withAgentDir((dir) => {
+      noteCompaction("start");
+      noteCompaction("end", "Auto-compaction failed: upstream timed out");
+      recordTurnFailure(dir, { source: "assistant", message: "Maximum call stack size exceeded" });
+
+      const recent = (readRecords(dir)[0].recent as Record<string, unknown>[]).slice(-2);
+      assert.deepEqual(
+        recent.map((one) => [one.kind, one.phase]),
+        [
+          ["compaction", "start"],
+          ["compaction", "end"],
+        ],
+      );
+      assert.equal(recent[1].errorMessage, "Auto-compaction failed: upstream timed out");
+    });
+  });
+
+  it("ignores a turn that carried no error, so the run-up stays signal", () => {
+    withAgentDir((dir) => {
+      noteToolOutcome("read", false, "file contents");
+      noteTurnOutcome({ provider: "openai-completions", stopReason: "stop" });
+      recordTurnFailure(dir, { source: "assistant", message: "Maximum call stack size exceeded" });
+
+      const recent = readRecords(dir)[0].recent as Record<string, unknown>[];
+      assert.equal(recent[recent.length - 1].kind, "tool");
     });
   });
 
