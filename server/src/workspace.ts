@@ -109,6 +109,15 @@ export class Workspace {
   needsAttention = false;
 
   /**
+   * A session switch, fork or prompt edit is in flight here.
+   *
+   * Per-workspace rather than server-wide: two projects have separate runtimes and
+   * separate session files, so navigating one has no reason to refuse the same
+   * operation in the other.
+   */
+  replacingSession = false;
+
+  /**
    * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
    * server starts before the agent (branding must not wait behind model, extension
    * and skill loading), and a workspace's session is built on first open rather

@@ -26,21 +26,15 @@
 ## 4. Opening and closing projects
 
 - [x] 4.1 Persist the open set alongside editable runtime settings, writing before the workspace is opened or stopped, abandoning the operation if the write fails
-- [ ] 4.2 Add `open_project`: take a directory chosen through the existing `browse_server_directory` picker, resolve it, reject an unreadable path, return the existing workspace if that directory is already open
-- [ ] 4.3 Add `close_project`: refuse while the agent is streaming, refuse for the last open project, otherwise stop the workspace, remove it from the set, and move any bound client to another open project
+- [x] 4.2 Add `open_project`: take a directory chosen through the existing `browse_server_directory` picker, resolve it, reject an unreadable path, return the existing workspace if that directory is already open
+- [x] 4.3 Add `close_project`: refuse while the agent is streaming, refuse for the last open project, otherwise stop the workspace, remove it from the set, and move any bound client to another open project
 - [x] 4.4 Load the persisted open set at startup without building any session
 - [x] 4.5 Re-scope `handleUpdateConfig` (l.1438) to act on one workspace rather than the server
 - [x] 4.6 Add the lock that forbids opening, closing and switching, following the `sandboxLocks` convention (`config.ts:658`)
 
-> **Blocked on threading.** 46 top-level handlers in `index.ts` still read the
-> module-level `workspace` rather than the connection's, so a second project would
-> be served by the first one's runtime — and, worse, handed the first one's
-> sandboxed tools. Opening is gated off (`MULTI_PROJECT_OPEN_ENABLED`) until each
-> of those takes its workspace explicitly. Everything else in this group is done.
-
 ## 5. Workspace lifecycle
 
-- [ ] 5.1 Build a workspace's session on first open, not at startup; report `starting` until it is ready
+- [x] 5.1 Build a workspace's session on first open, not at startup; report `starting` until it is ready
 - [ ] 5.2 Add the idle-retirement sweep: stop a workspace with no subscriber and no running turn after the configured delay
 - [ ] 5.3 Make retirement configurable, including disabled, and prove it never stops a workspace mid-turn
 - [ ] 5.4 Rebuild a retired workspace transparently on next open, with its session history intact
@@ -51,6 +45,7 @@
 - [ ] 6.2 Send activity and attention changes to every connection, including those bound elsewhere, carrying no message content
 - [ ] 6.3 Mark a workspace as waiting when a permission prompt or extension request blocks its turn, and keep the request pending
 - [ ] 6.4 Resume the pending request when a client switches back to that workspace
+- [ ] 6.5 Make extension renderers per-workspace: `configureExtensionRender` sets a process-wide singleton (`server/src/extensionRender.ts`), so with two embedded projects the last one to configure it renders the other's tool cards and custom messages, with its own extension runner and cwd. Needs a renderer instance threaded through `renderToolCallHtml`, `renderToolResultHtml` and `renderCustomMessageHtml` (found by review; display correctness, not a sandbox boundary)
 
 ## 7. Interface
 

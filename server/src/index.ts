@@ -19,6 +19,7 @@ import {
   getAgentDir,
   type SessionInfo,
   SessionManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   type ClientMessage,
@@ -776,11 +777,18 @@ await app.listen({ port: PORT, host: HOST });
 
 const DEBUG = process.env.PI_OUTPOST_DEBUG ? console.log : () => {};
 
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({
-  cwd,
-  sessionManager,
-  sessionStartEvent,
-}) => {
+/**
+ * The SDK's session factory, bound to ONE project's toolset.
+ *
+ * A factory per project rather than one reading a module binding: the sandboxed
+ * tools are the confinement, so a factory that fetched them from elsewhere would
+ * hand project B tools rooted at project A — an agent able to read and write
+ * outside its own sandbox. The toolset arrives as an argument so that cannot be
+ * spelled.
+ */
+const makeCreateRuntime =
+  (sandboxedTools: ToolDefinition[] | undefined): CreateAgentSessionRuntimeFactory =>
+  async ({ cwd, sessionManager, sessionStartEvent }) => {
   const appendSystemPrompt = composeAppendSystemPrompt(config);
 
   const extraFactories = [...seaExtensionFactories];
@@ -840,12 +848,12 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       sessionManager,
       sessionStartEvent,
       // Sandbox replaces the built-in toolset with path-scoped equivalents
-      ...(workspace.sandboxedTools ? { noTools: "builtin" as const, customTools: workspace.sandboxedTools } : {}),
-      ...(!workspace.sandboxedTools && config.tools ? { tools: config.tools } : {}),
+      ...(sandboxedTools ? { noTools: "builtin" as const, customTools: sandboxedTools } : {}),
+      ...(!sandboxedTools && config.tools ? { tools: config.tools } : {}),
       // No sandbox: the built-in toolset stands, and pdf_extract joins it — it is
       // not one of pi's built-ins, so nothing else would supply it. It stays
       // confined to the workspace, which is the only root there is to name here.
-      ...(workspace.sandboxedTools
+      ...(sandboxedTools
         ? {}
         : {
             customTools: [
@@ -911,7 +919,8 @@ if (config.offline) process.env.PI_OFFLINE = "1";
  * skills, prompt templates, the tool allowlist — is server-wide configuration and
  * is the same for every project.
  */
-async function buildRuntimeFor(cwd: string): Promise<AgentRuntime> {
+async function buildRuntimeFor(target: Workspace): Promise<AgentRuntime> {
+  const cwd = target.settings.cwd;
   if (config.agentRuntime.mode === "rpc") {
     // The child builds its own toolset, so everything the embedded runtime hands
     // to the SDK has to be said on the command line instead: the same skills,
@@ -946,7 +955,7 @@ async function buildRuntimeFor(cwd: string): Promise<AgentRuntime> {
     });
   }
   return await createEmbeddedRuntime({
-    factory: createRuntime,
+    factory: makeCreateRuntime(target.sandboxedTools),
     cwd,
     agentDir: AGENT_DIR,
     sessionManager: SessionManager.create(cwd, SESSION_DIR),
@@ -962,7 +971,7 @@ async function buildRuntimeFor(cwd: string): Promise<AgentRuntime> {
  */
 const builtRuntime: AgentRuntime = await (async () => {
   try {
-    return await buildRuntimeFor(workspace.settings.cwd);
+    return await buildRuntimeFor(workspace);
   } catch (error) {
     complain(error);
     await app.close();
@@ -999,7 +1008,7 @@ for (const root of config.openProjects) {
     const restored = await Workspace.create({
       ...workspaceOptions({ cwd: root }),
       onDirectoryChanged: (relPath) => broadcast(restored, { type: "directory_changed", path: relPath }),
-      createRuntime: (settings) => buildRuntimeFor(settings.cwd),
+      createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
     workspaces.add(restored);
   } catch (error) {
@@ -1040,7 +1049,7 @@ function queueWorkPlanSessionSync(workspace: Workspace): Promise<void> {
   return workspace.workPlanSync;
 }
 
-function queueWorkPlanToolSync(sessionFile: string, changed: boolean): void {
+function queueWorkPlanToolSync(workspace: Workspace, sessionFile: string, changed: boolean): void {
   workspace.workPlanSync = workspace.workPlanSync.catch(() => {}).then(async () => {
     let plan: WorkPlan | null;
     try {
@@ -1081,7 +1090,7 @@ function availableModels(workspace: Workspace): ModelChoice[] {
  * problem) — hence `providers` *and* `usableModel`, rather than an empty model
  * list, which conflates the two.
  */
-function credentialStatus(): CredentialStatus {
+function credentialStatus(workspace: Workspace, ): CredentialStatus {
   const usableModel = availableModels(workspace).length > 0;
   return {
     providers: workspace.agent.snapshot().providers,
@@ -1179,7 +1188,7 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     workPlan: sameSessionFile(state.sessionFile, workspace.workPlanSessionFile) ? workspace.workPlan : null,
     writableRoot: workspace.writableRoot,
     gitAvailable: workspace.git !== null,
-    credentials: credentialStatus(),
+    credentials: credentialStatus(workspace),
     extensionPaths: state.extensionPaths,
     // What is configured, not what got loaded — built-in skills reach the menu
     // through `commands` instead. The two lists are separate because only one of
@@ -1282,7 +1291,7 @@ function send(socket: WebSocket, message: ServerMessage): void {
 // file broadcasts. Answers travel back through workspace.agent.answerExtensionUI.
 
 /** Wire extension TUI renderers into the HTML bridge used by the web UI. */
-function refreshExtensionRender(): void {
+function refreshExtensionRender(workspace: Workspace, ): void {
   const renderers = workspace.agent.renderers;
   configureExtensionRender({
     // An RPC child cannot hand its renderer objects across the pipe, so tool cards
@@ -1302,7 +1311,7 @@ const pendingFileMutations = new Map<string, unknown>();
  * the browser root, tell clients so an expanded directory or open preview can refresh.
  * Not a security boundary — resolution failures or out-of-root paths are just skipped.
  */
-async function announceFileChange(args: unknown): Promise<void> {
+async function announceFileChange(workspace: Workspace, args: unknown): Promise<void> {
   const targetPath = (args as { path?: unknown } | null)?.path;
   console.log("[announceFileChange] args type=", typeof args, "targetPath=", targetPath);
   if (typeof targetPath !== "string") return;
@@ -1348,9 +1357,9 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
       // The turn is persisted now: hand the client the entries so the bubbles it
       // echoed optimistically become editable (edit_prompt targets an entry id).
       broadcast(workspace, { type: "user_entries", entries: branchUserEntries(workspace) });
-      broadcast(workspace, { type: "tree", roots: buildTree() });
+      broadcast(workspace, { type: "tree", roots: buildTree(workspace) });
       // Off the prompt path on purpose: a slow title must never delay a reply
-      void maybeNameSession();
+      void maybeNameSession(workspace);
       break;
     }
     case "assistant_start":
@@ -1427,7 +1436,7 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
       pendingFileMutations.delete(event.toolCallId);
       // Only announce once the write has actually landed on disk — the client
       // may otherwise refetch a directory/file before the change is visible.
-      if (args !== undefined && !event.isError) void announceFileChange(args);
+      if (args !== undefined && !event.isError) void announceFileChange(workspace, args);
       const workPlanDetails = event.details as
         | { type?: unknown; sessionFile?: unknown; plan?: WorkPlan | null; changed?: unknown }
         | undefined;
@@ -1443,7 +1452,7 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
           // the sidecar: persistence, not an extension-supplied event payload,
           // is the authoritative state that must survive resume/compaction.
           if (workPlanDetails.plan !== null) validateWorkPlan(workPlanDetails.plan);
-          queueWorkPlanToolSync(workPlanDetails.sessionFile as string, workPlanDetails.changed === true);
+          queueWorkPlanToolSync(workspace, workPlanDetails.sessionFile as string, workPlanDetails.changed === true);
         } catch (error) {
           reportError(new Error(`Ignoring invalid Work Plan tool result: ${error instanceof Error ? error.message : String(error)}`));
         }
@@ -1480,7 +1489,7 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
     case "session_replaced":
       // The runtime has already rebound itself; renderers may belong to a new
       // extension runner, so refresh the HTML bridge before the snapshot goes out.
-      refreshExtensionRender();
+      refreshExtensionRender(workspace);
       void queueWorkPlanSessionSync(workspace);
       break;
     case "extension_ui_request":
@@ -1514,7 +1523,7 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
 }
 
 workspace.agent.subscribe((event) => onRuntimeEvent(workspace, event));
-refreshExtensionRender();
+refreshExtensionRender(workspace);
 
 // --- Client message handling -----------------------------------------------------
 
@@ -1522,14 +1531,13 @@ refreshExtensionRender();
  * Session replacement (new/switch) disposes the current AgentSession — never
  * run two concurrently, and never leave a disposed session wired on failure.
  */
-let replacingSession = false;
 
-async function replaceSession(socket: WebSocket, action: () => Promise<{ cancelled: boolean }>): Promise<void> {
-  if (replacingSession) {
+async function replaceSession(workspace: Workspace, socket: WebSocket, action: () => Promise<{ cancelled: boolean }>): Promise<void> {
+  if (workspace.replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
     return;
   }
-  replacingSession = true;
+  workspace.replacingSession = true;
   try {
     // The runtime rebinds and emits `session_replaced` itself; this only has to
     // decide whether a replacement happened at all.
@@ -1546,7 +1554,7 @@ async function replaceSession(socket: WebSocket, action: () => Promise<{ cancell
       reportError(recoveryError);
     }
   } finally {
-    replacingSession = false;
+    workspace.replacingSession = false;
   }
 }
 
@@ -1587,7 +1595,7 @@ function refuseUnsupported(socket: WebSocket, error: unknown): boolean {
 /** How long onboarding waits on the SDK before it reports what it has. */
 const CREDENTIAL_SYNC_TIMEOUT_MS = 20_000;
 
-async function handleSetCredential(socket: WebSocket, provider: string, apiKey: string): Promise<void> {
+async function handleSetCredential(workspace: Workspace, socket: WebSocket, provider: string, apiKey: string): Promise<void> {
   const credentials = workspace.agent.credentials;
   if (!credentials) {
     send(socket, { type: "error", message: new RuntimeUnsupportedError("Storing credentials", workspace.agent.kind).message });
@@ -1632,7 +1640,7 @@ async function handleSetCredential(socket: WebSocket, provider: string, apiKey: 
   } catch (error) {
     stalled("the model refresh", error);
   }
-  await adoptUsableModel(socket);
+  await adoptUsableModel(workspace, socket);
 }
 
 /**
@@ -1653,7 +1661,7 @@ async function handleUpdateConfig(
   socket: WebSocket,
   update: { sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }; userSkillPaths?: string[] },
 ): Promise<void> {
-  if (replacingSession) {
+  if (workspace.replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
     return;
   }
@@ -1710,7 +1718,7 @@ async function handleUpdateConfig(
     return;
   }
 
-  replacingSession = true;
+  workspace.replacingSession = true;
   try {
     if (mergedSkillPaths) config.userSkillPaths = mergedSkillPaths;
     if (mergedSandbox) {
@@ -1756,31 +1764,10 @@ async function handleUpdateConfig(
       reportError(recoveryError);
     }
   } finally {
-    replacingSession = false;
+    workspace.replacingSession = false;
   }
 }
 
-
-/**
- * Opening a second project is wired but not yet safe to enable.
- *
- * 46 top-level handlers still read the module-level `workspace` rather than the
- * connection's — `handleClientMessage` shadows it for its own body, but the helpers
- * it calls capture the boot workspace. Two consequences, one of them a boundary
- * failure rather than a bug:
- *
- *  - `createRuntime` builds every session with `workspace.sandboxedTools`, so a
- *    second project would be handed tools confined to the FIRST project's root —
- *    an agent in B able to read and write A. That is the sandbox not holding.
- *  - prompts, tree, sessions and git from a client bound to B would be served by
- *    A's runtime and broadcast to A's clients.
- *
- * The remedy is threading the bound workspace through those helpers, which is the
- * rest of this group's work. Until then this refuses rather than shipping a switch
- * that quietly crosses the sandbox: everything else here — the persisted set, the
- * protocol, the lock, the lazy start — is finished and exercised by the suite.
- */
-const MULTI_PROJECT_OPEN_ENABLED = false;
 
 /**
  * Open a directory as a project.
@@ -1791,10 +1778,6 @@ const MULTI_PROJECT_OPEN_ENABLED = false;
  * same reason, as handleUpdateConfig.
  */
 async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<void> {
-  if (!MULTI_PROJECT_OPEN_ENABLED) {
-    send(socket, { type: "workspace_error", message: "Opening a second project is not enabled in this build" });
-    return;
-  }
   if (config.workspaceLock) {
     send(socket, { type: "workspace_error", message: "This server is pinned to one project" });
     return;
@@ -1833,10 +1816,13 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
 
   let opened: Workspace;
   try {
-    opened = await Workspace.open({
+    // Resources only. The session comes from ensureStarted below, which is the one
+    // place that builds one — so a project opened here and a project restored from
+    // the persisted set start the same way, and share the same in-flight guard.
+    opened = await Workspace.create({
       ...workspaceOptions({ cwd: root }),
       onDirectoryChanged: (relPath) => broadcast(opened, { type: "directory_changed", path: relPath }),
-      createRuntime: (settings) => buildRuntimeFor(settings.cwd),
+      createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
   } catch (error) {
     // The set on disk now names a project that would not build. Put it back rather
@@ -1855,6 +1841,16 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
   // A concurrent open of the same directory may have won while this one built.
   const registered = workspaces.add(opened);
   if (registered !== opened) await opened.stop();
+  try {
+    await ensureStarted(registered);
+  } catch (error) {
+    // Bind only once there is a session to bind to. A socket left pointing at a
+    // runtime-less workspace would reach `agent` on its next command and throw,
+    // taking the handler with it — the client keeps the project it had.
+    reportError(error);
+    send(socket, { type: "workspace_error", message: `Opened ${path.basename(root)}, but its session could not start: ${error instanceof Error ? error.message : String(error)}` });
+    return;
+  }
   clients.set(socket, registered);
   send(socket, { type: "workspace_switched", ...snapshot(registered) });
   announceWorkspaceActivity();
@@ -1933,7 +1929,7 @@ async function ensureStarted(target: Workspace): Promise<void> {
   const inFlight = starting.get(target.root);
   if (inFlight) return inFlight;
   const build = (async () => {
-    const runtime = await buildRuntimeFor(target.settings.cwd);
+    const runtime = await buildRuntimeFor(target);
     target.attachRuntime(runtime);
     runtime.subscribe((event) => onRuntimeEvent(target, event));
     target.workPlan = await loadWorkPlan(runtime.snapshot().sessionFile);
@@ -1966,7 +1962,7 @@ async function handleBrowseServerDirectory(socket: WebSocket, requestedPath: str
 }
 
 /** Declare an OpenAI-compatible endpoint: live for this session, and persisted for the next. */
-async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDeclaration): Promise<void> {
+async function handleDeclareProvider(workspace: Workspace, socket: WebSocket, declaration: ProviderDeclaration): Promise<void> {
   const credentials = workspace.agent.credentials;
   if (!credentials) {
     send(socket, { type: "error", message: new RuntimeUnsupportedError("Declaring a provider", workspace.agent.kind).message });
@@ -1978,7 +1974,7 @@ async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDec
     send(socket, { type: "error", message: error instanceof CredentialError ? error.message : String(error) });
     return;
   }
-  await adoptUsableModel(socket);
+  await adoptUsableModel(workspace, socket);
 }
 
 /**
@@ -1993,9 +1989,9 @@ async function handleDeclareProvider(socket: WebSocket, declaration: ProviderDec
  * extension dialog, notification, status and widget — state this server still holds,
  * and a pending dialog the agent is still waiting on.
  */
-async function adoptUsableModel(socket: WebSocket): Promise<void> {
+async function adoptUsableModel(workspace: Workspace, socket: WebSocket): Promise<void> {
   const announce = () =>
-    broadcast(workspace, { type: "credentials_changed", models: availableModels(workspace), model: modelName(workspace), credentials: credentialStatus() });
+    broadcast(workspace, { type: "credentials_changed", models: availableModels(workspace), model: modelName(workspace), credentials: credentialStatus(workspace) });
 
   const choices = availableModels(workspace);
   if (choices.length === 0) {
@@ -2049,7 +2045,7 @@ function validImages(images: unknown): WireImage[] | undefined {
  * resolved. `fs.stat` is the one extra check that keeps this to mentions of
  * something that actually exists.
  */
-async function absolutizeMentions(text: string): Promise<string> {
+async function absolutizeMentions(workspace: Workspace, text: string): Promise<string> {
   return rewriteMentionedPaths(text, async (relPath) => {
     try {
       const absolute = await resolveConfined(workspace.browserRoot, relPath);
@@ -2061,8 +2057,8 @@ async function absolutizeMentions(text: string): Promise<string> {
   });
 }
 
-async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
-  const promptText = await absolutizeMentions(text);
+async function handlePrompt(workspace: Workspace, text: string, images?: WireImage[]): Promise<void> {
+  const promptText = await absolutizeMentions(workspace, text);
   await workspace.agent.prompt(promptText, {
     ...(images?.length ? { images } : {}),
     // Echo the user message only once accepted (avoids ghost bubbles on reject).
@@ -2084,7 +2080,7 @@ async function handlePrompt(text: string, images?: WireImage[]): Promise<void> {
  * prompt again. The new answer becomes a sibling branch — the original exchange
  * stays reachable in the tree (that's the whole point of editing here).
  */
-async function editPrompt(socket: WebSocket, entryId: string, text: string, images?: WireImage[]): Promise<void> {
+async function editPrompt(workspace: Workspace, socket: WebSocket, entryId: string, text: string, images?: WireImage[]): Promise<void> {
   const navigate = workspace.agent.navigateTree;
   if (!navigate) {
     // Editing rewinds the leaf to just before a past message. Pi RPC forks and
@@ -2096,15 +2092,15 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
     send(socket, { type: "error", message: "Cannot edit a message while the agent is running" });
     return;
   }
-  if (!isUserMessageEntry(entryId)) {
+  if (!isUserMessageEntry(workspace, entryId)) {
     send(socket, { type: "error", message: "Unknown message" });
     return;
   }
-  if (replacingSession) {
+  if (workspace.replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
     return;
   }
-  replacingSession = true;
+  workspace.replacingSession = true;
   try {
     const { cancelled } = await navigate.call(workspace.agent, entryId);
     if (cancelled) {
@@ -2114,9 +2110,9 @@ async function editPrompt(socket: WebSocket, entryId: string, text: string, imag
     }
     broadcast(workspace, { type: "session_replaced", ...snapshot(workspace) });
   } finally {
-    replacingSession = false;
+    workspace.replacingSession = false;
   }
-  await handlePrompt(text, images);
+  await handlePrompt(workspace, text, images);
 }
 
 /**
@@ -2131,7 +2127,7 @@ async function isKnownSessionPath(workspace: Workspace, path: string): Promise<b
 
 /** Delete a saved session file (allowlisted path, never the live one). */
 async function deleteSession(workspace: Workspace, socket: WebSocket, path: string): Promise<void> {
-  const live = liveSessionMatch(path);
+  const live = liveSessionMatch(workspace, path);
   if (live === "live") {
     send(socket, { type: "error", message: "Cannot delete the active session" });
     return;
@@ -2146,7 +2142,7 @@ async function deleteSession(workspace: Workspace, socket: WebSocket, path: stri
   }
   await fs.unlink(path);
   await deleteWorkPlan(path);
-  invalidateSessionScan();
+  invalidateSessionScan(workspace);
   await listSessions(workspace, socket);
 }
 
@@ -2155,7 +2151,7 @@ async function switchSession(workspace: Workspace, socket: WebSocket, path: stri
     send(socket, { type: "error", message: "Unknown session" });
     return;
   }
-  await replaceSession(socket, () => workspace.agent.switchSession(path));
+  await replaceSession(workspace, socket, () => workspace.agent.switchSession(path));
 }
 
 const SESSION_LIST_LIMIT = 50;
@@ -2165,22 +2161,28 @@ const SESSION_LIST_LIMIT = 50;
  * a session the user is typing about does not change between two keystrokes.
  */
 const SESSION_SCAN_TTL_MS = 1000;
-let sessionScan: { at: number; sessions: SessionInfo[] } | null = null;
+/**
+ * Keyed by project root, not one cache for the server: a shared entry would answer
+ * project B's listing with project A's sessions — their paths, their names and
+ * their search snippets — for as long as the entry stays warm.
+ */
+const sessionScans = new Map<string, { at: number; sessions: SessionInfo[] }>();
 
-async function scanSessions(): Promise<SessionInfo[]> {
-  if (sessionScan && Date.now() - sessionScan.at < SESSION_SCAN_TTL_MS) return sessionScan.sessions;
+async function scanSessions(workspace: Workspace, ): Promise<SessionInfo[]> {
+  const cached = sessionScans.get(workspace.root);
+  if (cached && Date.now() - cached.at < SESSION_SCAN_TTL_MS) return cached.sessions;
   const sessions = await SessionManager.list(workspace.settings.cwd, SESSION_DIR);
-  sessionScan = { at: Date.now(), sessions };
+  sessionScans.set(workspace.root, { at: Date.now(), sessions });
   return sessions;
 }
 
 /** Anything that writes to a session file (rename, title, delete) must drop the scan. */
-function invalidateSessionScan(): void {
-  sessionScan = null;
+function invalidateSessionScan(workspace: Workspace): void {
+  sessionScans.delete(workspace.root);
 }
 
-async function sessionList(): Promise<SessionSummary[]> {
-  const sessions = await scanSessions();
+async function sessionList(workspace: Workspace, ): Promise<SessionSummary[]> {
+  const sessions = await scanSessions(workspace);
   return [...sessions]
     .sort((a, b) => b.modified.getTime() - a.modified.getTime())
     .slice(0, SESSION_LIST_LIMIT)
@@ -2188,12 +2190,12 @@ async function sessionList(): Promise<SessionSummary[]> {
 }
 
 async function listSessions(workspace: Workspace, socket: WebSocket): Promise<void> {
-  send(socket, { type: "sessions", sessions: await sessionList() });
+  send(socket, { type: "sessions", sessions: await sessionList(workspace) });
 }
 
 /** A name change is visible to everyone: all clients watch the same agent. */
 async function broadcastSessions(workspace: Workspace): Promise<void> {
-  broadcast(workspace, { type: "sessions", sessions: await sessionList() });
+  broadcast(workspace, { type: "sessions", sessions: await sessionList(workspace) });
 }
 
 /**
@@ -2207,7 +2209,7 @@ async function renameSession(workspace: Workspace, socket: WebSocket, path: stri
     return;
   }
   const name = sanitizeName(rawName);
-  const live = liveSessionMatch(path);
+  const live = liveSessionMatch(workspace, path);
   if (live === "unknown") {
     send(socket, { type: "error", message: `${UNKNOWN_LIVE_SESSION} — renaming could corrupt the running conversation` });
     return;
@@ -2220,7 +2222,7 @@ async function renameSession(workspace: Workspace, socket: WebSocket, path: stri
   } else {
     SessionManager.open(path, SESSION_DIR, workspace.settings.cwd).appendSessionInfo(name);
   }
-  invalidateSessionScan();
+  invalidateSessionScan(workspace);
   await broadcastSessions(workspace);
 }
 
@@ -2236,7 +2238,7 @@ async function renameSession(workspace: Workspace, socket: WebSocket, path: stri
  *
  * Both sides are resolved: they come from different normalizers.
  */
-function liveSessionMatch(candidate: string): "live" | "not-live" | "unknown" {
+function liveSessionMatch(workspace: Workspace, candidate: string): "live" | "not-live" | "unknown" {
   const live = workspace.agent.snapshot().sessionFile;
   if (live === undefined) return "unknown";
   return path.resolve(candidate) === path.resolve(live) ? "live" : "not-live";
@@ -2246,12 +2248,12 @@ function liveSessionMatch(candidate: string): "live" | "not-live" | "unknown" {
 const UNKNOWN_LIVE_SESSION = "The agent runtime does not report which session file it is using, so this cannot be done safely";
 
 /** Match against the name, the first message and the whole transcript (server-side — see sessions.ts). */
-async function handleSearchSessions(socket: WebSocket, query: string, requestId: string): Promise<void> {
+async function handleSearchSessions(workspace: Workspace, socket: WebSocket, query: string, requestId: string): Promise<void> {
   send(socket, {
     type: "session_search_results",
     requestId,
     query,
-    sessions: searchSessions(await scanSessions(), query, SESSION_LIST_LIMIT),
+    sessions: searchSessions(await scanSessions(workspace), query, SESSION_LIST_LIMIT),
   });
 }
 
@@ -2272,7 +2274,7 @@ const namingSessions = new Set<string>();
  * the name: a user who clears a name reads back as unnamed, and re-titling what
  * they just erased on their next turn would be the opposite of helpful.
  */
-async function maybeNameSession(): Promise<void> {
+async function maybeNameSession(workspace: Workspace, ): Promise<void> {
   // Titling needs one direct model call with the session's own credentials. Only the
   // embedded runtime can make it; under RPC the session keeps the UI's fallback (its
   // first message) unless the user renames it by hand.
@@ -2288,13 +2290,13 @@ async function maybeNameSession(): Promise<void> {
     const title = await titles.generateTitle(exchange, AbortSignal.timeout(TITLE_TIMEOUT_MS));
     if (!title) return;
     // While the model answered, the session may have been named by hand — or replaced.
-    // `replacingSession` covers the window where the old session is already disposed
+    // `workspace.replacingSession` covers the window where the old session is already disposed
     // but the runtime still reports it: writing there would emit into a torn-down
     // extension runner.
-    if (replacingSession || workspace.agent.snapshot().sessionFile !== file) return;
+    if (workspace.replacingSession || workspace.agent.snapshot().sessionFile !== file) return;
     if (hasBeenNamed(workspace.agent.entries() as never)) return;
     await workspace.agent.setSessionName(title);
-    invalidateSessionScan();
+    invalidateSessionScan(workspace);
     await broadcastSessions(workspace);
   } catch (error) {
     console.warn(`[pi] session title failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2308,7 +2310,10 @@ function reportError(error: unknown): void {
   // nested in `cause` — say what broke and how to fix it, rather than leaving the
   // user to guess that their employer's proxy is in the way.
   const message = tlsHint(error) ?? (error instanceof Error ? error.message : String(error));
-  broadcast(workspace, { type: "error", message });
+  // Server-wide: this reports failures that have no project of their own (a config
+  // write, a shutdown), and announcing one into a single project's conversation
+  // would put it in front of whoever happens to be looking at that project.
+  broadcastServerWide({ type: "error", message });
 }
 
 // --- Fork / tree navigation -------------------------------------------------------
@@ -2319,7 +2324,7 @@ function reportError(error: unknown): void {
  * shows "the points you can return to". A node is `onPath` when the current
  * leaf lives in its subtree, i.e. it is on the active branch.
  */
-function buildTree(): TreeNode[] {
+function buildTree(workspace: Workspace, ): TreeNode[] {
   const { roots, leafId } = workspace.agent.tree();
 
   function subtreeHasLeaf(node: RuntimeTreeNode): boolean {
@@ -2391,12 +2396,12 @@ function treeNavigationTargets(roots: TreeNode[]): Set<string> {
   return ids;
 }
 
-function sendTree(socket: WebSocket): void {
-  send(socket, { type: "tree", roots: buildTree() });
+function sendTree(workspace: Workspace, socket: WebSocket): void {
+  send(socket, { type: "tree", roots: buildTree(workspace) });
 }
 
 /** Fork targets must be user-message entries (both runtimes reject anything else). */
-function isUserMessageEntry(entryId: string): boolean {
+function isUserMessageEntry(workspace: Workspace, entryId: string): boolean {
   const entry = workspace.agent.entries().find((candidate) => candidate.id === entryId);
   return entry?.type === "message" && entry.message?.role === "user";
 }
@@ -2408,7 +2413,7 @@ function isUserMessageEntry(entryId: string): boolean {
  * before it — the SDK hands its text back as composer prefill, same UX as pi's
  * TUI) or a reply tip (restore that exchange in full, reply included).
  */
-async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
+async function navigateTree(workspace: Workspace, socket: WebSocket, entryId: string): Promise<void> {
   const navigate = workspace.agent.navigateTree;
   if (!navigate) {
     send(socket, { type: "error", message: new RuntimeUnsupportedError("Tree navigation", workspace.agent.kind).message });
@@ -2418,7 +2423,7 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
     send(socket, { type: "error", message: "Cannot navigate the tree while the agent is running" });
     return;
   }
-  const roots = buildTree();
+  const roots = buildTree(workspace);
   if (!treeNavigationTargets(roots).has(entryId)) {
     send(socket, { type: "error", message: "Unknown tree node" });
     return;
@@ -2426,25 +2431,25 @@ async function navigateTree(socket: WebSocket, entryId: string): Promise<void> {
   // Serialize against session replacement AND against a prompt sneaking in
   // during the SDK's async pre-navigation hooks (session_before_tree): the
   // flag closes the check-then-act window at the server boundary.
-  if (replacingSession) {
+  if (workspace.replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
     return;
   }
-  replacingSession = true;
+  workspace.replacingSession = true;
   try {
     const { cancelled, editorText } = await navigate.call(workspace.agent, entryId);
     if (cancelled) return;
     broadcast(workspace, { type: "session_replaced", ...snapshot(workspace) });
     if (editorText) send(socket, { type: "editor_prefill", text: editorText });
-    broadcast(workspace, { type: "tree", roots: buildTree() });
+    broadcast(workspace, { type: "tree", roots: buildTree(workspace) });
   } finally {
-    replacingSession = false;
+    workspace.replacingSession = false;
   }
 }
 
 /** Fork a new session file starting just before the given user message. */
-async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
-  if (!isUserMessageEntry(entryId)) {
+async function forkSession(workspace: Workspace, socket: WebSocket, entryId: string): Promise<void> {
+  if (!isUserMessageEntry(workspace, entryId)) {
     // Also protects replaceSession's recovery path: workspace.agent.fork throws on
     // non-user entries BEFORE teardown, and recovery would needlessly swap
     // the healthy live session for a fresh one.
@@ -2455,7 +2460,7 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
   const sourceSessionFile = workspace.agent.snapshot().sessionFile;
   let ownsInheritance = false;
   try {
-    await replaceSession(socket, async () => {
+    await replaceSession(workspace, socket, async () => {
       // `replaceSession` calls this action only after acquiring the global
       // replacement lock. A concurrent rejected fork must never clear the
       // inheritance marker owned by this invocation.
@@ -2475,11 +2480,11 @@ async function forkSession(socket: WebSocket, entryId: string): Promise<void> {
     if (ownsInheritance) workspace.workPlanInheritanceSource = undefined;
   }
   if (selectedText) send(socket, { type: "editor_prefill", text: selectedText });
-  broadcast(workspace, { type: "tree", roots: buildTree() });
+  broadcast(workspace, { type: "tree", roots: buildTree(workspace) });
 }
 
 /** File-browser sidebar: list a directory, confined to workspace.browserRoot. */
-async function handleListDirectory(socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
+async function handleListDirectory(workspace: Workspace, socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
   try {
     const entries = await listDirectory(workspace.browserRoot, dirPath);
     // After a *successful* listing, so "watched" still means exactly "displayed
@@ -2517,7 +2522,7 @@ function documentIssuesFor(content: string): { rule: string; path: string; messa
 }
 
 /** File-browser sidebar: read a file for preview, confined to workspace.browserRoot. */
-async function handleReadFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+async function handleReadFile(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
     const { content, size, mtimeMs } = await readFileForPreview(workspace.browserRoot, filePath, config.structuredExchange.maxBytes);
     const documentIssues = documentIssuesFor(content);
@@ -2537,7 +2542,7 @@ async function handleReadFile(socket: WebSocket, filePath: string, requestId: st
 }
 
 /** File viewer's editor: save a buffer back, confined to the writable zone. */
-async function handleWriteFile(
+async function handleWriteFile(workspace: Workspace, 
   socket: WebSocket,
   filePath: string,
   content: string,
@@ -2562,7 +2567,7 @@ async function handleWriteFile(
  * Create an empty file. Answered like a write, so the client can open the new
  * file straight into its editor without a second round trip.
  */
-async function handleCreateFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+async function handleCreateFile(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
     const { size, mtimeMs } = await createFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath);
     send(socket, { type: "file_written", requestId, path: filePath, size, mtimeMs });
@@ -2576,7 +2581,7 @@ async function handleCreateFile(socket: WebSocket, filePath: string, requestId: 
  * Create one directory. Answered with its listing — empty, but it tells the tree
  * the directory exists and lets it expand without asking again.
  */
-async function handleCreateDirectory(socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
+async function handleCreateDirectory(workspace: Workspace, socket: WebSocket, dirPath: string, requestId: string): Promise<void> {
   try {
     await createDirectoryFromBrowser(workspace.browserRoot, workspace.writableRoot, dirPath);
     const entries = await listDirectory(workspace.browserRoot, dirPath);
@@ -2587,7 +2592,7 @@ async function handleCreateDirectory(socket: WebSocket, dirPath: string, request
   }
 }
 
-async function handleOpenNative(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+async function handleOpenNative(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
     await openFileNative(workspace.browserRoot, filePath);
     send(socket, { type: "file_operation_result", requestId, operation: "open_native", path: filePath });
@@ -2596,7 +2601,7 @@ async function handleOpenNative(socket: WebSocket, filePath: string, requestId: 
   }
 }
 
-async function handleRenameFile(socket: WebSocket, filePath: string, name: string, requestId: string): Promise<void> {
+async function handleRenameFile(workspace: Workspace, socket: WebSocket, filePath: string, name: string, requestId: string): Promise<void> {
   try {
     const renamedPath = await renameFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, name);
     send(socket, { type: "file_operation_result", requestId, operation: "rename_file", path: renamedPath, previousPath: filePath });
@@ -2607,7 +2612,7 @@ async function handleRenameFile(socket: WebSocket, filePath: string, name: strin
   }
 }
 
-async function handleDeleteFile(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+async function handleDeleteFile(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   try {
     await deleteFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath);
     send(socket, { type: "file_operation_result", requestId, operation: "delete_file", path: filePath });
@@ -2617,7 +2622,7 @@ async function handleDeleteFile(socket: WebSocket, filePath: string, requestId: 
   }
 }
 
-async function handleMoveFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
+async function handleMoveFile(workspace: Workspace, socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
   try {
     const movedPath = await moveFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, destinationDirectory);
     send(socket, { type: "file_operation_result", requestId, operation: "move_file", path: movedPath, previousPath: filePath });
@@ -2633,7 +2638,7 @@ async function handleMoveFile(socket: WebSocket, filePath: string, destinationDi
  * server wrote — a collision is disambiguated here, so the client cannot assume
  * the name it asked for survived.
  */
-async function handleUploadFile(
+async function handleUploadFile(workspace: Workspace, 
   socket: WebSocket,
   destinationDirectory: string,
   name: string,
@@ -2650,7 +2655,7 @@ async function handleUploadFile(
   }
 }
 
-async function handleCopyFile(socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
+async function handleCopyFile(workspace: Workspace, socket: WebSocket, filePath: string, destinationDirectory: string, requestId: string): Promise<void> {
   try {
     const copiedPath = await copyFileFromBrowser(workspace.browserRoot, workspace.writableRoot, filePath, destinationDirectory);
     send(socket, { type: "file_operation_result", requestId, operation: "copy_file", path: copiedPath });
@@ -2676,7 +2681,7 @@ function gitErrorMessage(error: unknown): string {
     : `Unexpected error: ${(error as Error).message}`;
 }
 
-async function handleGitStatus(socket: WebSocket, requestId: string): Promise<void> {
+async function handleGitStatus(workspace: Workspace, socket: WebSocket, requestId: string): Promise<void> {
   if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     const { branch, ahead, behind, files } = await gitStatus(workspace.browserRoot);
@@ -2687,7 +2692,7 @@ async function handleGitStatus(socket: WebSocket, requestId: string): Promise<vo
 }
 
 /** Worktree-vs-HEAD contents of one file; missing sides (untracked/deleted) are "". */
-async function handleGitDiff(socket: WebSocket, filePath: string, requestId: string): Promise<void> {
+async function handleGitDiff(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     let after = "";
@@ -2708,7 +2713,7 @@ async function handleGitDiff(socket: WebSocket, filePath: string, requestId: str
   }
 }
 
-async function handleGitLog(socket: WebSocket, limit: number, requestId: string): Promise<void> {
+async function handleGitLog(workspace: Workspace, socket: WebSocket, limit: number, requestId: string): Promise<void> {
   if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     send(socket, { type: "git_log", requestId, entries: await gitLog(workspace.browserRoot, limit) });
@@ -2723,7 +2728,7 @@ function isGitRevision(value: unknown): value is GitRevision {
 }
 
 /** Commits touching one file, for the history graph. */
-async function handleGitFileLog(socket: WebSocket, filePath: string, limit: number, requestId: string): Promise<void> {
+async function handleGitFileLog(workspace: Workspace, socket: WebSocket, filePath: string, limit: number, requestId: string): Promise<void> {
   if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     // Confine before spawning: this path goes straight into a pathspec. Only
@@ -2742,7 +2747,7 @@ async function handleGitFileLog(socket: WebSocket, filePath: string, limit: numb
  * and its size and binary limits, so a pair can never smuggle out an oversized
  * blob or a path outside the browser root.
  */
-async function readRevisionSide(revision: GitRevision, toplevel: string): Promise<string> {
+async function readRevisionSide(workspace: Workspace, revision: GitRevision, toplevel: string): Promise<string> {
   if (revision.rev === WORKTREE_REVISION) {
     try {
       return (await readFileForPreview(workspace.browserRoot, revision.path)).content;
@@ -2762,17 +2767,17 @@ async function readRevisionSide(revision: GitRevision, toplevel: string): Promis
   return content;
 }
 
-async function handleGitFileDiff(socket: WebSocket, base: GitRevision, target: GitRevision, requestId: string): Promise<void> {
+async function handleGitFileDiff(workspace: Workspace, socket: WebSocket, base: GitRevision, target: GitRevision, requestId: string): Promise<void> {
   if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const [beforeText, afterText] = await Promise.all([readRevisionSide(base, workspace.git.toplevel), readRevisionSide(target, workspace.git.toplevel)]);
+    const [beforeText, afterText] = await Promise.all([readRevisionSide(workspace, base, workspace.git.toplevel), readRevisionSide(workspace, target, workspace.git.toplevel)]);
     send(socket, { type: "git_file_diff", requestId, base, target, beforeText, afterText });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }
 }
 
-async function handleGitShow(socket: WebSocket, sha: string, requestId: string): Promise<void> {
+async function handleGitShow(workspace: Workspace, socket: WebSocket, sha: string, requestId: string): Promise<void> {
   if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     const { patch, truncated } = await gitShow(workspace.browserRoot, sha);
@@ -2783,7 +2788,7 @@ async function handleGitShow(socket: WebSocket, sha: string, requestId: string):
 }
 
 /** Composer's `@` mention autocomplete: recursive name search, confined to workspace.browserRoot. */
-async function handleSearchFiles(socket: WebSocket, query: string, requestId: string): Promise<void> {
+async function handleSearchFiles(workspace: Workspace, socket: WebSocket, query: string, requestId: string): Promise<void> {
   const results = await searchFiles(workspace.browserRoot, query);
   send(socket, { type: "file_search_results", requestId, query, results });
 }
@@ -2853,9 +2858,11 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       // Rebinding is the whole switch. Nothing else is touched: the project being
       // left keeps its session, its watcher and any turn in flight — which is what
       // lets an agent keep working while the user looks somewhere else.
-      clients.set(socket, target);
       ensureStarted(target)
-        .then(() => send(socket, { type: "workspace_switched", ...snapshot(target) }))
+        .then(() => {
+          clients.set(socket, target);
+          send(socket, { type: "workspace_switched", ...snapshot(target) });
+        })
         .catch((error: unknown) => {
           reportError(error);
           send(socket, { type: "workspace_error", message: `Could not start ${path.basename(target.root)}: ${error instanceof Error ? error.message : String(error)}` });
@@ -2874,7 +2881,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       if (typeof message.text !== "string") return;
       // A prompt landing mid-navigation would append under the OLD leaf, and the
       // navigation would then overwrite the running turn's message state
-      if (replacingSession) {
+      if (workspace.replacingSession) {
         send(socket, { type: "error", message: "Session change already in progress" });
         return;
       }
@@ -2886,7 +2893,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         return;
       }
       if (!text && !images?.length) return;
-      handlePrompt(text || "(see attached images)", images).catch(reportError);
+      handlePrompt(workspace, text || "(see attached images)", images).catch(reportError);
       break;
     }
     case "abort":
@@ -2917,7 +2924,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       break;
     }
     case "new_session":
-      void replaceSession(socket, () => workspace.agent.newSession());
+      void replaceSession(workspace, socket, () => workspace.agent.newSession());
       break;
     case "switch_session":
       if (typeof message.path !== "string") return;
@@ -2939,7 +2946,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       if (typeof message.query !== "string" || typeof message.requestId !== "string") return;
       // A search scans every transcript: don't let a client do it with a novel
       if (message.query.length > MAX_QUERY_LENGTH) return;
-      handleSearchSessions(socket, message.query, message.requestId).catch(reportError);
+      handleSearchSessions(workspace, socket, message.query, message.requestId).catch(reportError);
       break;
     case "compact":
       // Failures surface via the compaction_end event (errorMessage) — avoid double-reporting.
@@ -2959,11 +2966,11 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     }
     case "list_directory":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleListDirectory(socket, message.path, message.requestId).catch(reportError);
+      handleListDirectory(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "read_file":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleReadFile(socket, message.path, message.requestId).catch(reportError);
+      handleReadFile(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "write_file":
       if (
@@ -2974,17 +2981,17 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       ) {
         return;
       }
-      handleWriteFile(socket, message.path, message.content, message.expectedMtimeMs, message.force === true, message.requestId).catch(
+      handleWriteFile(workspace, socket, message.path, message.content, message.expectedMtimeMs, message.force === true, message.requestId).catch(
         reportError,
       );
       break;
     case "create_file":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleCreateFile(socket, message.path, message.requestId).catch(reportError);
+      handleCreateFile(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "create_directory":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleCreateDirectory(socket, message.path, message.requestId).catch(reportError);
+      handleCreateDirectory(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "upload_file":
       if (
@@ -2995,19 +3002,19 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       ) {
         return;
       }
-      handleUploadFile(socket, message.destinationDirectory, message.name, message.contentBase64, message.requestId).catch(reportError);
+      handleUploadFile(workspace, socket, message.destinationDirectory, message.name, message.contentBase64, message.requestId).catch(reportError);
       break;
     case "open_native":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleOpenNative(socket, message.path, message.requestId).catch(reportError);
+      handleOpenNative(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "rename_file":
       if (typeof message.path !== "string" || typeof message.name !== "string" || typeof message.requestId !== "string") return;
-      handleRenameFile(socket, message.path, message.name, message.requestId).catch(reportError);
+      handleRenameFile(workspace, socket, message.path, message.name, message.requestId).catch(reportError);
       break;
     case "delete_file":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleDeleteFile(socket, message.path, message.requestId).catch(reportError);
+      handleDeleteFile(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "move_file":
       if (
@@ -3017,7 +3024,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       ) {
         return;
       }
-      handleMoveFile(socket, message.path, message.destinationDirectory, message.requestId).catch(reportError);
+      handleMoveFile(workspace, socket, message.path, message.destinationDirectory, message.requestId).catch(reportError);
       break;
     case "copy_file":
       if (
@@ -3027,26 +3034,26 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       ) {
         return;
       }
-      handleCopyFile(socket, message.path, message.destinationDirectory, message.requestId).catch(reportError);
+      handleCopyFile(workspace, socket, message.path, message.destinationDirectory, message.requestId).catch(reportError);
       break;
     case "search_files":
       if (typeof message.query !== "string" || typeof message.requestId !== "string") return;
-      handleSearchFiles(socket, message.query, message.requestId).catch(reportError);
+      handleSearchFiles(workspace, socket, message.query, message.requestId).catch(reportError);
       break;
     case "list_tree":
       try {
-        sendTree(socket);
+        sendTree(workspace, socket);
       } catch (error) {
         reportError(error);
       }
       break;
     case "navigate_tree":
       if (typeof message.entryId !== "string") return;
-      navigateTree(socket, message.entryId).catch(reportError);
+      navigateTree(workspace, socket, message.entryId).catch(reportError);
       break;
     case "fork_session":
       if (typeof message.entryId !== "string") return;
-      forkSession(socket, message.entryId).catch(reportError);
+      forkSession(workspace, socket, message.entryId).catch(reportError);
       break;
     case "edit_prompt": {
       if (typeof message.entryId !== "string" || typeof message.text !== "string") return;
@@ -3057,45 +3064,45 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         return;
       }
       if (!editText && !editImages?.length) return;
-      editPrompt(socket, message.entryId, editText || "(see attached images)", editImages).catch(reportError);
+      editPrompt(workspace, socket, message.entryId, editText || "(see attached images)", editImages).catch(reportError);
       break;
     }
     case "git_status":
       if (typeof message.requestId !== "string") return;
-      handleGitStatus(socket, message.requestId).catch(reportError);
+      handleGitStatus(workspace, socket, message.requestId).catch(reportError);
       break;
     case "git_diff":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
-      handleGitDiff(socket, message.path, message.requestId).catch(reportError);
+      handleGitDiff(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "git_log":
       if (typeof message.requestId !== "string") return;
       if (message.limit !== undefined && typeof message.limit !== "number") return;
-      handleGitLog(socket, message.limit ?? 30, message.requestId).catch(reportError);
+      handleGitLog(workspace, socket, message.limit ?? 30, message.requestId).catch(reportError);
       break;
     case "git_show":
       if (typeof message.sha !== "string" || typeof message.requestId !== "string") return;
-      handleGitShow(socket, message.sha, message.requestId).catch(reportError);
+      handleGitShow(workspace, socket, message.sha, message.requestId).catch(reportError);
       break;
     case "git_file_log":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
       if (message.limit !== undefined && typeof message.limit !== "number") return;
-      handleGitFileLog(socket, message.path, message.limit ?? 100, message.requestId).catch(reportError);
+      handleGitFileLog(workspace, socket, message.path, message.limit ?? 100, message.requestId).catch(reportError);
       break;
     case "git_file_diff":
       if (typeof message.requestId !== "string") return;
       if (!isGitRevision(message.base) || !isGitRevision(message.target)) return;
-      handleGitFileDiff(socket, message.base, message.target, message.requestId).catch(reportError);
+      handleGitFileDiff(workspace, socket, message.base, message.target, message.requestId).catch(reportError);
       break;
     case "set_credential":
       if (!validProviderId(message.provider) || typeof message.apiKey !== "string" || message.apiKey.trim() === "") return;
-      handleSetCredential(socket, message.provider, message.apiKey).catch(reportError);
+      handleSetCredential(workspace, socket, message.provider, message.apiKey).catch(reportError);
       break;
     case "declare_provider":
       if (!validProviderId(message.provider) || !validBaseUrl(message.baseUrl)) return;
       if (typeof message.apiKey !== "string" || message.apiKey.trim() === "") return;
       if (!Array.isArray(message.models) || message.models.length === 0) return;
-      handleDeclareProvider(socket, {
+      handleDeclareProvider(workspace, socket, {
         provider: message.provider,
         baseUrl: message.baseUrl,
         apiKey: message.apiKey,
@@ -3196,8 +3203,8 @@ if (config.offline) console.log("[pi] offline — model catalogs are not fetched
 // The old warning ("No models available") named neither the cause nor a way out, and
 // the failure only surfaced on the user's first message. Say it at startup, name the
 // directory the credentials are missing from, and point at both ways to supply them.
-if (!credentialStatus().usableModel) {
-  const configured = credentialStatus().providers.some((provider) => provider.configured);
+if (!credentialStatus(workspace).usableModel) {
+  const configured = credentialStatus(workspace).providers.some((provider) => provider.configured);
   console.warn(
     configured
       ? `[pi] no model available — providers are configured, but "allowedModels" leaves nothing to choose from`
@@ -3208,7 +3215,10 @@ if (!credentialStatus().usableModel) {
 // --- Shutdown -------------------------------------------------------------------------
 
 async function shutdown(): Promise<void> {
-  await workspace.agent.dispose();
+  // Every open project, not just the one the server booted with: a second project's
+  // session, watcher and child process would otherwise outlive the signal that was
+  // meant to end them.
+  await Promise.allSettled([...workspaces.all()].map((open) => open.stop()));
   await app.close();
   process.exit(0);
 }
