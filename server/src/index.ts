@@ -73,6 +73,7 @@ import {
 } from "./credentials.ts";
 import { assistantToItem, contentText, customMessageToItem, historyToItems, structuredExchangeField, truncate } from "./convert.ts";
 import { configureExtensionRender, renderToolCallHtml, renderToolResultHtml } from "./extensionRender.ts";
+import { isStackExhaustion, recordTurnFailure } from "./turnFailureLog.ts";
 import {
   assertWithinRoot,
   createDirectoryFromBrowser,
@@ -1193,10 +1194,24 @@ function onRuntimeEvent(event: RuntimeEvent): void {
     case "block_delta":
       broadcast({ type: "block_delta", block: event.block, contentIndex: event.contentIndex, delta: event.delta });
       break;
-    case "assistant_end":
+    case "assistant_end": {
       // Full sync of the finished message (covers retries/partial rebuilds)
       broadcast({ type: "assistant_end", item: assistantToItem(event.message as never) });
+      // A turn that died of stack exhaustion arrives here as a message and no
+      // stack: every provider's catch keeps `error.message` and drops the Error.
+      // Record the input instead, while the branch that produced it is still
+      // the branch on screen — see turnFailureLog.ts.
+      const failure = (event.message as { errorMessage?: unknown } | null)?.errorMessage;
+      if (typeof failure === "string" && isStackExhaustion(failure)) {
+        recordTurnFailure(AGENT_DIR, {
+          source: "assistant",
+          message: failure,
+          assistantMessage: event.message,
+          entries: runtime.contextEntries(),
+        });
+      }
       break;
+    }
     case "custom_message":
       broadcast({ type: "custom_message", item: customMessageToItem(event.message as never) });
       break;
@@ -1273,6 +1288,11 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       break;
     case "compaction_end": {
       broadcast({ type: "compaction_end", ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}) });
+      // Compaction summarizes the branch with a model call of its own, so it
+      // fails the same ways a turn does — and reaches the same red list.
+      if (event.errorMessage && isStackExhaustion(event.errorMessage)) {
+        recordTurnFailure(AGENT_DIR, { source: "compaction", message: event.errorMessage, entries: runtime.contextEntries() });
+      }
       const usage = contextUsage();
       if (usage) broadcast({ type: "context_usage", usage });
       break;
@@ -1290,12 +1310,20 @@ function onRuntimeEvent(event: RuntimeEvent): void {
       // Same treatment as an assistant turn's own failure: a provider reached
       // through a proxy answers with an HTML page, and the reader gets markup.
       broadcast({ type: "error", message: describeProviderError(event.message) });
+      if (isStackExhaustion(event.message)) {
+        recordTurnFailure(AGENT_DIR, { source: "runtime", message: event.message, entries: runtime.contextEntries() });
+      }
       break;
     case "runtime_failed":
       // Fail closed: /health already reports unready, and this is the one visible
       // notice. No restart, no replay — a prompt or tool may have had side effects.
       console.error(`[pi] agent runtime failed: ${event.message}`);
       broadcast({ type: "error", message: `Agent runtime failed: ${event.message}` });
+      // Fail-closed means nothing runs after this, so the census is written
+      // synchronously or not at all.
+      if (isStackExhaustion(event.message)) {
+        recordTurnFailure(AGENT_DIR, { source: "runtime_failed", message: event.message });
+      }
       break;
   }
 }
