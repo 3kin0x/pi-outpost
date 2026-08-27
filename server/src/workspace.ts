@@ -106,7 +106,18 @@ export class Workspace {
    * that it is one a human must resolve, and a client bound to another project must
    * be able to learn this without subscribing to the conversation carrying it.
    */
-  needsAttention = false;
+  /**
+   * Ids of dialogs this project's turn is blocked on.
+   *
+   * A set rather than a flag: several can be outstanding at once, and answering one
+   * of them does not unblock the turn. Attention is "this set is non-empty", so it
+   * clears when the last question is answered and not before.
+   */
+  readonly pendingDialogs = new Set<string>();
+
+  get needsAttention(): boolean {
+    return this.pendingDialogs.size > 0;
+  }
 
   /**
    * A session switch, fork or prompt edit is in flight here.
@@ -116,6 +127,14 @@ export class Workspace {
    * operation in the other.
    */
   replacingSession = false;
+
+  /**
+   * When this project last had a client watching it, or a turn running.
+   *
+   * Touched rather than computed: "unused since" is a fact about attention, and
+   * nothing else in here records when attention stopped.
+   */
+  lastUsedAt = Date.now();
 
   /**
    * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
@@ -131,6 +150,8 @@ export class Workspace {
 
   private readonly options: WorkspaceOptions;
   private stopped = false;
+  /** Retired: session and watcher released, project still open. Cleared on rebuild. */
+  retired = false;
 
   private constructor(
     root: string,
@@ -217,6 +238,7 @@ export class Workspace {
     // already applies, so that nothing ever reports a boundary it did not apply.
     const resources = await buildResources({ ...this.options, settings });
     this.settings = settings;
+    this.retired = false;
     this.fileWatcher?.close();
     this.browserRoot = resources.browserRoot;
     this.writableRoot = resources.writableRoot;
@@ -236,6 +258,26 @@ export class Workspace {
     this.fileWatcher = undefined;
     await this._runtime?.dispose();
     this._runtime = undefined;
+  }
+
+  /**
+   * Release the session and the watcher, but stay open.
+   *
+   * The difference from `stop()` is what happens next: a retired workspace is
+   * rebuilt on its next use, so this must leave it reusable — `stopped` is not set,
+   * and the resources come back through the same path a restored project takes.
+   */
+  async retire(): Promise<void> {
+    this.retired = true;
+    this.fileWatcher?.close();
+    this.fileWatcher = undefined;
+    // Detach BEFORE awaiting disposal. Awaiting first leaves `started` true for the
+    // length of the dispose, and a client opening the project in that window would
+    // be handed a snapshot of a runtime about to be thrown away — then every later
+    // message would fail, with nothing left to start it again.
+    const runtime = this._runtime;
+    this._runtime = undefined;
+    await runtime?.dispose();
   }
 }
 

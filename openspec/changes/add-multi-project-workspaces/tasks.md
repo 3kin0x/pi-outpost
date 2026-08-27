@@ -35,16 +35,16 @@
 ## 5. Workspace lifecycle
 
 - [x] 5.1 Build a workspace's session on first open, not at startup; report `starting` until it is ready
-- [ ] 5.2 Add the idle-retirement sweep: stop a workspace with no subscriber and no running turn after the configured delay
-- [ ] 5.3 Make retirement configurable, including disabled, and prove it never stops a workspace mid-turn
-- [ ] 5.4 Rebuild a retired workspace transparently on next open, with its session history intact
+- [x] 5.2 Add the idle-retirement sweep: stop a workspace with no subscriber and no running turn after the configured delay
+- [x] 5.3 Make retirement configurable, including disabled, and prove it never stops a workspace mid-turn
+- [x] 5.4 Rebuild a retired workspace transparently on next open, with its session history intact
 
 ## 6. Attention and activity
 
-- [ ] 6.1 Track and report per-workspace state: stopped, starting, idle, working, waiting for the user
-- [ ] 6.2 Send activity and attention changes to every connection, including those bound elsewhere, carrying no message content
-- [ ] 6.3 Mark a workspace as waiting when a permission prompt or extension request blocks its turn, and keep the request pending
-- [ ] 6.4 Resume the pending request when a client switches back to that workspace
+- [x] 6.1 Track and report per-workspace state: stopped, starting, idle, working, waiting for the user
+- [x] 6.2 Send activity and attention changes to every connection, including those bound elsewhere, carrying no message content
+- [x] 6.3 Mark a workspace as waiting when a permission prompt or extension request blocks its turn, and keep the request pending
+- [x] 6.4 Resume the pending request when a client switches back to that workspace
 - [ ] 6.5 Make extension renderers per-workspace: `configureExtensionRender` sets a process-wide singleton (`server/src/extensionRender.ts`), so with two embedded projects the last one to configure it renders the other's tool cards and custom messages, with its own extension runner and cwd. Needs a renderer instance threaded through `renderToolCallHtml`, `renderToolResultHtml` and `renderCustomMessageHtml` (found by review; display correctness, not a sandbox boundary)
 
 ## 7. Interface

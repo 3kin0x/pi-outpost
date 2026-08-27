@@ -1130,6 +1130,9 @@ function workspaceInfo(target: Workspace): WorkspaceInfo {
   };
 }
 
+/** The four extension UI methods that block a turn until the user answers. */
+const BLOCKING_UI_METHODS = new Set(["select", "confirm", "input", "editor"]);
+
 function workspaceActivity(target: Workspace): WorkspaceActivity {
   if (!target.started) return "stopped";
   if (target.needsAttention) return "waiting";
@@ -1349,9 +1352,19 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
   switch (event.type) {
     case "agent_start":
       broadcast(workspace, { type: "agent_start" });
+      // The selector shows a project working while the client is looking elsewhere;
+      // without this it would only learn at the next sweep, or never.
+      announceWorkspaceActivity();
       break;
     case "agent_end": {
+      // Nothing is blocked once the turn is over: a cancelled or failed turn leaves
+      // no question to answer, and a badge that cannot be cleared is worse than
+      // no badge at all.
+      workspace.pendingDialogs.clear();
       broadcast(workspace, { type: "agent_end" });
+      // Unconditional: the project just went from working to idle, which the
+      // selector must show whether or not anything was blocked.
+      announceWorkspaceActivity();
       const usage = contextUsage(workspace);
       if (usage) broadcast(workspace, { type: "context_usage", usage });
       // The turn is persisted now: hand the client the entries so the bubbles it
@@ -1493,6 +1506,13 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
       void queueWorkPlanSessionSync(workspace);
       break;
     case "extension_ui_request":
+      // Only the four dialog methods block a turn. notify, setStatus, setWidget,
+      // setTitle and set_editor_text are one-way — badging those would report a
+      // project as waiting for an answer nobody can give.
+      if (BLOCKING_UI_METHODS.has(event.request.method)) {
+        workspace.pendingDialogs.add(event.request.id);
+        announceWorkspaceActivity();
+      }
       broadcast(workspace, event.request);
       break;
     case "error":
@@ -1929,11 +1949,15 @@ async function ensureStarted(target: Workspace): Promise<void> {
   const inFlight = starting.get(target.root);
   if (inFlight) return inFlight;
   const build = (async () => {
+    // A retired project released its watcher along with its session; rebuild both,
+    // so reopening one is indistinguishable from never having retired it.
+    if (target.retired) await target.rebuildResources(target.settings);
     const runtime = await buildRuntimeFor(target);
     target.attachRuntime(runtime);
     runtime.subscribe((event) => onRuntimeEvent(target, event));
     target.workPlan = await loadWorkPlan(runtime.snapshot().sessionFile);
     target.workPlanSessionFile = runtime.snapshot().sessionFile;
+    target.lastUsedAt = Date.now();
   })();
   starting.set(target.root, build);
   // Tell everyone it is starting, and again when it is ready or failed.
@@ -2858,9 +2882,16 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       // Rebinding is the whole switch. Nothing else is touched: the project being
       // left keeps its session, its watcher and any turn in flight — which is what
       // lets an agent keep working while the user looks somewhere else.
+      const leaving = clients.get(socket);
       ensureStarted(target)
         .then(() => {
           clients.set(socket, target);
+          // The project just left starts its idle clock now, not at the next sweep:
+          // one that had been watched for longer than the timeout would otherwise be
+          // retired on the very next pass, before its idle delay had elapsed at all.
+          if (leaving && leaving !== target && ![...clients.values()].includes(leaving)) {
+            leaving.lastUsedAt = Date.now();
+          }
           send(socket, { type: "workspace_switched", ...snapshot(target) });
         })
         .catch((error: unknown) => {
@@ -2962,6 +2993,11 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       const answer = extensionUiAnswer(message);
       if (answer === undefined) return;
       workspace.agent.answerExtensionUI(answer);
+      // Only the dialog that was actually answered. A stale or unknown id is
+      // ignored by the runtime, and one answer out of several pending questions
+      // leaves the turn still blocked — clearing the badge on either would stop
+      // showing a project that genuinely still needs the user.
+      if (workspace.pendingDialogs.delete(answer.id)) announceWorkspaceActivity();
       break;
     }
     case "list_directory":
@@ -3160,7 +3196,10 @@ handleWsConnection = (socket, workspaceRoot) => {
     });
   socket.on("message", (data: Buffer) => handleClientMessage(socket, data.toString()));
   socket.on("close", () => {
+    const bound = clients.get(socket);
     clients.delete(socket);
+    // The idle clock starts when the last watcher leaves, not at the next sweep.
+    if (bound && ![...clients.values()].includes(bound)) bound.lastUsedAt = Date.now();
     // Nobody left to answer a dialog. An extension blocked on one holds its command
     // open, and for `prompt` that command's timeout is deliberately suspended while
     // a dialog is up — so without this the child waits on a question no one can see,
@@ -3172,7 +3211,17 @@ handleWsConnection = (socket, workspaceRoot) => {
     // discard the very requests the attention badge exists to surface. Only when
     // the last client of the whole server leaves is there truly nobody who could
     // ever answer, and then every workspace's pending requests go.
-    if (clients.size === 0) for (const open of workspaces.all()) open.agent.cancelPendingExtensionRequests();
+    // `started` guards the access: a retired project has no runtime, and it can
+    // hold no pending dialog either — reaching `agent` there would throw out of a
+    // socket close callback.
+    if (clients.size === 0) {
+      for (const open of workspaces.all()) {
+        if (!open.started) continue;
+        open.agent.cancelPendingExtensionRequests();
+        open.pendingDialogs.clear();
+      }
+      announceWorkspaceActivity();
+    }
   });
 };
 // A failed runtime reports unready: /health answers 503 and the operator's probe
@@ -3211,6 +3260,50 @@ if (!credentialStatus(workspace).usableModel) {
       : `[pi] no credentials in ${AGENT_DIR} — open the UI to set one up, or run "pi-outpost login --provider <name>" (provider environment variables work too)`,
   );
 }
+
+
+/**
+ * Release projects nobody is using.
+ *
+ * Two conditions, and both are required: no client subscribed, and no turn
+ * running. Age alone is never enough — under multi-project a workspace nobody is
+ * watching is the *normal* state, because an agent is meant to keep working there,
+ * so retiring on age would kill the one thing this whole feature exists to allow.
+ *
+ * The default project is never retired: it is what an unnamed connection gets, and
+ * rebuilding it on every fresh connection would trade a warm session for nothing.
+ */
+function sweepIdleWorkspaces(): void {
+  const timeout = config.workspaceIdleTimeoutMs;
+  if (timeout <= 0) return;
+  const now = Date.now();
+  const watched = new Set(clients.values());
+  for (const open of workspaces.all()) {
+    if (open === workspaces.default) continue;
+    if (!open.started) continue;
+    if (watched.has(open)) {
+      open.lastUsedAt = now;
+      continue;
+    }
+    if (open.isBusy()) {
+      // A long turn keeps its project alive however long it runs. This is the line
+      // that makes "unused" mean unused rather than unwatched.
+      open.lastUsedAt = now;
+      continue;
+    }
+    if (now - open.lastUsedAt < timeout) continue;
+    console.log(`[pi] retiring ${path.basename(open.root)} after ${Math.round((now - open.lastUsedAt) / 1000)}s idle`);
+    void open
+      .retire()
+      .then(() => announceWorkspaceActivity())
+      .catch(reportError);
+  }
+}
+
+// A minute is fine granularity for a timeout measured in tens of minutes, and it
+// costs one pass over a handful of projects.
+const idleSweep = setInterval(sweepIdleWorkspaces, 60_000);
+idleSweep.unref?.();
 
 // --- Shutdown -------------------------------------------------------------------------
 

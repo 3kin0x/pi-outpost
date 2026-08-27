@@ -292,6 +292,16 @@ export interface AppConfig {
    * host sets to pin its widget to a project.
    */
   workspaceLock?: boolean;
+  /**
+   * How long an unused project stays alive before its session is released, in
+   * milliseconds. 0 disables retirement entirely.
+   *
+   * "Unused" means no client subscribed AND no turn running — never age alone. A
+   * project nobody is watching is the normal state here, since an agent is meant
+   * to keep working there, so retiring on age would kill the very thing this
+   * feature exists to allow.
+   */
+  workspaceIdleTimeoutMs: number;
   /** Tool name allowlist (non-sandbox mode), e.g. ["read","grep","find","ls"]. */
   tools?: string[];
   /** Skip loading extensions entirely. */
@@ -572,6 +582,10 @@ export function loadConfig(
     configFile: filePath,
     cwd: launchDir,
     openProjects: [],
+    // Half an hour: long enough that a project you step away from is still warm
+    // when you come back, short enough that a forgotten one does not hold a
+    // session and a watcher all day.
+    workspaceIdleTimeoutMs: 30 * 60_000,
     agentRuntime: {
       mode: "embedded",
       args: [],
@@ -679,6 +693,15 @@ export function loadConfig(
     config.openProjects = openProjects.map((p) => path.resolve(path.dirname(filePath), p));
   }
   config.workspaceLock = optionalBoolean(raw, "workspaceLock", false);
+  // Not positiveInteger: 0 is meaningful here — it turns retirement off — and that
+  // helper rejects it, so accepting 0 has to be said explicitly.
+  if (raw.workspaceIdleTimeoutMs !== undefined) {
+    const value = raw.workspaceIdleTimeoutMs;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      fail(`"workspaceIdleTimeoutMs" must be 0 (never retire) or a positive integer`);
+    }
+    config.workspaceIdleTimeoutMs = value;
+  }
 
   if (raw.sandboxLocks !== undefined) {
     const locks = asObject(raw.sandboxLocks, "sandboxLocks");
