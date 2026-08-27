@@ -313,7 +313,9 @@ describe("SettingsMenu", () => {
       });
       expect(screen.getByRole("alert")).toHaveTextContent('Cannot list "/private": permission denied');
       expect(field(/^Root/)).toHaveValue("/work");
-      expect(screen.getByTestId("picker-path")).toHaveTextContent("/mnt");
+      // The current directory is a field now, not a caption: it says where "Up"
+      // goes from, and a path can be typed straight into it.
+      expect(screen.getByTestId("picker-path")).toHaveValue("/mnt");
 
       fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
       fireEvent.click(applyButton());
@@ -330,6 +332,19 @@ describe("SettingsMenu", () => {
       expect(onCloseServerBrowser).toHaveBeenCalled();
     });
   });
+
+    it("browses to a path typed into the current-directory field", () => {
+      const { onBrowseServerPath, rerenderWith } = setup({ sandbox: sandbox({ root: "/work" }) });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+      rerenderWith({ serverBrowse: browse({ path: "/mnt", parent: "/" }) });
+
+      // Typing the destination beats descending to it by mouse, and is the whole
+      // reason the caption became a field.
+      fireEvent.change(screen.getByTestId("picker-path"), { target: { value: "/srv/projects" } });
+      fireEvent.click(screen.getByRole("button", { name: "Go" }));
+      expect(onBrowseServerPath).toHaveBeenLastCalledWith("/srv/projects");
+    });
 
   describe("a refused apply", () => {
     it("stays open, says why, and leaves the settings as the server still has them", () => {
