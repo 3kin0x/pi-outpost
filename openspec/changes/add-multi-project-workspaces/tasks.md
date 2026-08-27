@@ -54,15 +54,15 @@
 > attention levels and what the switch looks like. They are not normative: where they and
 > `openspec/specs/multi-project-workspaces/spec.md` disagree, the spec wins.
 
-- [ ] 7.1 Add the subscribed workspace to `ui/src/useAgent.ts` alongside `serverUrl`, and reconnect on switch
-- [ ] 7.2 Add the project button to `ui/src/components/Header.tsx`, left of the `files` control: current project's name, its state dot, and the chevron — hidden entirely while only one project is open
-- [ ] 7.3 Add the muted dots after a separator on that button, one per other open project, pulsing for one that is working; tint the whole button amber with a count when any project is waiting for the user
-- [ ] 7.4 Add the open menu: one row per open project with full name, path in mono, and state in words (`travaille` / `t'attend` / `au repos` / `démarre…` / `arrêté`); the five state marks differ in shape, not only in colour
-- [ ] 7.5 Wire "Ouvrir un projet…" to the existing directory picker, and the per-row close control with its refusal cases surfaced (agent streaming, last project)
-- [ ] 7.6 Cross-fade the conversation and the file tree together on switch, with no loading skeleton — the outgoing content holds until the incoming content arrives; the header does not move
-- [ ] 7.7 Reset the view on switch (open file, scroll position, diff pane) and keep the composer draft per project
-- [ ] 7.8 Raise a browser notification only when the document is not in the foreground and permission is granted — one per waiting workspace, its title naming the project; never a modal over the current project
-- [ ] 7.9 Hide every switching, opening and closing affordance when the server reports the lock, and in the embed widget
+- [x] 7.1 Add the subscribed workspace to `ui/src/useAgent.ts` alongside `serverUrl`, and reconnect on switch
+- [x] 7.2 Add the project button to `ui/src/components/Header.tsx`, left of the `files` control: current project's name, its state dot, and the chevron — hidden entirely while only one project is open
+- [x] 7.3 Add the muted dots after a separator on that button, one per other open project, pulsing for one that is working; tint the whole button amber with a count when any project is waiting for the user
+- [x] 7.4 Add the open menu: one row per open project with full name, path in mono, and state in words (`travaille` / `t'attend` / `au repos` / `démarre…` / `arrêté`); the five state marks differ in shape, not only in colour
+- [x] 7.5 Wire "Ouvrir un projet…" to the existing directory picker, and the per-row close control with its refusal cases surfaced (agent streaming, last project)
+- [x] 7.6 Cross-fade the conversation and the file tree together on switch, with no loading skeleton — the outgoing content holds until the incoming content arrives; the header does not move
+- [x] 7.7 Reset the view on switch (open file, scroll position, diff pane) and keep the composer draft per project
+- [x] 7.8 Raise a browser notification only when the document is not in the foreground and permission is granted — one per waiting workspace, its title naming the project; never a modal over the current project
+- [x] 7.9 Hide every switching, opening and closing affordance when the server reports the lock, and in the embed widget
 
 ## 8. Proof
 

@@ -27,6 +27,10 @@ vi.mock("./theme/useTheme", () => ({
 function agentState(overrides: Record<string, unknown> = {}) {
   return {
     connected: true,
+    workspace: null,
+    workspaces: [],
+    workspaceLocked: false,
+    switching: false,
     authRequired: false,
     branding: { title: "Test App" },
     sessionId: "sess_1",
@@ -116,6 +120,9 @@ function agentApi(state: ReturnType<typeof agentState>) {
     declareProvider: vi.fn(),
     updateConfig: vi.fn(),
     browseServerDirectory: vi.fn(),
+    switchWorkspace: vi.fn(),
+    openProject: vi.fn(),
+    closeProject: vi.fn(),
     closeServerBrowser: vi.fn(),
   };
 }

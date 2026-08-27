@@ -22,6 +22,7 @@ import type {
   SessionSummary,
   ThinkingLevel,
   TreeNode,
+  WorkspaceInfo,
   WireImage,
   WorkPlan,
 } from "@pi-outpost/shared";
@@ -171,6 +172,17 @@ export type SettingsApplyState = { status: "applying" } | { status: "error"; mes
 
 export interface AgentState {
   connected: boolean;
+  /**
+   * The project this connection is bound to; null on a single-project server,
+   * where no selector is offered.
+   */
+  workspace: WorkspaceInfo | null;
+  /** Every open project with its activity. Empty on a single-project server. */
+  workspaces: WorkspaceInfo[];
+  /** Opening, closing and switching are forbidden by the server's configuration. */
+  workspaceLocked: boolean;
+  /** A switch is in flight: the conversation fades rather than emptying. */
+  switching: boolean;
   /** The server refused our token (WS close 4401): show the token screen, stop reconnecting. */
   authRequired: boolean;
   /** The independent branding request has settled, so an embed may paint without a default-brand flash. */
@@ -263,6 +275,10 @@ export interface AgentState {
 
 const initialState: AgentState = {
   connected: false,
+  workspace: null,
+  workspaces: [],
+  workspaceLocked: false,
+  switching: false,
   authRequired: false,
   brandingReady: false,
   branding: {},
@@ -315,6 +331,7 @@ const initialState: AgentState = {
 
 type Action =
   | { type: "connected" }
+  | { type: "workspace_switching" }
   | { type: "disconnected" }
   | { type: "auth_required" }
   | { type: "auth_retrying" }
@@ -375,12 +392,26 @@ function upsertTool(items: ChatItem[], toolCallId: string, toolName: string, pat
 }
 
 function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: string }): AgentState {
-  if (message.type !== "hello" && message.type !== "session_replaced" && message.type !== "update_config_ack") return state;
+  if (
+    message.type !== "hello" &&
+    message.type !== "session_replaced" &&
+    message.type !== "update_config_ack" &&
+    message.type !== "workspace_switched"
+  )
+    return state;
   const current = message.models.find((m) => `${m.provider}/${m.id}` === message.model);
   return {
     ...state,
     connected: true,
     brandingReady: true,
+    workspace: message.workspace ?? null,
+    workspaces: message.workspaces ?? [],
+    // Absent means unlocked: the server sends the flag only when configuration
+    // forbids opening, closing and switching. Defaulting to locked hid the
+    // selector on every unconfigured server — the bench caught it, the unit
+    // suites could not, since none of them had two projects on a real wire.
+    workspaceLocked: message.workspaceLocked === true,
+    switching: false,
     branding: message.branding,
     sessionId: message.sessionId,
     model: message.model,
@@ -428,6 +459,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
 
 function reduce(state: AgentState, action: Action): AgentState {
   if (action.type === "connected") return { ...state, connected: true, authRequired: false };
+  if (action.type === "workspace_switching") return { ...state, switching: true };
   if (action.type === "auth_required") return { ...state, connected: false, authRequired: true };
   if (action.type === "auth_retrying") return { ...state, authRequired: false };
   if (action.type === "disconnected") {
@@ -550,7 +582,29 @@ function reduce(state: AgentState, action: Action): AgentState {
     case "hello":
     case "session_replaced":
     case "update_config_ack":
-      return applySnapshot(state, message);
+    case "workspace_switched":
+      // The view is deliberately not carried across a switch: coming back to a
+      // project shows its conversation, not the screen it was left on. The
+      // composer draft is the one exception and lives outside this reducer.
+      return {
+        ...applySnapshot(state, message),
+        openFile: null,
+        gitDiff: null,
+        // The other project's tree, cached under paths that mean something else
+        // there. Dropped rather than reused, the way a session replace already does.
+        fileTree: {},
+        directoryRequests: {},
+      };
+    case "workspace_activity":
+      // Activity only — no conversation content, and deliberately accepted while
+      // bound elsewhere: that is what makes background work visible at all.
+      return {
+        ...state,
+        workspaces: message.workspaces,
+        workspace: message.workspaces.find((w) => w.root === state.workspace?.root) ?? state.workspace,
+      };
+    case "workspace_error":
+      return { ...state, switching: false, errors: [...state.errors, message.message] };
     case "sessions":
       return { ...state, sessions: message.sessions };
     case "session_search_results":
@@ -1239,6 +1293,26 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     state,
     /** Current auth token (null when none) — for building /files/raw image URLs. */
     authToken: tokenRef.current,
+    /**
+     * Bind this client to another open project.
+     *
+     * The conversation fades rather than emptying while the answer is in flight —
+     * a blank pane makes a switch read as a page reload. The open file, scroll
+     * position and diff pane are deliberately NOT preserved; the composer draft is,
+     * because losing typed text destroys work rather than resetting a view.
+     */
+    switchWorkspace: (root: string) => {
+      if (root === state.workspace?.root) return;
+      dispatch({ type: "workspace_switching" });
+      sendMessage({ type: "switch_workspace", root });
+    },
+    /** Open a directory as a project, from the server-side directory picker. */
+    openProject: (root: string) => {
+      dispatch({ type: "workspace_switching" });
+      sendMessage({ type: "open_project", root });
+    },
+    /** Close an open project. Refused server-side while its agent is streaming. */
+    closeProject: (root: string) => sendMessage({ type: "close_project", root }),
     /** TokenGate submission: persist the token and reconnect with it. */
     submitToken: (token: string) => {
       storeToken(token);
