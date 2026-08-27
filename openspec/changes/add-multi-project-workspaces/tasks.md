@@ -67,8 +67,8 @@
 ## 8. Proof
 
 - [ ] 8.1 Measure the real per-workspace cost with extensions, skills, sandboxed tools and watchers active — the spikes measured a bare session only
-- [ ] 8.2 Server tests: event isolation between two concurrently streaming workspaces, sandbox confinement per workspace, session listing scoped to its workspace, close refused while streaming, persistence failure leaving the server untouched
+- [x] 8.2 Server tests: event isolation between two concurrently streaming workspaces, sandbox confinement per workspace, session listing scoped to its workspace, close refused while streaming, persistence failure leaving the server untouched
 - [ ] 8.3 Build the scenario-to-test matrix over every `#### Scenario:` in the four delta specs, classifying each as covered, partial or uncovered
-- [ ] 8.4 Drive the running widget with `npm run bench` (rebuild `web`, then `@pi-outpost/embed`, then `build:e2e-host`): open a second project, switch while an agent is streaming, come back and read the DOM to confirm the turn completed, close a project, and check the button's dots and amber tint from a background workspace
-- [ ] 8.5 In the same running app, check what the switch actually looks like: that the header does not move, that no loading skeleton flashes, that a typed draft survives a round trip, and that an open file is gone on return
-- [ ] 8.6 Run `openspec validate add-multi-project-workspaces --strict` and the full suite
+- [x] 8.4 Drive the running widget with `npm run bench` (rebuild `web`, then `@pi-outpost/embed`, then `build:e2e-host`): open a second project, switch while an agent is streaming, come back and read the DOM to confirm the turn completed, close a project, and check the button's dots and amber tint from a background workspace
+- [x] 8.5 In the same running app, check what the switch actually looks like: that the header does not move, that no loading skeleton flashes, that a typed draft survives a round trip, and that an open file is gone on return
+- [x] 8.6 Run `openspec validate add-multi-project-workspaces --strict` and the full suite

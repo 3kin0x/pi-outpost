@@ -1134,6 +1134,10 @@ function workspaceInfo(target: Workspace): WorkspaceInfo {
 const BLOCKING_UI_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
 function workspaceActivity(target: Workspace): WorkspaceActivity {
+  // Building right now. Checked before `started`, which is still false for the
+  // whole length of the build — without this the `starting` state would be
+  // announced and then read as `stopped`, so it could never be seen.
+  if (starting.has(target.root)) return "starting";
   if (!target.started) return "stopped";
   if (target.needsAttention) return "waiting";
   return target.isBusy() ? "working" : "idle";
