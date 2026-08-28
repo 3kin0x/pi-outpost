@@ -441,6 +441,49 @@ describe("loadConfig — resource path resolution", () => {
     }
   }
 
+  test("an existing configuration that never opened a project is served as before", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      // Backward compatibility is the whole of this: nothing opened means one
+      // workspace at cwd, not an empty server and not a migration step.
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      const config = loadConfig(dir, { config: configPath });
+      assert.deepEqual(config.openProjects, []);
+      assert.equal(config.workspaceLock, false);
+    });
+  });
+
+  test("open projects are resolved against the config file, like every other path", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({ openProjects: ["./beta", "/srv/gamma"] }, null, 2));
+      // A relative entry has to mean the same thing here as it does for every
+      // other configured path, or the set moves with the process's cwd.
+      assert.deepEqual(loadConfig(dir, { config: configPath }).openProjects, [path.join(dir, "beta"), "/srv/gamma"]);
+    });
+  });
+
+  test("workspaceIdleTimeoutMs takes 0 as \"never retire\", and refuses nonsense", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).workspaceIdleTimeoutMs, 30 * 60_000);
+
+      // 0 is a value, not an absence: it turns retirement off, which is why the
+      // positive-integer helper cannot be used here.
+      await writeFile(configPath, JSON.stringify({ workspaceIdleTimeoutMs: 0 }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).workspaceIdleTimeoutMs, 0);
+
+      await writeFile(configPath, JSON.stringify({ workspaceIdleTimeoutMs: 90_000 }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).workspaceIdleTimeoutMs, 90_000);
+
+      for (const bad of [-1, 1.5, "60000", true, null]) {
+        await writeFile(configPath, JSON.stringify({ workspaceIdleTimeoutMs: bad }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"workspaceIdleTimeoutMs"/);
+      }
+    });
+  });
+
   test("updateCheck stays a tri-state, so offline can still decide", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");
