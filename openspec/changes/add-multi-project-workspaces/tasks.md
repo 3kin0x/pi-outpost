@@ -66,9 +66,9 @@
 
 ## 8. Proof
 
-- [ ] 8.1 Measure the real per-workspace cost with extensions, skills, sandboxed tools and watchers active — the spikes measured a bare session only
-- [x] 8.2 Server tests: event isolation between two concurrently streaming workspaces, sandbox confinement per workspace, session listing scoped to its workspace, close refused while streaming, persistence failure leaving the server untouched
-- [ ] 8.3 Build the scenario-to-test matrix over every `#### Scenario:` in the four delta specs, classifying each as covered, partial or uncovered
+- [x] 8.1 Measure the real per-workspace cost with extensions, skills, sandboxed tools and watchers active — the spikes measured a bare session only. `scripts/measure-workspace-cost.mjs` opens projects one at a time against a running server and reads its RSS: **~4-8 MB and ~180 ms per additional project** with a sandboxed toolset, a watcher, a skill and an extension loaded (two runs: 32 MB over 5 projects, 20 MB over 5). RSS moves with GC, so the figure to quote is growth over a whole run, not a single step
+- [x] 8.2 Server tests: event isolation between two concurrently streaming workspaces, sandbox confinement per workspace, session listing scoped to its workspace, close refused while streaming, persistence failure leaving the server untouched (the last one is the file's one skipped test — see `scenario-coverage.md`)
+- [x] 8.3 Build the scenario-to-test matrix over every `#### Scenario:` in the four delta specs, classifying each as covered, partial or uncovered — `scenario-coverage.md`, 54 scenarios: 47 covered, 6 partial, 1 uncovered. Writing it found and fixed a real defect (a pending question was never re-presented after a switch back) and closed the gaps in 8.2's own list
 - [x] 8.4 Drive the running widget with `npm run bench` (rebuild `web`, then `@pi-outpost/embed`, then `build:e2e-host`): open a second project, switch while an agent is streaming, come back and read the DOM to confirm the turn completed, close a project, and check the button's dots and amber tint from a background workspace
 - [x] 8.5 In the same running app, check what the switch actually looks like: that the header does not move, that no loading skeleton flashes, that a typed draft survives a round trip, and that an open file is gone on return
 - [x] 8.6 Run `openspec validate add-multi-project-workspaces --strict` and the full suite
