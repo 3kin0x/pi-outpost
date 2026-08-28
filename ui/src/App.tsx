@@ -58,9 +58,15 @@ interface AppProps {
   initialTheme?: Theme;
   /** Auth token for servers with `server.token` set (embed hosts supply it programmatically). */
   token?: string;
+  /**
+   * Project this widget binds to, by its root path. Defaults to the server's
+   * default project; a root the server does not have open falls back to it too.
+   * Embedding hosts choose the project — the widget never offers to change it.
+   */
+  workspace?: string;
 }
 
-const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootElement, initialTheme, token }, ref) {
+const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootElement, initialTheme, token, workspace }, ref) {
   const embedded = rootElement !== undefined;
   const accentTarget = rootElement ?? document.documentElement;
   const {
@@ -117,7 +123,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     switchWorkspace,
     openProject,
     closeProject,
-  } = useAgent(serverUrl, token, embedded);
+  } = useAgent(serverUrl, token, embedded, workspace);
   useWorkspaceNotifications(state.workspaces, state.workspace?.root ?? null);
   /**
    * Drop everything a switch must not carry across.

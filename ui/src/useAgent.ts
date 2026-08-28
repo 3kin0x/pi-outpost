@@ -1003,12 +1003,20 @@ function reduce(state: AgentState, action: Action): AgentState {
 }
 
 /** `serverUrl.replace(/^http/, "ws") + "/ws"`, or same-origin `/ws` when unset. */
-function wsUrlFor(serverUrl: string, token: string | null): string {
+function wsUrlFor(serverUrl: string, token: string | null, workspace?: string): string {
   const base = serverUrl
     ? `${serverUrl.replace(/^http/, "ws")}/ws`
     : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
-  // Browsers cannot set headers on WebSockets — the token rides a query parameter
-  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  // Browsers cannot set headers on WebSockets — the token rides a query parameter,
+  // and so does the project an embedding host binds its widget to. A root the
+  // server does not have open falls back to the default there rather than
+  // failing: a project closed server-side should leave a working widget, not a
+  // dead socket.
+  const query = new URLSearchParams();
+  if (token) query.set("token", token);
+  if (workspace) query.set("workspace", workspace);
+  const search = query.toString();
+  return search ? `${base}?${search}` : base;
 }
 
 /**
@@ -1031,7 +1039,7 @@ const WS_CLOSE_UNAUTHORIZED = 4401;
  * `embedded` disables URL capture: the host page's ?token= parameter and
  * history belong to the host app, the widget must not consume or rewrite them.
  */
-export function useAgent(serverUrl = "", explicitToken?: string, embedded = false) {
+export function useAgent(serverUrl = "", explicitToken?: string, embedded = false, workspaceRoot?: string) {
   const [state, dispatch] = useReducer(reduce, initialState);
   const socketRef = useRef<WebSocket | null>(null);
   // Bumped when the user submits a token on the TokenGate — re-runs the connect effect
@@ -1161,7 +1169,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     let disposed = false;
 
     function connect() {
-      const socket = new WebSocket(wsUrlFor(serverUrl, tokenRef.current));
+      const socket = new WebSocket(wsUrlFor(serverUrl, tokenRef.current, workspaceRoot));
       socketRef.current = socket;
 
       socket.onopen = () => {
@@ -1287,7 +1295,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       socketRef.current = null;
       socket?.close();
     };
-  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, relistDirectory, requestDirectory, authNonce]);
+  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, relistDirectory, requestDirectory, authNonce, workspaceRoot]);
 
   return {
     state,

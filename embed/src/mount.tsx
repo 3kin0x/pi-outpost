@@ -113,6 +113,7 @@ export function mount(container: HTMLElement, options: MountOptions = {}): Mount
       rootElement: container,
       initialTheme: options.theme,
       token: options.token,
+      workspace: options.workspace,
     }),
   );
 
