@@ -1143,6 +1143,31 @@ function workspaceActivity(target: Workspace): WorkspaceActivity {
   return target.isBusy() ? "working" : "idle";
 }
 
+/**
+ * Bind a connection to a workspace and tell it everything about where it now is.
+ *
+ * One function rather than four call sites, because the second half is the part
+ * that gets forgotten: a dialog is sent once, to whoever was watching when it was
+ * raised. A client that arrives afterwards — switching back, reconnecting, or
+ * moved here because the project it was on closed — would otherwise see a project
+ * reported as waiting and have no way to answer it, and the turn would stay
+ * blocked forever.
+ */
+function bindClient(socket: WebSocket, target: Workspace, kind: "hello" | "workspace_switched"): void {
+  // Binding happens after `ensureStarted`, and a client can close while a cold
+  // workspace is still building. Its close handler has already forgotten it by
+  // then, and no second close will come — so binding it here would leave a dead
+  // socket in `clients`, and a workspace nobody is watching would count as
+  // watched forever and never be retired.
+  if (socket.readyState !== socket.OPEN) {
+    clients.delete(socket);
+    return;
+  }
+  clients.set(socket, target);
+  send(socket, { type: kind, ...snapshot(target) });
+  for (const request of target.pendingDialogs.values()) send(socket, request);
+}
+
 function workspaceInfos(): WorkspaceInfo[] {
   return [...workspaces.all()].map(workspaceInfo);
 }
@@ -1514,7 +1539,7 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
       // setTitle and set_editor_text are one-way — badging those would report a
       // project as waiting for an answer nobody can give.
       if (BLOCKING_UI_METHODS.has(event.request.method)) {
-        workspace.pendingDialogs.add(event.request.id);
+        workspace.pendingDialogs.set(event.request.id, event.request);
         announceWorkspaceActivity();
       }
       broadcast(workspace, event.request);
@@ -1820,9 +1845,8 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
   // share a session store while believing they did not.
   const already = workspaces.get(root);
   if (already) {
-    clients.set(socket, already);
     await ensureStarted(already);
-    send(socket, { type: "workspace_switched", ...snapshot(already) });
+    bindClient(socket, already, "workspace_switched");
     return;
   }
 
@@ -1875,8 +1899,7 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
     send(socket, { type: "workspace_error", message: `Opened ${path.basename(root)}, but its session could not start: ${error instanceof Error ? error.message : String(error)}` });
     return;
   }
-  clients.set(socket, registered);
-  send(socket, { type: "workspace_switched", ...snapshot(registered) });
+  bindClient(socket, registered, "workspace_switched");
   announceWorkspaceActivity();
 }
 
@@ -1926,8 +1949,7 @@ async function handleCloseProject(socket: WebSocket, rawRoot: string): Promise<v
     await ensureStarted(fallback);
     for (const [socketOnIt, bound] of clients) {
       if (bound !== target) continue;
-      clients.set(socketOnIt, fallback);
-      send(socketOnIt, { type: "workspace_switched", ...snapshot(fallback) });
+      bindClient(socketOnIt, fallback, "workspace_switched");
     }
   }
   await target.stop();
@@ -2889,14 +2911,13 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       const leaving = clients.get(socket);
       ensureStarted(target)
         .then(() => {
-          clients.set(socket, target);
           // The project just left starts its idle clock now, not at the next sweep:
           // one that had been watched for longer than the timeout would otherwise be
           // retired on the very next pass, before its idle delay had elapsed at all.
           if (leaving && leaving !== target && ![...clients.values()].includes(leaving)) {
             leaving.lastUsedAt = Date.now();
           }
-          send(socket, { type: "workspace_switched", ...snapshot(target) });
+          bindClient(socket, target, "workspace_switched");
         })
         .catch((error: unknown) => {
           reportError(error);
@@ -3193,7 +3214,7 @@ handleWsConnection = (socket, workspaceRoot) => {
   // A named project restored from the persisted set has no session yet. Build it
   // before the snapshot, which is what asks the runtime for its state.
   ensureStarted(bound)
-    .then(() => send(socket, { type: "hello", ...snapshot(bound) }))
+    .then(() => bindClient(socket, bound, "hello"))
     .catch((error: unknown) => {
       reportError(error);
       send(socket, { type: "workspace_error", message: `Could not start ${path.basename(bound.root)}: ${error instanceof Error ? error.message : String(error)}` });
@@ -3305,8 +3326,14 @@ function sweepIdleWorkspaces(): void {
 }
 
 // A minute is fine granularity for a timeout measured in tens of minutes, and it
-// costs one pass over a handful of projects.
-const idleSweep = setInterval(sweepIdleWorkspaces, 60_000);
+// costs one pass over a handful of projects. A timeout SHORTER than the sweep is
+// sampled at the sweep's rate, not its own — a configured 30s would then mean
+// anything up to 90s — so the sweep follows it down when it is set that low.
+const SWEEP_INTERVAL_MS = Math.max(
+  1_000,
+  Math.min(60_000, config.workspaceIdleTimeoutMs > 0 ? config.workspaceIdleTimeoutMs : 60_000),
+);
+const idleSweep = setInterval(sweepIdleWorkspaces, SWEEP_INTERVAL_MS);
 idleSweep.unref?.();
 
 // --- Shutdown -------------------------------------------------------------------------

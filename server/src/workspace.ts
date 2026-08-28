@@ -23,7 +23,7 @@ import { type DirectoryWatcher, createDirectoryWatcher } from "./fileWatcher.ts"
 import { resolveBrowserRoot, resolveWritableRoot } from "./fileBrowser.ts";
 import { probeGit } from "./git.ts";
 import { createSandboxedTools } from "./sandbox.ts";
-import type { WorkPlan } from "@pi-outpost/shared";
+import type { ExtensionUIRequest, WorkPlan } from "@pi-outpost/shared";
 
 /**
  * What a workspace needs to know about itself. A narrow slice of AppConfig rather
@@ -100,20 +100,22 @@ export class Workspace {
   workPlanInheritanceSource: string | undefined;
 
   /**
-   * A turn here is blocked on a question only the user can answer.
+   * The dialogs this project's turn is blocked on, by id.
    *
    * Stored rather than derived: the runtime knows a request is outstanding, but not
    * that it is one a human must resolve, and a client bound to another project must
    * be able to learn this without subscribing to the conversation carrying it.
-   */
-  /**
-   * Ids of dialogs this project's turn is blocked on.
    *
-   * A set rather than a flag: several can be outstanding at once, and answering one
-   * of them does not unblock the turn. Attention is "this set is non-empty", so it
+   * The REQUEST is kept, not merely its id, because a client that comes back to
+   * this project has to be shown the question again — it was sent once, to whoever
+   * was bound at the time, and a switch away and back would otherwise leave a turn
+   * blocked on a question nobody can reach any more.
+   *
+   * A map rather than a flag: several can be outstanding at once, and answering one
+   * of them does not unblock the turn. Attention is "this map is non-empty", so it
    * clears when the last question is answered and not before.
    */
-  readonly pendingDialogs = new Set<string>();
+  readonly pendingDialogs = new Map<string, ExtensionUIRequest>();
 
   get needsAttention(): boolean {
     return this.pendingDialogs.size > 0;
