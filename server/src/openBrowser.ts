@@ -150,16 +150,25 @@ function openerFor(platform: NodeJS.Platform, url: string): { command: string; a
  * exit non-zero: the address is printed either way, which is what the operator would
  * have used before this existed.
  */
+export function chooseOpener(
+  platform: NodeJS.Platform,
+  url: string,
+  shape: OpenShape,
+  exists?: ExistsProbe,
+): { command: string; args: string[] } {
+  // Falling back rather than failing is what makes a window of its own safe as the
+  // default: the worst case is exactly what this did before.
+  const own = shape === "window" ? ownWindowOpenerFor(platform, url, exists) : undefined;
+  return own ?? openerFor(platform, url);
+}
+
 export function openBrowser(
   url: string,
   platform: NodeJS.Platform = process.platform,
   shape: OpenShape = "window",
   exists?: ExistsProbe,
 ): Promise<boolean> {
-  // Falling back rather than failing is what makes a window of its own safe as the
-  // default: the worst case is exactly what this did before.
-  const own = shape === "window" ? ownWindowOpenerFor(platform, url, exists) : undefined;
-  const { command, args } = own ?? openerFor(platform, url);
+  const { command, args } = chooseOpener(platform, url, shape, exists);
   return new Promise((resolve) => {
     try {
       const child = spawn(command, args, { detached: true, stdio: "ignore" });

@@ -7,7 +7,14 @@
  */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { OWN_WINDOW_BROWSERS, browsableUrl, openBrowser, ownWindowOpenerFor, shouldOpenBrowser } from "../src/openBrowser.ts";
+import {
+  OWN_WINDOW_BROWSERS,
+  browsableUrl,
+  chooseOpener,
+  openBrowser,
+  ownWindowOpenerFor,
+  shouldOpenBrowser,
+} from "../src/openBrowser.ts";
 
 describe("whether to open a browser", () => {
   test("a desktop platform opens by default", () => {
@@ -127,28 +134,34 @@ describe("presenting the interface in a window of its own", () => {
   });
 
   // openlore: scenario=TheOperatorCanAskForATab spec=cli
-  test("asking for a tab uses the platform's own opener, even where a window was possible", async () => {
-    // The whole difference between the two shapes is which command runs. Asserting
-    // it here is the real boundary: a machine that could present the window must
-    // still hand the URL to the operating system when a tab was asked for.
+  test("asking for a tab uses the platform's own opener, even where a window was possible", () => {
+    // The whole difference between the two shapes is which command is chosen, so
+    // that is what this asserts. Driving `openBrowser` instead would measure
+    // whether a spawn succeeded, which depends on what the machine running the
+    // test happens to have installed — green on a runner with xdg-open, red on a
+    // laptop without it, and about nothing this change controls either way.
     const present = () => true;
     for (const platform of ["darwin", "win32", "linux"] as const) {
       const own = ownWindowOpenerFor(platform, URL, present);
       assert.ok(own, `${platform}: expected a window opener to be possible`);
-      // With shape "browser" the own-window opener is not consulted at all, which
-      // is what `openBrowser` proves by reaching a platform opener that cannot run.
-      const opened = await openBrowser(URL, "aix", "browser", present);
-      assert.equal(opened, false, "the platform opener ran, not the own-window one");
+      const chosen = chooseOpener(platform, URL, "browser", present);
+      assert.notDeepEqual(chosen, own, `${platform}: a tab was asked for and the window opener was chosen`);
+      assert.ok(
+        !chosen.args.some((arg) => arg.startsWith("--app=")),
+        `${platform}: the chosen command still asks for a window of its own`,
+      );
     }
   });
 
-  test("asking for a window on a machine that has none falls back to opening it at all", async () => {
+  test("asking for a window on a machine that has none falls back to what this always did", () => {
     // The fallback is what makes a window of its own safe as the default: the
-    // worst case is exactly what this did before. `absentHere` stands in for a
-    // platform opener that cannot start, so a false answer proves the fallback
-    // ran rather than the own-window path.
-    const absent: NodeJS.Platform = process.platform === "win32" ? "linux" : "win32";
-    const opened = await openBrowser(URL, absent, "window", () => false);
-    assert.equal(opened, false);
+    // worst case is exactly what this did before. Asserted as the command chosen,
+    // which is the same on every machine, rather than as a spawn that succeeds or
+    // fails depending on what is installed where the test runs.
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const withNone = chooseOpener(platform, URL, "window", () => false);
+      const asATab = chooseOpener(platform, URL, "browser", () => false);
+      assert.deepEqual(withNone, asATab, `${platform}: the fallback is not the platform opener`);
+    }
   });
 });
