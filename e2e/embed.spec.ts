@@ -841,7 +841,7 @@ test("a host that already owns install metadata keeps exactly what it declared",
 // exactly what the unit suites cannot do.
 // ---------------------------------------------------------------------------
 test.describe("embed workspace controls", () => {
-  const projectButton = /^Projet :/;
+  const projectButton = /^Project:/;
   const rootButton = /^Sandbox root/;
 
   test("settings mode offers no header control, and still reaches the root through Settings", async ({ page }) => {
@@ -892,7 +892,7 @@ test.describe("embed workspace controls", () => {
 
     await expect(page.getByTitle(projectButton)).toHaveAttribute(
       "title",
-      new RegExp(`^Projet : ${second.split("/").at(-1)!}`),
+      new RegExp(`^Project: ${second.split("/").at(-1)!}`),
       { timeout: 20_000 },
     );
   });

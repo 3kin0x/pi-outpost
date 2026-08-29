@@ -1179,10 +1179,12 @@ function workspaceInfos(): WorkspaceInfo[] {
  * elsewhere, which is the whole point: an agent working in a project nobody is
  * watching is invisible otherwise.
  *
- * Silent while a single project is open: there is no selector to feed.
+ * Sent whatever the number open. It used to be silent below two, on the grounds that
+ * there was no selector to feed — and there was not, until the interface started
+ * naming the single project too. A control that shows an activity and never hears it
+ * change is worse than one that shows none: it reports "idle" through a whole turn.
  */
 function announceWorkspaceActivity(): void {
-  if (workspaces.size < 2) return;
   broadcastServerWide({ type: "workspace_activity", workspaces: workspaceInfos() });
 }
 
@@ -1200,9 +1202,12 @@ function snapshot(workspace: Workspace): SessionSnapshot {
   const state = workspace.agent.snapshot();
   return {
     branding: config.branding,
-    // Absent while a single unnamed project is open: an existing client meets no
-    // selector where there is nothing to select.
-    ...(workspaces.size > 1 ? { workspace: workspaceInfo(workspace), workspaces: workspaceInfos() } : {}),
+    // Always, whatever the number open. A selector's first job is to say where the
+    // user is; choosing is its second. Below two these were omitted, so a client had
+    // no name to show even when it wanted to — and the interface changed shape as
+    // the count crossed the threshold.
+    workspace: workspaceInfo(workspace),
+    workspaces: workspaceInfos(),
     ...(config.workspaceLock ? { workspaceLocked: true } : {}),
     // Absent means "settings", so a client that predates the setting — or one
     // that is not embedded — sees exactly what it saw before.

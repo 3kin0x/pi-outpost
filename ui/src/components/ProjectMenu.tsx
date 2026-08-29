@@ -29,11 +29,11 @@ interface ProjectMenuProps {
 }
 
 const LABELS: Record<WorkspaceActivity, string> = {
-  stopped: "arrêté",
-  starting: "démarre…",
-  idle: "au repos",
-  working: "travaille",
-  waiting: "t'attend",
+  stopped: "stopped",
+  starting: "starting…",
+  idle: "idle",
+  working: "working",
+  waiting: "waiting for you",
 };
 
 /** The state mark. Shape first, colour second — see the file header. */
@@ -100,25 +100,11 @@ export function ProjectMenu(props: ProjectMenuProps) {
   // advertises something unavailable.
   if (locked) return null;
 
-  // One project: no selector, but opening a second must stay reachable — this menu
-  // is the only path to it, so hiding it entirely would make the one-to-two flow
-  // impossible. A bare "+" instead of a row that would only ever name itself.
-  if (workspaces.length < 2 || !workspace) {
-    return (
-      <button
-        type="button"
-        onClick={props.onOpen}
-        title="Ouvrir un projet…"
-        aria-label="Ouvrir un projet"
-        className="flex items-center rounded-md border border-zinc-300 px-2 py-1 text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200"
-      >
-        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 5v14" />
-          <path d="M5 12h14" />
-        </svg>
-      </button>
-    );
-  }
+  // No branch on how many are open. One project is the general case with a list of
+  // one: the same button, in the same place, naming the project and its state. A
+  // bare "+" used to stand here, and it said the one thing a user cannot work
+  // without — which project this is — nowhere at all.
+  if (!workspace) return null;
 
   const others = workspaces.filter((w) => w.root !== workspace.root);
   const waiting = workspaces.filter((w) => w.needsAttention);
@@ -130,7 +116,7 @@ export function ProjectMenu(props: ProjectMenuProps) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={`Projet : ${workspace.name} (${LABELS[workspace.activity]})`}
+        title={`Project: ${workspace.name} (${LABELS[workspace.activity]})`}
         className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
           waiting.length > 0
             ? "border-amber-500 bg-amber-50 text-zinc-700 dark:bg-amber-950/40 dark:text-zinc-200"
@@ -218,8 +204,8 @@ export function ProjectMenu(props: ProjectMenuProps) {
                   {workspaces.length > 1 && (
                     <button
                       type="button"
-                      title={`Fermer ${w.name}`}
-                      aria-label={`Fermer ${w.name}`}
+                      title={`Close ${w.name}`}
+                      aria-label={`Close ${w.name}`}
                       onClick={(event) => {
                         event.stopPropagation();
                         props.onClose(w.root);
@@ -252,7 +238,7 @@ export function ProjectMenu(props: ProjectMenuProps) {
               <path d="M12 5v14" />
               <path d="M5 12h14" />
             </svg>
-            Ouvrir un projet…
+            Open a project…
           </button>
         </div>
       )}

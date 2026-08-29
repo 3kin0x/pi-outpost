@@ -141,6 +141,6 @@ test("a valid replacement moves the root and keeps the same project", async (t) 
   assert.equal(ack.sandbox.root, inner);
   // A root replacement is not an open: the widget is looking at the same project,
   // and no second one appeared beside it.
-  assert.equal(ack.workspaces, hello.workspaces);
-  assert.equal(ack.workspace, hello.workspace);
+  assert.deepEqual(ack.workspaces, hello.workspaces);
+  assert.deepEqual(ack.workspace, hello.workspace);
 });

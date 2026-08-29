@@ -42,12 +42,12 @@ test("keeps composer drafts with their project across a real workspace switch", 
   const composer = page.getByRole("textbox", { name: /message pi/i });
   await composer.fill("primary draft");
 
-  await page.getByTitle(/^Projet :/).click();
+  await page.getByTitle(/^Project:/).click();
   await page.getByRole("menuitem").filter({ hasText: process.env.PI_E2E_SECOND_PROJECT! }).click();
   await expect(composer).toHaveValue("");
   await composer.fill("second draft");
 
-  await page.getByTitle(/^Projet :/).click();
+  await page.getByTitle(/^Project:/).click();
   await page.getByRole("menuitem").filter({ hasText: process.env.PI_E2E_PRIMARY_PROJECT! }).click();
   await expect(composer).toHaveValue("primary draft");
 });

@@ -84,7 +84,8 @@ async function secondProject(name = "beta") {
   return realpath(await makeWorkspace({ [`${name}.md`]: `# ${name}\n` }));
 }
 
-test("a single-project server offers no selector", async (t) => {
+// openlore: scenario=ASingleProjectIsStillDescribed spec=api
+test("a single-project server still says which project it is serving", async (t) => {
   const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
   const server = await startServer(root);
   t.after(() => server.stop());
@@ -93,10 +94,17 @@ test("a single-project server offers no selector", async (t) => {
   t.after(() => client.close());
   const hello = await client.waitFor((m) => m.type === "hello");
 
-  // Absent, not empty: an existing client meets nothing new where there is
-  // nothing to choose.
-  assert.equal(hello.workspace, undefined, "no bound workspace is advertised");
-  assert.equal(hello.workspaces, undefined, "no project list is advertised");
+  // These used to be omitted below two open projects, which left the interface
+  // with no name to show and no way to find one: the snapshot is the only place
+  // a project's name and activity exist.
+  assert.equal(hello.workspace?.root, root, "the bound project is described");
+  assert.deepEqual(
+    hello.workspaces?.map((w) => w.root),
+    [root],
+    "the one open project is listed",
+  );
+  assert.ok(hello.workspace.name, "a project the interface can name");
+  assert.ok(hello.workspace.activity, "with the state the control shows beside it");
 });
 
 test("a persisted project is listed but has no session until it is opened", async (t) => {
@@ -724,7 +732,9 @@ test("opening an unreadable path fails and opens nothing", async (t) => {
   const second = connect(server.wsUrl());
   t.after(() => second.close());
   const hello = await second.waitFor((m) => m.type === "hello");
-  assert.equal(hello.workspaces, undefined, "still a single-project server");
+  // The set is still one long. Asserted on the list rather than on its absence:
+  // the snapshot now always carries it, so "nothing was added" is a length.
+  assert.deepEqual(hello.workspaces.map((w) => w.root), [root], "still a single-project server");
 });
 
 test("opening a directory that is already open reuses it", async (t) => {
@@ -767,5 +777,57 @@ test("a persisted set that cannot be written leaves the server untouched", async
   const second = connect(server.wsUrl());
   t.after(() => second.close());
   const hello = await second.waitFor((m) => m.type === "hello");
-  assert.equal(hello.workspaces, undefined, "the project was not opened");
+  assert.deepEqual(hello.workspaces.map((w) => w.root), [root], "the project was not opened");
+});
+
+// openlore: scenario=OneProjectIsStillNamed spec=multi-project-workspaces
+test("the project a client is bound to rides every snapshot, not only the first", async (t) => {
+  const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
+  const server = await startServer(root);
+  t.after(() => server.stop());
+  const client = connect(server.wsUrl());
+  t.after(() => client.close());
+  const hello = await client.waitFor((m) => m.type === "hello");
+
+  // A field present at connection and absent from a later snapshot would make the
+  // control empty itself under the user — which is worse than never having had it.
+  client.send({ type: "update_config", userSkillPaths: [] });
+  const ack = await client.waitFor((m) => m.type === "update_config_ack" || m.type === "error");
+  assert.equal(ack.type, "update_config_ack", ack.message);
+  assert.deepEqual(ack.workspace, hello.workspace);
+  assert.deepEqual(ack.workspaces, hello.workspaces);
+
+  client.send({ type: "new_session" });
+  const replaced = await client.waitFor((m) => m.type === "session_replaced");
+  assert.deepEqual(replaced.workspace, hello.workspace);
+  assert.deepEqual(replaced.workspaces, hello.workspaces);
+});
+
+// openlore: scenario=OneProjectIsStillNamed spec=multi-project-workspaces
+test("a single project's activity reaches the client that is watching it", async (t) => {
+  const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
+  // The turn never ends: the fake answers the prompt, emits the start, and stops.
+  const server = await startScriptedServer(root, [], {
+    state: { sessionId: "scripted", isStreaming: false },
+    commands_: { prompt: { after: [{ type: "agent_start" }] } },
+  });
+  t.after(() => server.stop());
+  const client = connect(server.wsUrl());
+  t.after(() => client.close());
+  const hello = await client.waitFor((m) => m.type === "hello");
+  assert.equal(hello.workspace.activity, "idle");
+
+  client.send({ type: "prompt", text: "go" });
+
+  // Activity used to be silent below two open projects — there was no selector to
+  // feed. Now there is one, and a control that shows a state and never hears it
+  // change reports "idle" through an entire turn, which is worse than showing none.
+  const activity = await client.waitFor(
+    (m) => m.type === "workspace_activity" && m.workspaces.some((w) => w.root === root && w.activity === "working"),
+  );
+  assert.deepEqual(
+    activity.workspaces.map((w) => w.root),
+    [root],
+    "the one open project is the one reported",
+  );
 });
