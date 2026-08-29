@@ -40,8 +40,8 @@ export function useWorkspaceNotifications(workspaces: WorkspaceInfo[], activeRoo
       if (notified.current.has(workspace.root)) continue;
       notified.current.add(workspace.root);
       try {
-        new Notification(`${workspace.name} t'attend`, {
-          body: "L'agent a besoin d'une réponse pour continuer.",
+        new Notification(`${workspace.name} needs you`, {
+          body: "The agent needs an answer to continue.",
           // One notification per project, replaced rather than stacked if that
           // project asks again.
           tag: `pi-outpost:${workspace.root}`,

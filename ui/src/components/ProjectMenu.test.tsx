@@ -46,9 +46,9 @@ describe("what the selector offers", () => {
     const menu = screen.getByRole("menu");
 
     for (const [name, path, state] of [
-      ["alpha", "/srv/alpha", "au repos"],
-      ["beta", "/srv/beta", "travaille"],
-      ["gamma", "/srv/gamma", "arrêté"],
+      ["alpha", "/srv/alpha", "idle"],
+      ["beta", "/srv/beta", "working"],
+      ["gamma", "/srv/gamma", "stopped"],
     ]) {
       expect(within(menu).getByText(name)).toBeInTheDocument();
       // The path is what separates two projects sharing a basename.
@@ -75,7 +75,7 @@ describe("what the selector offers", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { expanded: false }));
-    fireEvent.click(screen.getByRole("button", { name: "Fermer beta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close beta" }));
     expect(props.onClose).toHaveBeenCalledWith("/srv/beta");
   });
 
@@ -86,7 +86,7 @@ describe("what the selector offers", () => {
     // The one thing a user cannot work without is which project this is. A bare
     // "+" stood here and said it nowhere.
     const button = screen.getByRole("button", { expanded: false });
-    expect(button).toHaveAttribute("title", "Projet : alpha (au repos)");
+    expect(button).toHaveAttribute("title", "Project: alpha (idle)");
     expect(button).toHaveTextContent("alpha");
   });
 
@@ -99,9 +99,9 @@ describe("what the selector offers", () => {
     // One row, and the way to add another. Closing is absent because the server
     // refuses to close the last project anyway.
     expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
-    expect(within(menu).queryByRole("button", { name: /^Fermer/ })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: /^Close/ })).not.toBeInTheDocument();
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: /Ouvrir un projet/ }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Open a project/ }));
     expect(props.onOpen).toHaveBeenCalled();
   });
 
@@ -159,7 +159,7 @@ describe("attention, without interrupting anyone", () => {
 
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     const row = within(screen.getByRole("menu")).getByText("beta").closest("div")!;
-    expect(within(row).getByText("t'attend")).toBeInTheDocument();
+    expect(within(row).getByText("waiting for you")).toBeInTheDocument();
   });
 });
 
@@ -199,7 +199,7 @@ describe("dismissing the menu", () => {
     const { props } = setup();
     fireEvent.click(screen.getByRole("button", { expanded: false }));
 
-    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Ouvrir un projet/ }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Open a project/ }));
 
     // The picker takes over from here, so the menu must not still be over it.
     expect(props.onOpen).toHaveBeenCalled();
@@ -217,7 +217,7 @@ describe("what one project shows that only several used to", () => {
     // projects: a bare "+" has no state to show.
     expect(screen.getByRole("button", { expanded: false })).toHaveAttribute(
       "title",
-      "Projet : alpha (travaille)",
+      "Project: alpha (working)",
     );
   });
 
@@ -233,7 +233,7 @@ describe("what one project shows that only several used to", () => {
     setup({ workspaces: [workspace({ activity: "waiting", needsAttention: true })] });
     fireEvent.click(screen.getByRole("button", { expanded: false }));
 
-    expect(within(screen.getByRole("menu")).getByText("t'attend")).toBeInTheDocument();
+    expect(within(screen.getByRole("menu")).getByText("waiting for you")).toBeInTheDocument();
   });
 });
 

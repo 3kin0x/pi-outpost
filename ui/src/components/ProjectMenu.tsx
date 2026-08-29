@@ -29,11 +29,11 @@ interface ProjectMenuProps {
 }
 
 const LABELS: Record<WorkspaceActivity, string> = {
-  stopped: "arrêté",
-  starting: "démarre…",
-  idle: "au repos",
-  working: "travaille",
-  waiting: "t'attend",
+  stopped: "stopped",
+  starting: "starting…",
+  idle: "idle",
+  working: "working",
+  waiting: "waiting for you",
 };
 
 /** The state mark. Shape first, colour second — see the file header. */
@@ -116,7 +116,7 @@ export function ProjectMenu(props: ProjectMenuProps) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={`Projet : ${workspace.name} (${LABELS[workspace.activity]})`}
+        title={`Project: ${workspace.name} (${LABELS[workspace.activity]})`}
         className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
           waiting.length > 0
             ? "border-amber-500 bg-amber-50 text-zinc-700 dark:bg-amber-950/40 dark:text-zinc-200"
@@ -204,8 +204,8 @@ export function ProjectMenu(props: ProjectMenuProps) {
                   {workspaces.length > 1 && (
                     <button
                       type="button"
-                      title={`Fermer ${w.name}`}
-                      aria-label={`Fermer ${w.name}`}
+                      title={`Close ${w.name}`}
+                      aria-label={`Close ${w.name}`}
                       onClick={(event) => {
                         event.stopPropagation();
                         props.onClose(w.root);
@@ -238,7 +238,7 @@ export function ProjectMenu(props: ProjectMenuProps) {
               <path d="M12 5v14" />
               <path d="M5 12h14" />
             </svg>
-            Ouvrir un projet…
+            Open a project…
           </button>
         </div>
       )}

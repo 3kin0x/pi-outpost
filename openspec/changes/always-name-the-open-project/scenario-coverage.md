@@ -15,7 +15,7 @@ Files referenced:
 
 | Scenario | Status | Evidence |
 | --- | --- | --- |
-| OneProjectIsStillNamed | covered | mp "a single-project server still says which project it is serving" asserts the bound project's root, the one-entry list, and that it carries a name and an activity — the two things the control shows. mp "a single project's activity reaches the client that is watching it" drives a real turn and requires the `workspace_activity` frame to arrive with that project working, so the state the control shows stays current. menu "names the project even when it is the only one open" asserts the rendered title and text. bench: the header read `pi-outpost-test-1YyAmK`, `Projet : … (au repos)` |
+| OneProjectIsStillNamed | covered | mp "a single-project server still says which project it is serving" asserts the bound project's root, the one-entry list, and that it carries a name and an activity — the two things the control shows. mp "a single project's activity reaches the client that is watching it" drives a real turn and requires the `workspace_activity` frame to arrive with that project working, so the state the control shows stays current. menu "names the project even when it is the only one open" asserts the rendered title and text. bench: the header read `pi-outpost-test-1YyAmK`, `Project: … (idle)` |
 | TheControlDoesNotChangeShape | covered | menu "does not change shape when a second project appears" captures the button's tag, title and text at one project and requires them identical after a second arrives, then proves the menu grew from 2 rows to 3. bench: same `BUTTON`, same 26px height, across a real open |
 | OpeningStaysReachableFromTheControl | covered | menu "keeps opening reachable with a single project, from that same control" opens the menu, requires exactly two items and no close button, and drives the open item. bench: the same path opened a second project for real |
 | APinnedServerStillOffersNothing | covered | menu "offers nothing on a pinned server, with one project open" requires an empty DOM. bench: the widget under a `settings` policy shows no control at all, with the fields present |
@@ -56,7 +56,7 @@ and now says the same thing about the new one.
 Rendering the control at one project was only half of it. `announceWorkspaceActivity()`
 returned early below two open projects — "there is no selector to feed" — which was
 true until this change made one. Left alone, the new control would have shown the
-activity it was born with and never heard it change: "au repos" through an entire turn,
+activity it was born with and never heard it change: "idle" through an entire turn,
 until a reconnect. The threshold is gone, and mp "a single project's activity reaches
 the client that is watching it" drives a real turn over the wire to prove it.
 

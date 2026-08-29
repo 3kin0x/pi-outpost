@@ -15,7 +15,7 @@
 
 ## 4. In the running app
 
-- [x] 4.1 Drive a single-project server in the bench and read the header back: the project is named, its state is shown, and opening another is reachable from the same control. Confirmed: the header reads `pi-outpost-test-1YyAmK` with title `Projet : … (au repos)`, and the menu holds that project plus "Ouvrir un projet…" — two items, no close button, since the last project cannot be closed.
+- [x] 4.1 Drive a single-project server in the bench and read the header back: the project is named, its state is shown, and opening another is reachable from the same control. Confirmed: the header reads `pi-outpost-test-1YyAmK` with title `Project: … (idle)`, and the menu holds that project plus "Open a project…" — two items, no close button, since the last project cannot be closed.
 - [x] 4.2 In the same session, open a second project and confirm the control did not change shape — the same element, in the same place, now offering a choice. Confirmed: same `BUTTON`, same 26px height, same title format; the menu went from 2 rows to 3 and gained its close buttons. The control did not change shape.
 
 ## 5. Scenario coverage and validation

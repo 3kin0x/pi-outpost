@@ -813,8 +813,8 @@ describe("choosing a project directory", () => {
     render(<App />);
     // Through the selector, which names the project whether one is open or several
     // — there is no separate single-project control to click any more.
-    fireEvent.click(screen.getByTitle(/^Projet :/));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Ouvrir un projet/ }));
+    fireEvent.click(screen.getByTitle(/^Project:/));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Open a project/ }));
     return api;
   }
 
@@ -880,7 +880,7 @@ describe("an embed under the default policy", () => {
 
     // What every widget showed before the setting existed, and what a server
     // that says nothing still means.
-    expect(screen.queryByTitle(/^Projet :/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Project:/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sandbox root/ })).not.toBeInTheDocument();
     // Settings stays reachable in every mode — that is where the root lives here.
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
@@ -894,7 +894,7 @@ describe("an embed under the default policy", () => {
 
     // The policy is about mounted widgets. A standalone client on the same server
     // keeps the controls it has always had.
-    expect(screen.getByTitle(/^Projet :/)).toBeInTheDocument();
+    expect(screen.getByTitle(/^Project:/)).toBeInTheDocument();
   });
 });
 
@@ -919,7 +919,7 @@ describe("an embed in root mode", () => {
     embedded({ embedWorkspaceControls: "root" });
 
     expect(screen.getByRole("button", { name: /Sandbox root/ })).toBeInTheDocument();
-    expect(screen.queryByTitle(/^Projet :/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Project:/)).not.toBeInTheDocument();
   });
 });
 
@@ -929,7 +929,7 @@ describe("an embed in projects mode", () => {
   it("offers the project controls the standalone app has", () => {
     embedded({ embedWorkspaceControls: "projects" });
 
-    expect(screen.getByTitle(/^Projet :/)).toBeInTheDocument();
+    expect(screen.getByTitle(/^Project:/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sandbox root/ })).not.toBeInTheDocument();
   });
 
@@ -938,15 +938,15 @@ describe("an embed in projects mode", () => {
 
     // The lock is the server's answer and the policy cannot argue with it: a
     // presentation choice may only narrow what the server already allows.
-    expect(screen.queryByTitle(/^Projet :/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Project:/)).not.toBeInTheDocument();
   });
 });
 
 describe("one listing, one picker", () => {
   it("closes the project picker when the sandbox-root chooser opens", () => {
     const { api } = embedded({ embedWorkspaceControls: "projects" });
-    fireEvent.click(screen.getByTitle(/^Projet :/));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Ouvrir un projet/ }));
+    fireEvent.click(screen.getByTitle(/^Project:/));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Open a project/ }));
     expect(screen.getByTestId("server-path-picker")).toBeInTheDocument();
 
     // Settings owns the same server-browse listing; opening its picker has to

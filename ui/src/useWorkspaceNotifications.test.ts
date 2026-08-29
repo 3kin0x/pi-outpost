@@ -63,7 +63,7 @@ describe("raising attention from a workspace nobody is watching", () => {
 
     // A coalesced "2 projects need you" cannot be acted on — it does not say
     // where to click.
-    expect(raised.map((n) => n.title)).toEqual(["beta t'attend", "gamma t'attend"]);
+    expect(raised.map((n) => n.title)).toEqual(["beta needs you", "gamma needs you"]);
     expect(raised.map((n) => n.options?.tag)).toEqual(["pi-outpost:/srv/beta", "pi-outpost:/srv/gamma"]);
   });
 
