@@ -1,0 +1,351 @@
+/**
+ * A workspace: one project the server holds open, and everything rooted at it.
+ *
+ * Before this existed, all of it lived as module-level bindings in index.ts —
+ * `AGENT_CWD`, `BROWSER_ROOT`, `WRITABLE_ROOT`, `GIT`, `fileWatcher`,
+ * `sandboxedTools`, `runtime`, `activeWorkPlan` — established once at boot and
+ * never re-owned. That shape is what makes a server serve exactly one project:
+ * there is no second copy of any of it to hand a second project.
+ *
+ * The set of fields here is not a design; it is an inventory. `handleUpdateConfig`
+ * already had to rebuild precisely this list when the sandbox root moved, which is
+ * how we know it is complete: anything it forgot would already be a bug today.
+ *
+ * What a workspace deliberately does NOT own: the HTTP server, the client set, the
+ * credential store, and the agentDir. Those are the server's, shared across every
+ * workspace, and duplicating them would fragment state that is genuinely global.
+ */
+import fs from "node:fs/promises";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentRuntime } from "./agentRuntime.ts";
+import type { SandboxConfig } from "./config.ts";
+import { type DirectoryWatcher, createDirectoryWatcher } from "./fileWatcher.ts";
+import { resolveBrowserRoot, resolveWritableRoot } from "./fileBrowser.ts";
+import { probeGit } from "./git.ts";
+import { ExtensionRenderer } from "./extensionRender.ts";
+import { createSandboxedTools } from "./sandbox.ts";
+import type { ExtensionUIRequest, WorkPlan } from "@pi-outpost/shared";
+
+/**
+ * What a workspace needs to know about itself. A narrow slice of AppConfig rather
+ * than the whole thing: everything else in that object is server-wide, and taking
+ * the whole config here would let a second workspace read the first one's settings
+ * by accident.
+ */
+export interface WorkspaceSettings {
+  /** The project directory. Also the workspace's identity — see `Workspace.root`. */
+  cwd: string;
+  sandbox?: SandboxConfig;
+}
+
+/** Server-wide limits a workspace passes through when it builds its toolset. */
+export interface WorkspaceToolLimits {
+  pdfMaxBytes: number;
+  docxMaxBytes: number;
+  xlsxMaxBytes: number;
+  pptxMaxBytes: number;
+  structuredExchangeMaxBytes: number;
+}
+
+/** Facts needed to decide whether an open workspace may release its resources. */
+export interface WorkspaceRetirementState {
+  timeoutMs: number;
+  now: number;
+  lastUsedAt: number;
+  watched: boolean;
+  busy: boolean;
+}
+
+/**
+ * Retirement policy kept independent from the timer that applies it, so the
+ * disabled and busy boundaries are exact decisions rather than timing tests.
+ */
+export function shouldRetireWorkspace(state: WorkspaceRetirementState): boolean {
+  return (
+    state.timeoutMs > 0 &&
+    !state.watched &&
+    !state.busy &&
+    state.now - state.lastUsedAt >= state.timeoutMs
+  );
+}
+
+export interface WorkspaceOptions {
+  settings: WorkspaceSettings;
+  limits: WorkspaceToolLimits;
+  /** Whether to watch the browser root. Server-wide (`config.files.watch`). */
+  watchFiles: boolean;
+  /**
+   * Tools that are the same on both sides of the sandbox — they read and write
+   * nothing on disk, so they are not confined and are appended to every toolset.
+   */
+  unconfinedTools: ToolDefinition[];
+  /**
+   * Where a directory change in THIS workspace goes. Scoped by the caller: a
+   * watcher fires for one project's tree, and only clients bound to that project
+   * may hear about it.
+   */
+  onDirectoryChanged: (relPath: string) => void;
+  /**
+   * Builds the agent runtime for this workspace. Injected because the two runtime
+   * flavours are assembled from configuration this object deliberately cannot see
+   * (extensions, skills, prompt templates, RPC arguments).
+   */
+  createRuntime: (settings: WorkspaceSettings, sandboxedTools: ToolDefinition[] | undefined) => Promise<AgentRuntime>;
+}
+
+export class Workspace {
+  /**
+   * Identity is the resolved root path — no generated id to persist and reconcile.
+   * Opening a directory that is already open is therefore a lookup rather than a
+   * duplicate, and a reopened project finds its own history, since `SessionManager`
+   * is already keyed by cwd.
+   */
+  readonly root: string;
+
+  settings: WorkspaceSettings;
+
+  /**
+   * Renders this project's tool cards and custom messages, using the renderers
+   * ITS extensions provide and its own cwd. Per-workspace because the alternative
+   * was a process-wide one, configured by whichever project started last.
+   */
+  readonly renderer = new ExtensionRenderer();
+
+  browserRoot: string;
+  writableRoot: string | null | undefined;
+  git: { toplevel: string } | null;
+  fileWatcher: DirectoryWatcher | undefined;
+  sandboxedTools: ToolDefinition[] | undefined;
+
+  /** Loaded from the runtime's session file by the caller; null until then. */
+  workPlan: WorkPlan | null = null;
+  workPlanSessionFile: string | undefined;
+  /**
+   * Serialises writes to THIS workspace's plan. Per-workspace rather than global:
+   * a shared chain would make two projects wait on each other's plan writes, which
+   * is a queue neither of them has any reason to be in.
+   */
+  workPlanSync: Promise<void> = Promise.resolve();
+  /** Session file a fork is inheriting its plan from, while that is in flight. */
+  workPlanInheritanceSource: string | undefined;
+
+  /**
+   * The dialogs this project's turn is blocked on, by id.
+   *
+   * Stored rather than derived: the runtime knows a request is outstanding, but not
+   * that it is one a human must resolve, and a client bound to another project must
+   * be able to learn this without subscribing to the conversation carrying it.
+   *
+   * The REQUEST is kept, not merely its id, because a client that comes back to
+   * this project has to be shown the question again — it was sent once, to whoever
+   * was bound at the time, and a switch away and back would otherwise leave a turn
+   * blocked on a question nobody can reach any more.
+   *
+   * A map rather than a flag: several can be outstanding at once, and answering one
+   * of them does not unblock the turn. Attention is "this map is non-empty", so it
+   * clears when the last question is answered and not before.
+   */
+  readonly pendingDialogs = new Map<string, ExtensionUIRequest>();
+
+  get needsAttention(): boolean {
+    return this.pendingDialogs.size > 0;
+  }
+
+  /**
+   * A session switch, fork or prompt edit is in flight here.
+   *
+   * Per-workspace rather than server-wide: two projects have separate runtimes and
+   * separate session files, so navigating one has no reason to refuse the same
+   * operation in the other.
+   */
+  replacingSession = false;
+
+  /**
+   * When this project last had a client watching it, or a turn running.
+   *
+   * Touched rather than computed: "unused since" is a fact about attention, and
+   * nothing else in here records when attention stopped.
+   */
+  lastUsedAt = Date.now();
+
+  /**
+   * Undefined until the runtime is attached. Deliberately late-bound: the HTTP
+   * server starts before the agent (branding must not wait behind model, extension
+   * and skill loading), and a workspace's session is built on first open rather
+   * than at startup — so "resources exist, runtime does not yet" is a real state,
+   * not a construction artefact.
+   *
+   * Private, and reached through `agent`: a caller that has one of these in hand
+   * wants the runtime, not a question about whether there is one.
+   */
+  private _runtime: AgentRuntime | undefined;
+
+  private readonly options: WorkspaceOptions;
+  private stopped = false;
+  /** Retired: session and watcher released, project still open. Cleared on rebuild. */
+  retired = false;
+
+  private constructor(
+    root: string,
+    runtime: AgentRuntime | undefined,
+    resources: WorkspaceResources,
+    options: WorkspaceOptions,
+  ) {
+    this.root = root;
+    this._runtime = runtime;
+    this.settings = options.settings;
+    this.browserRoot = resources.browserRoot;
+    this.writableRoot = resources.writableRoot;
+    this.git = resources.git;
+    this.fileWatcher = resources.fileWatcher;
+    this.sandboxedTools = resources.sandboxedTools;
+    this.options = options;
+  }
+
+  /**
+   * Build every resource, then the runtime on top of them — the toolset has to
+   * exist before the session that is given it.
+   */
+  static async create(options: WorkspaceOptions): Promise<Workspace> {
+    // Identity is the PROJECT directory, never the browser root: a sandbox may be
+    // rooted somewhere else entirely, and keying on that would make a workspace
+    // answer to a path its sessions are not stored under — SessionManager is keyed
+    // by cwd — and let two different projects collide on one sandbox subtree.
+    const root = await fs.realpath(options.settings.cwd);
+    const resources = await buildResources(options);
+    return new Workspace(root, undefined, resources, options);
+  }
+
+  /** Resources first, then the session built on top of them. */
+  static async open(options: WorkspaceOptions): Promise<Workspace> {
+    const workspace = await Workspace.create(options);
+    workspace.attachRuntime(await options.createRuntime(options.settings, workspace.sandboxedTools));
+    return workspace;
+  }
+
+  attachRuntime(runtime: AgentRuntime): void {
+    this._runtime = runtime;
+  }
+
+  /** Whether the session has been built yet — the `starting` state, seen from here. */
+  get started(): boolean {
+    return this._runtime !== undefined;
+  }
+
+  /**
+   * The agent, for the handlers that exist to drive it.
+   *
+   * Throws rather than returning undefined: reaching this before the runtime is
+   * attached means a request was served by a handler that should still have been
+   * stubbed out, which is a wiring bug and not a state to code around. Every caller
+   * here runs behind the real /ws handler, which is only installed once the runtime
+   * is ready.
+   */
+  get agent(): AgentRuntime {
+    if (!this._runtime) throw new Error(`workspace ${this.root} has no runtime yet`);
+    return this._runtime;
+  }
+
+  /**
+   * Whether a turn is running. The one question that gates both retirement and
+   * closing: a workspace nobody is watching is the normal state under multi-project,
+   * so "unused" can never be allowed to mean "unwatched".
+   */
+  isBusy(): boolean {
+    return this._runtime?.snapshot().isStreaming ?? false;
+  }
+
+  /**
+   * Rebuild everything rooted at the sandbox root, after it moved. Every watched
+   * path was relative to the root that just moved, so the watcher is replaced
+   * rather than kept.
+   *
+   * The runtime is untouched here: rebuilding its toolset is a separate step the
+   * caller owns, because it replaces the live session in front of the user.
+   */
+  async rebuildResources(settings: WorkspaceSettings): Promise<void> {
+    // Build first, adopt second. A failure here — a configured root that no longer
+    // exists, a toolset that cannot be constructed — must leave the workspace
+    // exactly as it was, settings included: the same discipline handleUpdateConfig
+    // already applies, so that nothing ever reports a boundary it did not apply.
+    const resources = await buildResources({ ...this.options, settings });
+    this.settings = settings;
+    this.retired = false;
+    this.fileWatcher?.close();
+    this.browserRoot = resources.browserRoot;
+    this.writableRoot = resources.writableRoot;
+    this.git = resources.git;
+    this.fileWatcher = resources.fileWatcher;
+    this.sandboxedTools = resources.sandboxedTools;
+  }
+
+  /**
+   * Release everything. Idempotent: retirement and an explicit close can race, and
+   * closing a watcher twice is not worth a caller-side guard at every call site.
+   */
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.fileWatcher?.close();
+    this.fileWatcher = undefined;
+    this.renderer.configure(undefined);
+    await this._runtime?.dispose();
+    this._runtime = undefined;
+  }
+
+  /**
+   * Release the session and the watcher, but stay open.
+   *
+   * The difference from `stop()` is what happens next: a retired workspace is
+   * rebuilt on its next use, so this must leave it reusable — `stopped` is not set,
+   * and the resources come back through the same path a restored project takes.
+   */
+  async retire(): Promise<void> {
+    this.retired = true;
+    this.fileWatcher?.close();
+    this.fileWatcher = undefined;
+    // The renderers close over the session being disposed here, so a retired
+    // workspace that kept them would hold its whole runtime alive for nothing.
+    // `ensureStarted` reconfigures them when the project is next used.
+    this.renderer.configure(undefined);
+    // Detach BEFORE awaiting disposal. Awaiting first leaves `started` true for the
+    // length of the dispose, and a client opening the project in that window would
+    // be handed a snapshot of a runtime about to be thrown away — then every later
+    // message would fail, with nothing left to start it again.
+    const runtime = this._runtime;
+    this._runtime = undefined;
+    await runtime?.dispose();
+  }
+}
+
+interface WorkspaceResources {
+  browserRoot: string;
+  writableRoot: string | null | undefined;
+  git: { toplevel: string } | null;
+  fileWatcher: DirectoryWatcher | undefined;
+  sandboxedTools: ToolDefinition[] | undefined;
+}
+
+async function buildResources(options: WorkspaceOptions): Promise<WorkspaceResources> {
+  const { settings, limits } = options;
+  const browserRoot = await resolveBrowserRoot(settings);
+  const writableRoot = await resolveWritableRoot(settings, browserRoot);
+  const git = await probeGit(browserRoot);
+  const sandboxedTools = settings.sandbox
+    ? [
+        ...(await createSandboxedTools(
+          settings.sandbox,
+          limits.pdfMaxBytes,
+          limits.docxMaxBytes,
+          limits.xlsxMaxBytes,
+          limits.pptxMaxBytes,
+          limits.structuredExchangeMaxBytes,
+        )),
+        ...options.unconfinedTools,
+      ]
+    : undefined;
+  const fileWatcher = options.watchFiles
+    ? createDirectoryWatcher({ root: browserRoot, onChange: options.onDirectoryChanged })
+    : undefined;
+  return { browserRoot, writableRoot, git, fileWatcher, sandboxedTools };
+}

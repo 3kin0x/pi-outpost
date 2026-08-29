@@ -136,6 +136,8 @@ export async function startServer(root, config = {}, options = {}) {
     port,
     base,
     root,
+    /** The config the server loaded — for tests that make it unwritable. */
+    configFile: configPath,
     wsUrl: (token) => `ws://127.0.0.1:${port}/ws${token ? `?token=${encodeURIComponent(token)}` : ""}`,
     log: () => log,
     async stop() {

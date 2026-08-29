@@ -27,6 +27,10 @@ vi.mock("./theme/useTheme", () => ({
 function agentState(overrides: Record<string, unknown> = {}) {
   return {
     connected: true,
+    workspace: null,
+    workspaces: [],
+    workspaceLocked: false,
+    switching: false,
     authRequired: false,
     branding: { title: "Test App" },
     sessionId: "sess_1",
@@ -116,6 +120,9 @@ function agentApi(state: ReturnType<typeof agentState>) {
     declareProvider: vi.fn(),
     updateConfig: vi.fn(),
     browseServerDirectory: vi.fn(),
+    switchWorkspace: vi.fn(),
+    openProject: vi.fn(),
+    closeProject: vi.fn(),
     closeServerBrowser: vi.fn(),
   };
 }
@@ -160,6 +167,47 @@ describe("App — onboarding", () => {
     render(<App />);
     // Should not render the main chat
     expect(screen.queryByPlaceholderText(/message/i)).toBeNull();
+  });
+});
+
+function workspace(root: string) {
+  return { root, name: root.split("/").at(-1)!, activity: "idle" as const, needsAttention: false };
+}
+
+// openlore: scenario=TheUnsentDraftIsRestored spec=multi-project-workspaces
+describe("TheUnsentDraftIsRestored", () => {
+  it("restores a project's draft after a round trip through another project", () => {
+    const alpha = workspace("/srv/alpha");
+    const beta = workspace("/srv/beta");
+    let api = agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+
+    fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: "alpha draft" } });
+    api = agentApi(agentState({ workspace: beta, workspaces: [alpha, beta] }));
+    view.rerender(<App />);
+    fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: "beta draft" } });
+    api = agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] }));
+    view.rerender(<App />);
+
+    expect(screen.getByPlaceholderText(/message/i)).toHaveValue("alpha draft");
+  });
+});
+
+// openlore: scenario=DraftsDoNotFollowTheClient spec=multi-project-workspaces
+describe("DraftsDoNotFollowTheClient", () => {
+  it("shows an empty composer when a project with no draft is selected", () => {
+    const alpha = workspace("/srv/alpha");
+    const beta = workspace("/srv/beta");
+    let api = agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+    fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: "alpha only" } });
+
+    api = agentApi(agentState({ workspace: beta, workspaces: [alpha, beta] }));
+    view.rerender(<App />);
+
+    expect(screen.getByPlaceholderText(/message/i)).toHaveValue("");
   });
 });
 
@@ -746,5 +794,54 @@ describe("App — model bar and tree", () => {
   it("shows an extension's widget above the editor", () => {
     mount({ widgets: { w1: { lines: ["build: passing"], placement: "aboveEditor" } } });
     expect(screen.getByText("build: passing")).toBeInTheDocument();
+  });
+});
+
+// openlore: scenario=OpeningADirectoryFromThePicker spec=multi-project-workspaces
+describe("choosing a project directory", () => {
+  const alpha = workspace("/srv/alpha");
+
+  function openThePicker() {
+    const api = agentApi(
+      agentState({
+        workspace: alpha,
+        workspaces: [alpha],
+        serverBrowse: { status: "loaded", path: "/srv/beta", parent: "/srv", entries: [], requestId: "r1" },
+      }),
+    );
+    mockUseAgent.mockImplementation(() => api);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir un projet" }));
+    return api;
+  }
+
+  it("shows the picker and starts the server walk at the top", () => {
+    const api = openThePicker();
+
+    // The empty path is what asks the server where it would start.
+    expect(api.browseServerDirectory).toHaveBeenCalledWith("");
+    expect(screen.getByTestId("server-path-picker")).toBeInTheDocument();
+  });
+
+  it("opens the directory it was left on, and releases the browser with it", () => {
+    const api = openThePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+
+    expect(api.openProject).toHaveBeenCalledWith("/srv/beta");
+    // The listing is server state: leaving it behind would show a stale walk the
+    // next time the picker opens.
+    expect(api.closeServerBrowser).toHaveBeenCalled();
+    expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
+  });
+
+  it("opens nothing when the picker is cancelled", () => {
+    const api = openThePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(api.openProject).not.toHaveBeenCalled();
+    expect(api.closeServerBrowser).toHaveBeenCalled();
+    expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
   });
 });

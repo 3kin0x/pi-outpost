@@ -5,11 +5,7 @@ import path from "node:path";
 import { rewriteMentionedPathsSync } from "@pi-outpost/shared/mentions";
 import type { AssistantBlock, ChatItem, TurnUsage, WireImage } from "@pi-outpost/shared";
 import { describeProviderError } from "@pi-outpost/shared/provider-error";
-import {
-  renderCustomMessageHtml,
-  renderToolCallHtml,
-  renderToolResultHtml,
-} from "./extensionRender.ts";
+import type { ExtensionRenderer } from "./extensionRender.ts";
 
 const MAX_TOOL_OUTPUT = 20_000;
 
@@ -163,6 +159,12 @@ export function historyToItems(
   streaming = false,
   userEntryIds: string[] = [],
   browserRoot?: string,
+  /**
+   * The workspace whose extensions render these cards. Passed in rather than
+   * reached for: history belongs to one project, and the renderers that dress it
+   * must be that project's own.
+   */
+  renderer?: ExtensionRenderer,
 ): ChatItem[] {
   const items: ChatItem[] = [];
   const userItems: Extract<ChatItem, { kind: "user" }>[] = [];
@@ -234,8 +236,8 @@ export function historyToItems(
 
         const toolCallId = message.toolCallId ?? "";
         const toolName = message.toolName ?? call?.name ?? "tool";
-        const callHtml = renderToolCallHtml(toolCallId, toolName, call?.args ?? {});
-        const rendered = renderToolResultHtml(
+        const callHtml = renderer?.renderToolCallHtml(toolCallId, toolName, call?.args ?? {});
+        const rendered = renderer?.renderToolResultHtml(
           toolCallId,
           toolName,
           message.content,
@@ -261,7 +263,10 @@ export function historyToItems(
       case "custom": {
         // display:false means "context for the LLM only" — the TUI hides those too
         const text = message.display ? contentText(message.content) : "";
-        if (text) items.push(customMessageToItem(message));
+        // The same renderer replayed history is being converted with: without it
+        // a persisted custom message loses its extension HTML on reload, and the
+        // card changes appearance for no reason the reader can see.
+        if (text) items.push(customMessageToItem(message, renderer));
         break;
       }
       default:
@@ -288,7 +293,7 @@ export function historyToItems(
   if (streaming) {
     // toolCalls still executing (no result yet) → running cards
     for (const [toolCallId, call] of pendingCalls) {
-      const callHtml = renderToolCallHtml(toolCallId, call.name, call.args);
+      const callHtml = renderer?.renderToolCallHtml(toolCallId, call.name, call.args);
       items.push({
         kind: "tool",
         toolCallId,
@@ -358,11 +363,11 @@ export function assistantToItem(message: AnyMessage): ChatItem {
  * (a terminal Component, not renderable in the browser) — just the plain
  * text content, with `details` along for an optional expanded view.
  */
-export function customMessageToItem(message: AnyMessage): ChatItem {
+export function customMessageToItem(message: AnyMessage, renderer?: ExtensionRenderer): ChatItem {
   const customType = message.customType ?? "custom";
   const display = message.display !== false;
   const content = message.content;
-  const rendered = renderCustomMessageHtml(customType, content, message.details, display);
+  const rendered = renderer?.renderCustomMessageHtml(customType, content, message.details, display);
 
   return {
     kind: "custom",

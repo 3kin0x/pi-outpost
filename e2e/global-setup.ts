@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SEEDED_MESSAGES } from "./fixtures/seeded-transcript";
@@ -169,9 +169,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // the workspace's own .pi/prompts, the same way a real project's are.
     ".pi/prompts/greet.md": "---\ndescription: say hello\n---\n\nSay hello.\n",
   });
+  const secondRoot = await realpath(await makeWorkspace({ "second.md": "# second workspace\n" }));
   const server = await startServer(
     root,
     {
+      openProjects: [secondRoot],
       // The host page is a different origin, which is the whole point of the widget.
       server: { allowedOrigins: [host.url] },
       branding: { title: "embed smoke" },
@@ -378,6 +380,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
+  process.env.PI_E2E_PRIMARY_PROJECT = await realpath(root);
+  process.env.PI_E2E_SECOND_PROJECT = secondRoot;
   process.env.PI_E2E_GUARDED_URL = guarded.base;
   process.env.PI_E2E_DIAGRAMS_URL = diagrams.base;
   process.env.PI_E2E_PLANS_URL = plans.base;
@@ -392,6 +396,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await diagrams.stop();
     await guarded.stop();
     await server.stop();
+    await rm(secondRoot, { recursive: true, force: true });
     await host.close();
   };
 }

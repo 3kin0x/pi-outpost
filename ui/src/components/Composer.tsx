@@ -29,6 +29,10 @@ interface ComposerProps {
    */
   pendingUploads?: { id: string; name: string }[];
   onAttach: (files: Iterable<File>) => void;
+  /** Draft to restore for this project, when returning to it. */
+  initialDraft?: string;
+  /** Reports every draft change so the host can keep one per project. */
+  onDraftChange?: (text: string) => void;
   /** Paths the draft names with `@`; the file tree marks them as referenced. */
   onMentionPaths: (paths: string[]) => void;
   onRemoveAttachment: (index: number) => void;
@@ -71,8 +75,21 @@ export function Composer({
   onAbort,
   onSearchFiles,
   onClearFileSearch,
+  initialDraft,
+  onDraftChange,
 }: ComposerProps) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialDraft ?? "");
+  /**
+   * Hand the draft up on every keystroke so it survives a project switch.
+   *
+   * Kept where the view is dropped: an open file and a scroll position are worth
+   * forgetting, typed text is not — losing it destroys work rather than resetting
+   * a view. Reported rather than lifted so the composer keeps owning its own
+   * editing state.
+   */
+  useEffect(() => {
+    onDraftChange?.(text);
+  }, [text, onDraftChange]);
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);

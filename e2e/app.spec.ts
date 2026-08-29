@@ -38,6 +38,20 @@ test("reaches the workspace the server was given", async ({ page }) => {
   await expect(page.getByText("readme.md")).toBeVisible();
 });
 
+test("keeps composer drafts with their project across a real workspace switch", async ({ page }) => {
+  const composer = page.getByRole("textbox", { name: /message pi/i });
+  await composer.fill("primary draft");
+
+  await page.getByTitle(/^Projet :/).click();
+  await page.getByRole("menuitem").filter({ hasText: process.env.PI_E2E_SECOND_PROJECT! }).click();
+  await expect(composer).toHaveValue("");
+  await composer.fill("second draft");
+
+  await page.getByTitle(/^Projet :/).click();
+  await page.getByRole("menuitem").filter({ hasText: process.env.PI_E2E_PRIMARY_PROJECT! }).click();
+  await expect(composer).toHaveValue("primary draft");
+});
+
 test("reports no console error while loading", async ({ page }) => {
   // A blank page with a clean network tab is the shape the PdfViewer regression
   // took: the app unmounted itself and only the console said so.

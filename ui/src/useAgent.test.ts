@@ -143,6 +143,32 @@ describe("connect lifecycle", () => {
     await waitFor(() => expect(result.current.state.connected).toBe(false));
   });
 
+  /**
+   * An embedding host names the project its widget shows; the widget never offers
+   * to change it. The name has to reach the server on the upgrade, because that
+   * is the only moment the binding is decided — and a widget that silently showed
+   * the server's default project instead would look like it worked.
+   */
+  it("names the workspace on the upgrade when the host supplies one", () => {
+    renderHook(() => useAgent("", undefined, true, "/srv/beta"));
+
+    expect(new URL(mockWs!.url).searchParams.get("workspace")).toBe("/srv/beta");
+  });
+
+  it("names no workspace when the host supplies none", () => {
+    renderHook(() => useAgent("", undefined, true));
+
+    expect(new URL(mockWs!.url).searchParams.has("workspace")).toBe(false);
+  });
+
+  it("carries the token and the workspace together", () => {
+    renderHook(() => useAgent("http://example.test", "s3cret", true, "/srv/beta"));
+
+    const params = new URL(mockWs!.url).searchParams;
+    expect(params.get("token")).toBe("s3cret");
+    expect(params.get("workspace")).toBe("/srv/beta");
+  });
+
   it("shows authRequired when closed with code 4401", async () => {
     const { result } = renderHook(() => useAgent());
 
@@ -157,6 +183,132 @@ describe("connect lifecycle", () => {
 // ---------------------------------------------------------------------------
 // Hello message (session snapshot)
 // ---------------------------------------------------------------------------
+describe("switching projects", () => {
+  /** The snapshot a switch answers with, as the server sends it. */
+  function switched(root: string) {
+    return {
+      type: "workspace_switched",
+      sessionId: `session-${root}`,
+      branding: {},
+      model: "",
+      thinkingLevel: "off",
+      models: [],
+      commands: [],
+      isStreaming: false,
+      items: [],
+      contextUsage: null,
+      gitAvailable: false,
+      workspace: { root, name: root.split("/").pop(), activity: "idle", needsAttention: false },
+      workspaces: [
+        { root: "/srv/alpha", name: "alpha", activity: "idle", needsAttention: false },
+        { root: "/srv/beta", name: "beta", activity: "idle", needsAttention: false },
+      ],
+    };
+  }
+
+  it("forgets the screen the project was left on", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+
+    // A file open, a diff up, a tree expanded — none of it belongs to the project
+    // being switched to, and carrying it across would show one project's file
+    // under another's conversation.
+    act(() => result.current.readFile("notes.md"));
+    const requestId = (JSON.parse(mockWs!.sent[mockWs!.sent.length - 1]) as { requestId: string }).requestId;
+    act(() => mockWs!.receive({ type: "file_content", requestId, path: "notes.md", content: "hi", size: 2, mtimeMs: 1 }));
+    await waitFor(() => expect(result.current.state.openFile?.status).toBe("loaded"));
+
+    act(() => mockWs!.receive(switched("/srv/beta")));
+
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+    expect(result.current.state.openFile).toBeNull();
+    expect(result.current.state.gitDiff).toBeNull();
+    expect(result.current.state.fileTree).toEqual({});
+  });
+
+  it("keeps the project list current as activity arrives from elsewhere", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() =>
+      mockWs!.receive({
+        type: "workspace_activity",
+        workspaces: [
+          { root: "/srv/alpha", name: "alpha", activity: "working", needsAttention: false },
+          { root: "/srv/beta", name: "beta", activity: "waiting", needsAttention: true },
+        ],
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.workspaces[0].activity).toBe("working"));
+    // The bound project's own entry follows the list, or the header would show a
+    // state the menu contradicts.
+    expect(result.current.state.workspace?.needsAttention).toBe(true);
+  });
+
+  /** The frames this client sent, newest last, as objects. */
+  function sentFrames() {
+    return mockWs!.sent.map((raw) => JSON.parse(raw) as { type: string; root?: string });
+  }
+
+  it("asks for another project, and fades the conversation while it waits", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() => result.current.switchWorkspace("/srv/alpha"));
+
+    expect(sentFrames().at(-1)).toEqual({ type: "switch_workspace", root: "/srv/alpha" });
+    // Fading rather than emptying: a blank pane makes a switch read as a reload.
+    expect(result.current.state.switching).toBe(true);
+  });
+
+  it("says nothing when the project asked for is the one already bound", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+    const before = mockWs!.sent.length;
+
+    act(() => result.current.switchWorkspace("/srv/beta"));
+
+    // A round trip that answers with the snapshot already on screen would still
+    // fade the conversation and throw the open file away.
+    expect(mockWs!.sent.length).toBe(before);
+    expect(result.current.state.switching).toBe(false);
+  });
+
+  it("opens a directory as a project, and waits the same way a switch does", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() => result.current.openProject("/srv/gamma"));
+
+    expect(sentFrames().at(-1)).toEqual({ type: "open_project", root: "/srv/gamma" });
+    expect(result.current.state.switching).toBe(true);
+  });
+
+  it("closes a project without disturbing the one on screen", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() => result.current.closeProject("/srv/alpha"));
+
+    expect(sentFrames().at(-1)).toEqual({ type: "close_project", root: "/srv/alpha" });
+    // Closing another project changes nothing here — and the server refuses it
+    // outright while that project is streaming.
+    expect(result.current.state.switching).toBe(false);
+    expect(result.current.state.workspace?.root).toBe("/srv/beta");
+  });
+});
+
 describe("hello message handling", () => {
   it("populates state from a hello message", async () => {
     const { result } = renderHook(() => useAgent());

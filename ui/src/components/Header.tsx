@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode } from "@pi-outpost/shared";
+import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode, type WorkspaceInfo } from "@pi-outpost/shared";
+import { ProjectMenu } from "./ProjectMenu";
 import type { GitStatusState, ServerBrowseState, SessionSearch, SettingsApplyState } from "../useAgent";
 import { stripAnsi } from "../util/ansi";
 import { useClickOutside } from "../util/clickOutside";
@@ -16,6 +17,12 @@ interface HeaderProps {
   tree: TreeNode[] | null;
   isStreaming: boolean;
   connected: boolean;
+  workspace: WorkspaceInfo | null;
+  workspaces: WorkspaceInfo[];
+  workspaceLocked: boolean;
+  onSwitchWorkspace: (root: string) => void;
+  onOpenProject: () => void;
+  onCloseProject: (root: string) => void;
   theme: "light" | "dark";
   showThemeToggle: boolean;
   /** Extension setStatus() key/text pairs — see extensions.md#custom-ui. */
@@ -304,6 +311,16 @@ export function Header(props: HeaderProps) {
     // own, the header competes there on DOM order alone — and the open FileViewer,
     // declared after it, wins. The menus would open *behind* the file preview.
     <header className="relative z-30 flex items-center gap-3 border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
+      {/* The project comes first: it scopes everything else in this bar. Renders
+          nothing at all while a single project is open, or on a pinned server. */}
+      <ProjectMenu
+        workspace={props.workspace}
+        workspaces={props.workspaces}
+        locked={props.workspaceLocked}
+        onSwitch={props.onSwitchWorkspace}
+        onOpen={props.onOpenProject}
+        onClose={props.onCloseProject}
+      />
       {/* File/repo controls live on the left, the side their panel opens on */}
       <button
         type="button"

@@ -13,6 +13,9 @@ import { randomBytes } from "node:crypto";
 import type { DirEntry, FileBrowserErrorReason, FileSearchEntry } from "@pi-outpost/shared";
 import { declaredStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/document";
 import type { AppConfig } from "./config.ts";
+
+/** What root resolution actually reads out of a configuration. */
+type RootSettings = Pick<AppConfig, "cwd" | "sandbox">;
 import { isWithin, realResolve } from "./sandbox.ts";
 
 /** Hard cap for file previews — refused outright above this, never silently truncated. */
@@ -61,8 +64,15 @@ export class FileBrowserError extends Error {
   }
 }
 
-/** Root the browser is confined to: the file sandbox root if configured, else the agent's cwd. */
-export async function resolveBrowserRoot(config: AppConfig): Promise<string> {
+/**
+ * Root the browser is confined to: the file sandbox root if configured, else the
+ * agent's cwd.
+ *
+ * Takes the narrow slice rather than the whole AppConfig so a workspace can resolve
+ * its own root from its own settings (see workspace.ts); a full AppConfig still
+ * satisfies it.
+ */
+export async function resolveBrowserRoot(config: RootSettings): Promise<string> {
   return fs.realpath(config.sandbox?.root ?? config.cwd);
 }
 
@@ -71,7 +81,7 @@ export async function resolveBrowserRoot(config: AppConfig): Promise<string> {
  * separators): undefined when no sandbox is configured, null when the sandbox
  * is entirely read-only, or the writable subtree's path ("" = the whole root).
  */
-export async function resolveWritableRoot(config: AppConfig, browserRoot: string): Promise<string | null | undefined> {
+export async function resolveWritableRoot(config: RootSettings, browserRoot: string): Promise<string | null | undefined> {
   if (!config.sandbox) return undefined;
   if (!config.sandbox.allowWrite) return null;
   const target = config.sandbox.writableRoot ? await fs.realpath(config.sandbox.writableRoot) : browserRoot;

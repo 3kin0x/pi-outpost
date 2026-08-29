@@ -276,6 +276,32 @@ export interface AppConfig {
   sandbox?: SandboxConfig;
   /** Which sandbox fields the user's settings menu may not change. */
   sandboxLocks?: SandboxLocks;
+  /**
+   * Projects held open, by resolved root. Written by the server when one is opened
+   * or closed — not hand-authored: it is a record of what the user did, the way
+   * `userSkillPaths` is, and belongs to the interface rather than the deployment.
+   *
+   * Empty or absent means the single-project server this has always been: `cwd`
+   * alone, and no selector anywhere.
+   */
+  openProjects: string[];
+  /**
+   * Forbid opening, closing and switching projects, binding the server to one.
+   * Follows the `sandboxLocks` convention: the deployment decides, and the
+   * interface offers no affordance for what it forbids. This is what an embedding
+   * host sets to pin its widget to a project.
+   */
+  workspaceLock?: boolean;
+  /**
+   * How long an unused project stays alive before its session is released, in
+   * milliseconds. 0 disables retirement entirely.
+   *
+   * "Unused" means no client subscribed AND no turn running — never age alone. A
+   * project nobody is watching is the normal state here, since an agent is meant
+   * to keep working there, so retiring on age would kill the very thing this
+   * feature exists to allow.
+   */
+  workspaceIdleTimeoutMs: number;
   /** Tool name allowlist (non-sandbox mode), e.g. ["read","grep","find","ls"]. */
   tools?: string[];
   /** Skip loading extensions entirely. */
@@ -555,6 +581,11 @@ export function loadConfig(
   const config: AppConfig = {
     configFile: filePath,
     cwd: launchDir,
+    openProjects: [],
+    // Half an hour: long enough that a project you step away from is still warm
+    // when you come back, short enough that a forgotten one does not hold a
+    // session and a watcher all day.
+    workspaceIdleTimeoutMs: 30 * 60_000,
     agentRuntime: {
       mode: "embedded",
       args: [],
@@ -653,6 +684,23 @@ export function loadConfig(
     if (config.sandbox.writableRoot && !fs.existsSync(config.sandbox.writableRoot)) {
       fail(`sandbox.writableRoot does not exist: ${config.sandbox.writableRoot}`);
     }
+  }
+
+  const openProjects = optionalStringArray(raw, "openProjects");
+  if (openProjects !== undefined) {
+    // Resolved against the config file's directory, like every other configured
+    // path, so a relative entry means the same thing here as it does there.
+    config.openProjects = openProjects.map((p) => path.resolve(path.dirname(filePath), p));
+  }
+  config.workspaceLock = optionalBoolean(raw, "workspaceLock", false);
+  // Not positiveInteger: 0 is meaningful here — it turns retirement off — and that
+  // helper rejects it, so accepting 0 has to be said explicitly.
+  if (raw.workspaceIdleTimeoutMs !== undefined) {
+    const value = raw.workspaceIdleTimeoutMs;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      fail(`"workspaceIdleTimeoutMs" must be 0 (never retire) or a positive integer`);
+    }
+    config.workspaceIdleTimeoutMs = value;
   }
 
   if (raw.sandboxLocks !== undefined) {
@@ -980,6 +1028,8 @@ export interface EditableSettings {
    * The operator's `skillPaths` are never written here and never removed.
    */
   userSkillPaths?: string[];
+  /** Projects held open (absolute, resolved). Absent leaves them untouched. */
+  openProjects?: string[];
 }
 
 /**
@@ -1062,6 +1112,10 @@ export function persistEditableSettings(
   // Written under its own key: `skillPaths` belongs to whoever wrote the file, and
   // an apply must never be able to drop one of theirs.
   if (update.userSkillPaths) raw.userSkillPaths = update.userSkillPaths.map((p) => path.resolve(p));
+  // The last project cannot be closed, so an empty array never reaches here — but
+  // it is written rather than deleted if it does, since "no projects open" and "this
+  // key was never set" mean the same thing to the loader.
+  if (update.openProjects) raw.openProjects = update.openProjects.map((p) => path.resolve(p));
 
   const serialized = `${JSON.stringify(raw, null, 2)}\n`;
   const candidate = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);

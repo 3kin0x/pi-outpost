@@ -31,6 +31,8 @@ import { FileViewer } from "./components/FileViewer";
 import { GitCommitView } from "./components/GitCommitView";
 import { GitFileHistory } from "./components/GitFileHistory";
 import { Header } from "./components/Header";
+import { useWorkspaceNotifications } from "./useWorkspaceNotifications";
+import { ServerPathPicker } from "./components/ServerPathPicker";
 import { ModelBar } from "./components/ModelBar";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
@@ -56,9 +58,15 @@ interface AppProps {
   initialTheme?: Theme;
   /** Auth token for servers with `server.token` set (embed hosts supply it programmatically). */
   token?: string;
+  /**
+   * Project this widget binds to, by its root path. Defaults to the server's
+   * default project; a root the server does not have open falls back to it too.
+   * Embedding hosts choose the project — the widget never offers to change it.
+   */
+  workspace?: string;
 }
 
-const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootElement, initialTheme, token }, ref) {
+const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootElement, initialTheme, token, workspace }, ref) {
   const embedded = rootElement !== undefined;
   const accentTarget = rootElement ?? document.documentElement;
   const {
@@ -112,7 +120,26 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     updateConfig,
     browseServerDirectory,
     closeServerBrowser,
-  } = useAgent(serverUrl, token, embedded);
+    switchWorkspace,
+    openProject,
+    closeProject,
+  } = useAgent(serverUrl, token, embedded, workspace);
+  useWorkspaceNotifications(state.workspaces, state.workspace?.root ?? null);
+  /**
+   * Drop everything a switch must not carry across.
+   *
+   * Attachments name paths inside the project they were picked in, so following the
+   * user to another one would send a file from the wrong sandbox. The scroll
+   * position is reset for the same reason the open file is: coming back to a
+   * project shows its conversation, not the screen it was left on. The composer
+   * draft is the one thing that survives, and it lives in `drafts`.
+   */
+  const boundRoot = state.workspace?.root ?? null;
+  useEffect(() => {
+    setAttachments([]);
+    setPendingUploads([]);
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  }, [boundRoot]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Paths the composer's draft names with `@`: they reference a file as surely as a chip does
@@ -121,6 +148,16 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
   const [loadedPreviewImagePath, setLoadedPreviewImagePath] = useState<string | null>(null);
   const [loadedPreviewPdf, setLoadedPreviewPdf] = useState<{ path: string; revision: number } | null>(null);
   const [viewerDirty, setViewerDirty] = useState(false);
+  /**
+   * Unsent composer text, per project root.
+   *
+   * A ref rather than state: it changes on every keystroke and nothing renders
+   * from it — only the composer's own remount reads it, when returning to a
+   * project.
+   */
+  /** The server-side directory picker is open, to choose a project root. */
+  const [projectPicker, setProjectPicker] = useState(false);
+  const drafts = useRef<Record<string, string>>({});
   const attachmentsRef = useRef<Attachment[]>([]);
   const activePreviewPathRef = useRef<string | null>(null);
   const dismissedPreviewPathRef = useRef<string | null>(null);
@@ -473,7 +510,35 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           />
         )}
         <div className="flex h-full min-w-0 flex-1 flex-col">
+          {/* Choosing a project root reuses the picker the sandbox root already
+              uses — the same walk of the server's filesystem, for the same kind of
+              answer. */}
+          {projectPicker && (
+            <ServerPathPicker
+              label="Choose a project directory"
+              browse={state.serverBrowse}
+              onBrowse={browseServerDirectory}
+              onSelect={(root) => {
+                setProjectPicker(false);
+                closeServerBrowser();
+                openProject(root);
+              }}
+              onCancel={() => {
+                setProjectPicker(false);
+                closeServerBrowser();
+              }}
+            />
+          )}
           <Header
+            workspace={state.workspace}
+            workspaces={state.workspaces}
+            // The embed offers no project affordance at all, whatever the server
+            // allows: which project a widget shows is the host's decision, not its
+            // user's (embed spec, WidgetOffersNoSwitching).
+            workspaceLocked={state.workspaceLocked || embedded}
+            onSwitchWorkspace={switchWorkspace}
+            onOpenProject={() => { setProjectPicker(true); browseServerDirectory(""); }}
+            onCloseProject={closeProject}
             title={state.branding.title}
             sessions={state.sessions}
             sessionSearch={state.sessionSearch}
@@ -580,7 +645,11 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           <main
             ref={mainRef}
             onScroll={handleScroll}
-            className={`flex-1 overflow-y-auto ${analysisOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
+            /* During a switch the outgoing conversation fades and holds rather than
+               emptying: a blank pane makes a switch read as a page reload, which is
+               the one thing this transition exists to avoid. No skeleton — the old
+               content stays until the new arrives. */
+            className={`flex-1 overflow-y-auto transition-opacity duration-150 ${state.switching ? "opacity-40" : "opacity-100"} ${analysisOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
           >
             <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-6">
               {state.items.length === 0 && (
@@ -717,6 +786,13 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             <div className="mx-auto max-w-3xl">
               <ExtensionWidgets widgets={state.widgets} placement="aboveEditor" />
               <Composer
+                // Remount on a project change so the restored draft becomes the
+                // field's initial value; without the key React keeps the old text.
+                key={state.workspace?.root ?? ""}
+                initialDraft={drafts.current[state.workspace?.root ?? ""] ?? ""}
+                onDraftChange={(text) => {
+                  drafts.current[state.workspace?.root ?? ""] = text;
+                }}
                 isStreaming={state.isStreaming}
                 connected={state.connected}
                 commands={state.commands}

@@ -37,11 +37,16 @@ const token = params.get("token") ?? undefined;
 // branding path — and that path is a real one: it is how a deployment sets the
 // theme for hosts that do not care to.
 const theme = (params.get("theme") ?? undefined) as Theme | undefined;
+// Which project the host binds its widget to. Named here rather than chosen in
+// the widget: an embedded widget offers no switching, so this parameter is the
+// only way to exercise that binding from outside.
+const workspace = params.get("workspace") ?? undefined;
 
 const handle: MountHandle = mount(container, {
   ...(serverUrl === undefined ? {} : { serverUrl }),
   ...(token === undefined ? {} : { token }),
   ...(theme === undefined ? {} : { theme }),
+  ...(workspace === undefined ? {} : { workspace }),
 });
 
 window.__embed = {

@@ -24,6 +24,16 @@ export interface MountOptions {
   theme?: Theme;
   /** Auth token for servers with `server.token` set — the host app supplies it, no token screen shown. */
   token?: string;
+  /**
+   * Project the widget is bound to, by its resolved root path. Defaults to the
+   * server's default project.
+   *
+   * Which project an embedded widget shows is the host's decision, not its user's:
+   * the widget offers no project switching whatever this is set to. A root that is
+   * not open falls back to the default rather than failing, so a project closed
+   * server-side leaves a working widget instead of a dead socket.
+   */
+  workspace?: string;
 }
 
 export interface MountHandle {
@@ -103,6 +113,7 @@ export function mount(container: HTMLElement, options: MountOptions = {}): Mount
       rootElement: container,
       initialTheme: options.theme,
       token: options.token,
+      workspace: options.workspace,
     }),
   );
 

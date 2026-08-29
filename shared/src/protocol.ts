@@ -301,8 +301,64 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
+/**
+ * What a project is doing, for the selector to show without subscribing to it.
+ *
+ * Deliberately five named states rather than a pair of booleans: "stopped" and
+ * "idle" differ in whether a session exists, "working" and "waiting" differ in
+ * whether anyone must act, and a client that had to infer those from flags would
+ * have to encode the same rules the server already applies.
+ */
+export type WorkspaceActivity =
+  /** Open, but its session has been released after inactivity. Rebuilt on next open. */
+  | "stopped"
+  /** Session, sandbox and tools are being built. */
+  | "starting"
+  /** Ready, nothing running. */
+  | "idle"
+  /** A turn is in flight — including while nobody is looking at it. */
+  | "working"
+  /** A turn is blocked on a question only the user can answer. */
+  | "waiting";
+
+/**
+ * One open project, as the selector sees it. Carries no conversation: a client
+ * hears about every project's activity, and about only its own project's content.
+ */
+export interface WorkspaceInfo {
+  /**
+   * Resolved project directory. The workspace's identity on the wire too — there
+   * is no separate id to keep in step with it.
+   */
+  root: string;
+  /** Directory basename, for the selector's row. The path disambiguates two alike. */
+  name: string;
+  activity: WorkspaceActivity;
+  /** Whether a turn there is blocked on the user, whatever the client is bound to. */
+  needsAttention?: boolean;
+}
+
 /** Snapshot of session state, sent on connect and after session replacement. */
 export interface SessionSnapshot {
+  /**
+   * The project this snapshot describes — the one the connection is bound to.
+   *
+   * Absent on a server holding a single unnamed workspace, which is what keeps an
+   * existing client working against a new server: no project selector appears
+   * where there is nothing to select.
+   */
+  workspace?: WorkspaceInfo;
+  /**
+   * Opening, closing and switching are forbidden by configuration. The client
+   * offers no affordance for them — this is what pins an embedded widget.
+   */
+  workspaceLocked?: boolean;
+  /**
+   * Every open project, this one included. Absent for the same reason as above.
+   * Kept current by `workspace_activity`, which reaches every client regardless of
+   * what it is bound to.
+   */
+  workspaces?: WorkspaceInfo[];
   branding: Branding;
   sessionId: string;
   model: string;
@@ -519,10 +575,47 @@ export type ServerMessage =
    * that gets this may tell the user the change survived a restart.
    */
   | ({ type: "update_config_ack" } & SessionSnapshot)
+  /**
+   * A project's activity changed. The one message that deliberately reaches every
+   * client, whatever it is bound to: background work is invisible otherwise, and
+   * that visibility is the point of holding several projects at once.
+   *
+   * Carries no conversation content — only what the selector draws.
+   */
+  | { type: "workspace_activity"; workspaces: WorkspaceInfo[] }
+  /**
+   * The connection is now bound to another project, and this is that project's
+   * state. A full snapshot because it replaces everything the client was showing —
+   * except the view, which the client resets on its own (an open file and a scroll
+   * position do not survive a switch; an unsent draft does).
+   */
+  | ({ type: "workspace_switched" } & SessionSnapshot)
+  | { type: "workspace_error"; message: string }
   | ExtensionUIRequest;
 
 /** Client -> server */
 export type ClientMessage =
+  /**
+   * Bind this connection to another open project.
+   *
+   * `root` must name a project already open — a client cannot open one by naming a
+   * path here. Switching disturbs nothing: no other workspace is cancelled, paused
+   * or rebuilt, and a turn running in the project being left runs to completion.
+   */
+  | { type: "switch_workspace"; root: string }
+  /**
+   * Open a directory as a project. The path comes from the same picker the sandbox
+   * root uses (`browse_server_directory`), so the boundary is the configured lock
+   * rather than an enumeration of allowed roots — exactly as it already is for
+   * moving the sandbox.
+   */
+  | { type: "open_project"; root: string }
+  /**
+   * Close an open project: its workspace stops, it leaves the open set, and its
+   * session history on disk is untouched. Refused while its agent is streaming,
+   * and refused for the last remaining project.
+   */
+  | { type: "close_project"; root: string }
   | { type: "prompt"; text: string; images?: WireImage[] }
   | { type: "abort" }
   | { type: "set_model"; provider: string; id: string }

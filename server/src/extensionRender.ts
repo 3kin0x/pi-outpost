@@ -36,15 +36,20 @@ export interface ExtensionRenderDeps {
 }
 
 /**
- * Encapsulated renderer state: a single module-level instance replaces the
- * previous three bare `let` variables, making mutations explicit and preventing
- * silent breakage if two callers invoke configureExtensionRender in unexpected
- * order. The class is internal — the public API is unchanged.
+ * The renderers one workspace's extensions provide, and the HTML they produce.
+ *
+ * An instance per workspace, not a module singleton. The singleton this replaced
+ * was configured by whichever project started last, so with two projects open the
+ * second one's extensions rendered the first one's tool cards — with its own
+ * extension runner and its own cwd, which is how a card ends up naming a path
+ * that belongs to another project. Display correctness rather than a boundary:
+ * nothing crosses the sandbox here, but what the reader sees is attributed to the
+ * wrong project.
  */
-class ExtensionRenderer {
-  deps?: ExtensionRenderDeps;
-  theme?: Theme;
-  toolRenderer?: ReturnType<typeof createToolHtmlRenderer>;
+export class ExtensionRenderer {
+  private deps?: ExtensionRenderDeps;
+  private theme?: Theme;
+  private toolRenderer?: ReturnType<typeof createToolHtmlRenderer>;
 
   configure(next: ExtensionRenderDeps | undefined): void {
     this.deps = next;
@@ -59,12 +64,68 @@ class ExtensionRenderer {
           })
         : undefined;
   }
-}
 
-const renderer = new ExtensionRenderer();
+  /** Render an extension's compact call header, if it provides one. */
+  renderToolCallHtml(toolCallId: string, toolName: string, args: unknown): string | undefined {
+    if (!this.toolRenderer) return undefined;
+    try {
+      const html = this.toolRenderer.renderCall(toolCallId, toolName, args);
+      return html?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
-export function configureExtensionRender(next: ExtensionRenderDeps | undefined): void {
-  renderer.configure(next);
+  renderToolResultHtml(
+    toolCallId: string,
+    toolName: string,
+    content: string | ToolContentBlock[] | undefined,
+    details: unknown,
+    isError: boolean,
+  ): RenderedHtml | undefined {
+    if (!this.toolRenderer) return undefined;
+    try {
+      const blocks = normalizeToolContent(content);
+      const rendered = this.toolRenderer.renderResult(toolCallId, toolName, blocks, details, isError);
+      if (!rendered?.expanded?.trim()) return undefined;
+      return {
+        expanded: rendered.expanded,
+        ...(rendered.collapsed && rendered.collapsed !== rendered.expanded ? { collapsed: rendered.collapsed } : {}),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  renderCustomMessageHtml(
+    customType: string,
+    content: string | ToolContentBlock[],
+    details: unknown | undefined,
+    display: boolean,
+  ): RenderedHtml | undefined {
+    if (!this.deps || !this.theme) return undefined;
+    const msgRenderer = this.deps.getMessageRenderer(customType);
+    if (!msgRenderer) return undefined;
+
+    try {
+      const message = createCustomMessage(
+        customType,
+        content as Parameters<typeof createCustomMessage>[1],
+        display,
+        details,
+        new Date().toISOString(),
+      );
+      const collapsed = componentToHtml(msgRenderer(message, { expanded: false, outputPad: 0 }, this.theme) as RenderComponent);
+      const expanded = componentToHtml(msgRenderer(message, { expanded: true, outputPad: 0 }, this.theme) as RenderComponent);
+      if (!expanded) return undefined;
+      return {
+        expanded,
+        ...(collapsed && collapsed !== expanded ? { collapsed } : {}),
+      };
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 function componentToHtml(component: RenderComponent | undefined): string | undefined {
@@ -88,72 +149,4 @@ export function normalizeToolContent(content: string | ToolContentBlock[] | unde
   if (content === undefined) return [];
   if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
   return content;
-}
-
-/** Render an extension's compact call header, if it provides one. */
-export function renderToolCallHtml(
-  toolCallId: string,
-  toolName: string,
-  args: unknown,
-): string | undefined {
-  if (!renderer.toolRenderer) return undefined;
-  try {
-    const html = renderer.toolRenderer.renderCall(toolCallId, toolName, args);
-    return html?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function renderToolResultHtml(
-  toolCallId: string,
-  toolName: string,
-  content: string | ToolContentBlock[] | undefined,
-  details: unknown,
-  isError: boolean,
-): RenderedHtml | undefined {
-  if (!renderer.toolRenderer) return undefined;
-  try {
-    const blocks = normalizeToolContent(content);
-    const rendered = renderer.toolRenderer.renderResult(toolCallId, toolName, blocks, details, isError);
-    if (!rendered?.expanded?.trim()) return undefined;
-    return {
-      expanded: rendered.expanded,
-      ...(rendered.collapsed && rendered.collapsed !== rendered.expanded
-        ? { collapsed: rendered.collapsed }
-        : {}),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-export function renderCustomMessageHtml(
-  customType: string,
-  content: string | ToolContentBlock[],
-  details: unknown | undefined,
-  display: boolean,
-): RenderedHtml | undefined {
-  if (!renderer.deps || !renderer.theme) return undefined;
-  const msgRenderer = renderer.deps.getMessageRenderer(customType);
-  if (!msgRenderer) return undefined;
-
-  try {
-    const message = createCustomMessage(
-      customType,
-      content as Parameters<typeof createCustomMessage>[1],
-      display,
-      details,
-      new Date().toISOString(),
-    );
-    const collapsed = componentToHtml(msgRenderer(message, { expanded: false, outputPad: 0 }, renderer.theme) as RenderComponent);
-    const expanded = componentToHtml(msgRenderer(message, { expanded: true, outputPad: 0 }, renderer.theme) as RenderComponent);
-    if (!expanded) return undefined;
-    return {
-      expanded,
-      ...(collapsed && collapsed !== expanded ? { collapsed } : {}),
-    };
-  } catch {
-    return undefined;
-  }
 }
