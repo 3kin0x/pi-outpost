@@ -24,6 +24,7 @@ import os from "node:os";
 import path from "node:path";
 import { THEMES, type Theme } from "@pi-outpost/shared";
 import { STRUCTURED_EXCHANGE_BYTES_CEILING } from "@pi-outpost/shared/structured-exchange/bounds";
+import { OPEN_SHAPES, type OpenShape } from "./openBrowser.ts";
 
 export interface BrandingConfig {
   /** Header title. Default: "π". */
@@ -402,6 +403,16 @@ export interface AppConfig {
    */
   openBrowser?: boolean;
   /**
+   * How the interface is presented once it is opened: in a window of its own, or
+   * in the default browser as a tab.
+   *
+   * Separate from `openBrowser` on purpose. That one answers *whether* and is
+   * tri-state; folding a shape into it would put two questions in one setting and
+   * make `false` ambiguous against a shape. `openBrowser` still wins: asked not to
+   * open, nothing opens, whatever shape was configured.
+   */
+  openIn: OpenShape;
+  /**
    * Whether update checking may make a request. Tri-state on purpose.
    *
    * Left undefined it follows `offline`, which is the sensible default both ways: a
@@ -457,6 +468,8 @@ export interface CliOptions {
   port?: number;
   host?: string;
   offline?: boolean;
+  /** Set by --open-in; leave it out and configuration decides the shape. */
+  openIn?: OpenShape;
 }
 
 /** Thrown when no config file exists anywhere: the CLI turns it into `init` advice. */
@@ -627,6 +640,10 @@ export function loadConfig(
     webContext: true,
     offline: false,
     port: 3141,
+    // A window of its own by default: the interface is an application that was
+    // launched, not a page that was visited. Where no browser on the machine can
+    // present one, opening falls back to what it always did.
+    openIn: "window",
     host: "127.0.0.1",
     allowedOrigins: [],
     branding: {},
@@ -814,6 +831,13 @@ export function loadConfig(
   config.webContext = optionalBoolean(raw, "webContext", true);
   config.offline = optionalBoolean(raw, "offline", false);
   if (raw.openBrowser !== undefined) config.openBrowser = optionalBoolean(raw, "openBrowser", true);
+  const openIn = optionalString(raw, "openIn", "openIn");
+  if (openIn !== undefined) {
+    if (!OPEN_SHAPES.includes(openIn as OpenShape)) {
+      fail(`"openIn" must be one of ${OPEN_SHAPES.join(", ")} (got "${openIn}")`);
+    }
+    config.openIn = openIn as OpenShape;
+  }
   // Read only when present, or the tri-state collapses: a stored `false` is
   // indistinguishable from "not mentioned", and "not mentioned" is what lets
   // `offline` decide.
@@ -1045,6 +1069,7 @@ export function applyRuntime(config: AppConfig, flags: CliOptions, env: NodeJS.P
     config.token = token;
   }
 
+  if (flags.openIn !== undefined) config.openIn = flags.openIn;
   if (flags.port !== undefined) config.port = flags.port;
   if (flags.host !== undefined) config.host = flags.host;
 }

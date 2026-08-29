@@ -753,7 +753,7 @@ await app.listen({ port: PORT, host: HOST });
   if (servesTheInterface && shouldOpenBrowser({ explicit: cli.open, configured: config.openBrowser })) {
     // Not awaited for its outcome beyond a line of output: a browser that will not
     // start is not a reason for a server to stop.
-    void openBrowser(url).then((opened) => {
+    void openBrowser(url, process.platform, config.openIn).then((opened) => {
       if (!opened) console.log(`[server] could not open a browser — open ${url} yourself`);
     });
   }

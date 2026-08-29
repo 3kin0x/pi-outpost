@@ -289,3 +289,28 @@ describe("build-exe and the browser flags", () => {
     assert.equal(parseCli(["--no-open"]).open, false);
   });
 });
+
+describe("--open-in", () => {
+  test("names the shape the interface opens in", () => {
+    assert.equal(parseCli(["--open-in", "browser"]).openIn, "browser");
+    assert.equal(parseCli(["--open-in", "window"]).openIn, "window");
+  });
+
+  test("left out, configuration still decides", () => {
+    // Undefined rather than a default here: a flag that always had a value would
+    // silently override whatever the file said.
+    assert.equal(parseCli([]).openIn, undefined);
+  });
+
+  test("an unknown shape is refused, naming the flag and what it accepts", () => {
+    assert.throws(() => parseCli(["--open-in", "kiosk"]), /--open-in.*window.*browser/s);
+  });
+
+  test("it says nothing about whether a browser opens at all", () => {
+    // Two questions, two flags. Asking for a shape must not be read as asking to
+    // open, or `--no-open --open-in window` would contradict itself.
+    const flags = parseCli(["--no-open", "--open-in", "window"]);
+    assert.equal(flags.open, false);
+    assert.equal(flags.openIn, "window");
+  });
+});

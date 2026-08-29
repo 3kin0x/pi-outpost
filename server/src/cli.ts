@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { type CliOptions, userConfigDir } from "./config.ts";
+import { OPEN_SHAPES, type OpenShape } from "./openBrowser.ts";
 
 /**
  * Config written by `pi-outpost init` — deliberately the safe end of every choice.
@@ -65,6 +66,7 @@ Options
   --offline          never fetch remote model catalogs (air-gapped hosts)
   --open             open the interface in your browser once the server is listening
   --no-open          do not (the default wherever no desktop session exists)
+  --open-in <shape>  window (its own window, the default) or browser (a tab)
   -h, --help         show this help
   -v, --version      show the version
 
@@ -165,6 +167,8 @@ export interface ParsedCli {
   update: { check: boolean };
   /** undefined when neither --open nor --no-open was given, so config still decides. */
   open?: boolean;
+  /** undefined when --open-in was not given, so config still decides the shape. */
+  openIn?: OpenShape;
 }
 
 type Command = "init" | "config" | "login" | "build-exe" | "update";
@@ -200,6 +204,7 @@ export function parseCli(argv: string[]): ParsedCli {
         check: { type: "boolean", default: false },
         open: { type: "boolean", default: false },
         "no-open": { type: "boolean", default: false },
+        "open-in": { type: "string" },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
       },
@@ -234,6 +239,10 @@ export function parseCli(argv: string[]): ParsedCli {
   if (values.global && command !== "init") {
     throw new CliError('"--global" belongs to "pi-outpost init" — see "pi-outpost --help"');
   }
+  const openIn = values["open-in"] as string | undefined;
+  if (openIn !== undefined && !OPEN_SHAPES.includes(openIn as OpenShape)) {
+    throw new CliError(`"--open-in" must be one of ${OPEN_SHAPES.join(", ")} (got "${openIn}") — see "pi-outpost --help"`);
+  }
   if (values.open && values["no-open"]) {
     throw new CliError('"--open" and "--no-open" contradict each other — see "pi-outpost --help"');
   }
@@ -259,6 +268,7 @@ export function parseCli(argv: string[]): ParsedCli {
     update: { check: values.check },
     // Left undefined unless asked for, so configuration still has its say.
     ...(values.open ? { open: true } : values["no-open"] ? { open: false } : {}),
+    ...(openIn === undefined ? {} : { openIn: openIn as OpenShape }),
   };
 }
 

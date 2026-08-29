@@ -867,3 +867,71 @@ describe("loadConfig — resource path resolution", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// How the interface is presented once it opens.
+// ---------------------------------------------------------------------------
+describe("loadConfig — the shape the interface opens in", () => {
+  async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+    const dir = await mkdtemp(path.join(tmpdir(), "pi-outpost-openin-test-"));
+    try {
+      return await fn(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  async function load(dir: string, raw: Record<string, unknown>) {
+    const configPath = path.join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify(raw, null, 2));
+    return loadConfig(dir, { config: configPath });
+  }
+
+  // openlore: scenario=ItOpensInAWindowOfItsOwn spec=cli
+  test("a window of its own is what an unconfigured server opens", async () => {
+    await withTempDir(async (dir) => {
+      // The default is the whole point: the case that needs it most is a
+      // double-clicked executable, where nobody is editing a configuration file.
+      assert.equal((await load(dir, {})).openIn, "window");
+    });
+  });
+
+  // openlore: scenario=TheOperatorCanAskForATab spec=cli
+  test("every accepted shape is loaded as written", async () => {
+    for (const shape of ["window", "browser"] as const) {
+      await withTempDir(async (dir) => {
+        assert.equal((await load(dir, { openIn: shape })).openIn, shape);
+      });
+    }
+  });
+
+  test("an unknown shape fails startup, naming the setting", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({ openIn: "kiosk" }, null, 2));
+      await assert.rejects(
+        async () => loadConfig(dir, { config: configPath }),
+        /openIn/,
+        "a typo that silently fell back would leave an operator hunting a window that never appears",
+      );
+    });
+  });
+
+  test("the shape says nothing about whether anything opens", async () => {
+    await withTempDir(async (dir) => {
+      // Two settings, two questions. `openBrowser` still decides whether, and a
+      // shape must never be read as a request to open.
+      const config = await load(dir, { openBrowser: false, openIn: "window" });
+      assert.equal(config.openBrowser, false);
+      assert.equal(config.openIn, "window");
+    });
+  });
+
+  test("the command line overrides the file", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({ openIn: "window" }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath, openIn: "browser" }).openIn, "browser");
+    });
+  });
+});

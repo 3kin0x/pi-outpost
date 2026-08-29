@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { browsableUrl, openBrowser, shouldOpenBrowser } from "../src/openBrowser.ts";
+import { OWN_WINDOW_BROWSERS, browsableUrl, openBrowser, ownWindowOpenerFor, shouldOpenBrowser } from "../src/openBrowser.ts";
 
 describe("whether to open a browser", () => {
   test("a desktop platform opens by default", () => {
@@ -71,6 +71,84 @@ describe("launching it", () => {
     // and the open would succeed.
     const absentHere: NodeJS.Platform = process.platform === "win32" ? "linux" : "win32";
     const opened = await openBrowser("http://127.0.0.1:3141/", absentHere);
+    assert.equal(opened, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A window of its own — and what happens where none can be presented.
+// ---------------------------------------------------------------------------
+describe("presenting the interface in a window of its own", () => {
+  /** A machine where exactly these candidates exist. */
+  const machineWith = (...present: string[]) => (candidate: string) => present.includes(candidate);
+  const NOTHING = () => false;
+  const URL = "http://127.0.0.1:3141/";
+
+  // openlore: scenario=ItOpensInAWindowOfItsOwn spec=cli
+  test("every platform's candidates produce a command asking for the window", () => {
+    // Driven off the production list: a candidate removed there fails here rather
+    // than passing against a copy this test kept.
+    for (const [platform, candidates] of Object.entries(OWN_WINDOW_BROWSERS)) {
+      for (const candidate of candidates) {
+        const opener = ownWindowOpenerFor(platform as NodeJS.Platform, URL, machineWith(candidate));
+        assert.ok(opener, `${platform}: ${candidate} produced no opener`);
+        assert.ok(
+          opener.args.includes(`--app=${URL}`),
+          `${platform}: ${candidate} does not ask for a window of its own`,
+        );
+      }
+    }
+  });
+
+  test("the first candidate present is the one used", () => {
+    const candidates = OWN_WINDOW_BROWSERS.win32;
+    // Both present: the order in the list is the answer, not whichever the
+    // filesystem happened to return first.
+    const opener = ownWindowOpenerFor("win32", URL, machineWith(candidates[0], candidates[1]));
+    assert.equal(opener?.command, candidates[0]);
+  });
+
+  test("macOS goes through `open`, since an app bundle is not a program to spawn", () => {
+    const bundle = OWN_WINDOW_BROWSERS.darwin[0];
+    const opener = ownWindowOpenerFor("darwin", URL, machineWith(bundle));
+    assert.equal(opener?.command, "open");
+    // `-n` asks for a new instance: an already-running browser would otherwise
+    // raise its own window and ignore the request.
+    assert.deepEqual(opener?.args, ["-na", bundle, "--args", `--app=${URL}`]);
+  });
+
+  // openlore: scenario=WhereNoOwnWindowIsPossible spec=cli
+  test("a machine with no candidate gets no own-window opener", () => {
+    for (const platform of Object.keys(OWN_WINDOW_BROWSERS)) {
+      assert.equal(ownWindowOpenerFor(platform as NodeJS.Platform, URL, NOTHING), undefined);
+    }
+    // And a platform nothing is listed for, which must not throw.
+    assert.equal(ownWindowOpenerFor("aix", URL, NOTHING), undefined);
+  });
+
+  // openlore: scenario=TheOperatorCanAskForATab spec=cli
+  test("asking for a tab uses the platform's own opener, even where a window was possible", async () => {
+    // The whole difference between the two shapes is which command runs. Asserting
+    // it here is the real boundary: a machine that could present the window must
+    // still hand the URL to the operating system when a tab was asked for.
+    const present = () => true;
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const own = ownWindowOpenerFor(platform, URL, present);
+      assert.ok(own, `${platform}: expected a window opener to be possible`);
+      // With shape "browser" the own-window opener is not consulted at all, which
+      // is what `openBrowser` proves by reaching a platform opener that cannot run.
+      const opened = await openBrowser(URL, "aix", "browser", present);
+      assert.equal(opened, false, "the platform opener ran, not the own-window one");
+    }
+  });
+
+  test("asking for a window on a machine that has none falls back to opening it at all", async () => {
+    // The fallback is what makes a window of its own safe as the default: the
+    // worst case is exactly what this did before. `absentHere` stands in for a
+    // platform opener that cannot start, so a false answer proves the fallback
+    // ran rather than the own-window path.
+    const absent: NodeJS.Platform = process.platform === "win32" ? "linux" : "win32";
+    const opened = await openBrowser(URL, absent, "window", () => false);
     assert.equal(opened, false);
   });
 });

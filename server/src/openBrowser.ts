@@ -7,6 +7,19 @@
  * from at all.
  */
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+
+/**
+ * How the interface is presented once it is opened.
+ *
+ * `window` is a window of its own — no tabs, no address bar — which is what the
+ * interface is: an application that was launched, not a page that was visited.
+ * `browser` is what this always did, and is what a machine that cannot present
+ * such a window falls back to.
+ */
+export const OPEN_SHAPES = ["window", "browser"] as const;
+export type OpenShape = (typeof OPEN_SHAPES)[number];
 
 export interface OpenDecision {
   /** Set by --open / --no-open, which win over everything. */
@@ -59,6 +72,68 @@ export function browsableUrl(address: { address: string; port: number; family?: 
   return `http://${authority}:${address.port}/`;
 }
 
+/**
+ * Browsers that can present a window of its own, in the order they are tried.
+ *
+ * This is the one place that names a browser, and it reverses what the rest of
+ * this file says: the operating system holds the user's preference, and asking it
+ * to open a URL is how that preference is honoured. Presenting a window without
+ * tabs cannot go through that door — it needs a browser invoked directly, with the
+ * flag that asks for the window.
+ *
+ * What keeps this from becoming a browser-preference parser is the question it
+ * answers. Not "which browser should this user have" but "can this one present the
+ * window at all". A machine where none is found gets the ordinary opener, which is
+ * exactly today's behaviour.
+ *
+ * Paths, not names, so the answer is a file that either exists or does not — and
+ * so a test can decide what exists without a machine that has any of them.
+ */
+export const OWN_WINDOW_BROWSERS: Record<string, readonly string[]> = {
+  darwin: [
+    "/Applications/Microsoft Edge.app",
+    "/Applications/Google Chrome.app",
+    "/Applications/Chromium.app",
+    "/Applications/Brave Browser.app",
+  ],
+  win32: [
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  ],
+  linux: ["microsoft-edge", "google-chrome", "chromium", "chromium-browser"],
+};
+
+/** Whether a candidate is present. Injected so the choice can be tested anywhere. */
+export type ExistsProbe = (candidate: string) => boolean;
+
+/** Real answer: an absolute path is a file, a bare name is looked up on PATH. */
+const existsOnThisMachine: ExistsProbe = (candidate) => {
+  if (path.isAbsolute(candidate)) return fs.existsSync(candidate);
+  const entries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  return entries.some((entry) => fs.existsSync(path.join(entry, candidate)));
+};
+
+/**
+ * How to present the interface in a window of its own, or undefined where nothing
+ * on this machine can.
+ *
+ * On macOS the browser is still launched through `open`, because an application
+ * bundle is not an executable to spawn; `-n` asks for a new instance so an already
+ * running browser does not simply raise its own window instead.
+ */
+export function ownWindowOpenerFor(
+  platform: NodeJS.Platform,
+  url: string,
+  exists: ExistsProbe = existsOnThisMachine,
+): { command: string; args: string[] } | undefined {
+  const candidate = (OWN_WINDOW_BROWSERS[platform] ?? []).find((entry) => exists(entry));
+  if (candidate === undefined) return undefined;
+  if (platform === "darwin") return { command: "open", args: ["-na", candidate, "--args", `--app=${url}`] };
+  return { command: candidate, args: [`--app=${url}`] };
+}
+
 /** The platform's own opener. Nothing here parses a browser preference — the OS holds it. */
 function openerFor(platform: NodeJS.Platform, url: string): { command: string; args: string[] } {
   if (platform === "darwin") return { command: "open", args: [url] };
@@ -75,8 +150,16 @@ function openerFor(platform: NodeJS.Platform, url: string): { command: string; a
  * exit non-zero: the address is printed either way, which is what the operator would
  * have used before this existed.
  */
-export function openBrowser(url: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
-  const { command, args } = openerFor(platform, url);
+export function openBrowser(
+  url: string,
+  platform: NodeJS.Platform = process.platform,
+  shape: OpenShape = "window",
+  exists?: ExistsProbe,
+): Promise<boolean> {
+  // Falling back rather than failing is what makes a window of its own safe as the
+  // default: the worst case is exactly what this did before.
+  const own = shape === "window" ? ownWindowOpenerFor(platform, url, exists) : undefined;
+  const { command, args } = own ?? openerFor(platform, url);
   return new Promise((resolve) => {
     try {
       const child = spawn(command, args, { detached: true, stdio: "ignore" });
