@@ -181,11 +181,18 @@ jobs:
       # entry that stopped covering dist/, both land here and nowhere earlier.
       - run: npm run check:cli
 
-      # Le publish peut se faire en Node 24 sans problème
+      # Le publish peut se faire en Node 24 sans problème.
+      #
+      # The dist-tag comes from the version, never from an input: a release that
+      # reached `beta`, or a beta that reached `latest`, would both be one forgotten
+      # checkbox away. And `latest` is the tag the update check reads, so moving it
+      # onto a prerelease offers that prerelease to every existing installation.
       - name: Publish
         run: |
+          channel=$(node scripts/release-channel.mjs "${GITHUB_REF_NAME#v}")
+          echo "publishing to the $channel channel"
           for pkg in ${{ steps.plan.outputs.publish }}; do
-            npm publish --workspace "$pkg"
+            npm publish --workspace "$pkg" --tag "$channel"
           done
 
   # Attached after publish, from the artifacts the matrix already proved runnable.
@@ -196,6 +203,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # This job downloads artifacts and nothing else, so it had no working copy —
+      # and the rule deciding whether this tag is a prerelease lives in one.
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
         with:
           path: executables
@@ -204,11 +214,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The same derivation as the npm channel, from the same version. Two
+          # independent decisions about one version is how a release ends up
+          # published as a prerelease and displayed as the current one.
+          channel=$(node scripts/release-channel.mjs "${GITHUB_REF_NAME#v}")
+          prerelease=""
+          if [ "$channel" != "latest" ]; then prerelease="--prerelease"; fi
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
               --verify-tag \
               --generate-notes \
+              $prerelease \
               --title "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY"
+          fi
+          # This job is rerun to repair a release, and a rerun skips the create above —
+          # so the flag would never reach a release that already exists and is marked
+          # wrongly. Stated every time instead of only at creation.
+          if [ -n "$prerelease" ]; then
+            gh release edit "$GITHUB_REF_NAME" --prerelease --repo "$GITHUB_REPOSITORY"
+          else
+            gh release edit "$GITHUB_REF_NAME" --prerelease=false --latest --repo "$GITHUB_REPOSITORY"
           fi
           gh release upload "$GITHUB_REF_NAME" executables/* --clobber --repo "$GITHUB_REPOSITORY"

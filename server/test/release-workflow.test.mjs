@@ -27,3 +27,28 @@ test("EveryReleaseCarriesThem: a missing GitHub Release is created before assets
   assert.match(attachJob, /if ! gh release view[\s\S]+then[\s\S]+gh release create/);
   assert.match(attachJob, /gh release upload[^\n]+--clobber/);
 });
+
+// openlore: scenario=TheChannelComesFromTheVersion spec=update
+test("PrereleasesAreNotWhatAnInstallationIsOffered: one derivation feeds both the npm channel and the release listing", () => {
+  const publishJob = workflow.slice(workflow.indexOf("\n  publish:"), workflow.indexOf("\n  attach:"));
+  const attachJob = workflow.slice(workflow.indexOf("\n  attach:"));
+
+  // Publishing with no tag moves `latest`, which is the tag the update check reads —
+  // so a prerelease published that way is offered to every existing installation.
+  assert.doesNotMatch(publishJob, /npm publish --workspace "\$pkg"\s*$/m, "publishing with no dist-tag moves latest");
+  assert.match(publishJob, /npm publish --workspace "\$pkg" --tag "\$channel"/);
+  assert.match(publishJob, /channel=\$\(node scripts\/release-channel\.mjs/, "the channel must come from the version");
+
+  // openlore: scenario=APrereleaseIsListedAsOne spec=update
+  assert.match(attachJob, /channel=\$\(node scripts\/release-channel\.mjs/, "the same rule decides the listing");
+  assert.match(attachJob, /if \[ "\$channel" != "latest" \]; then prerelease="--prerelease"; fi/);
+  assert.match(attachJob, /gh release create[\s\S]{0,200}\$prerelease/);
+
+  // The rule lives in a working copy, and this job had none.
+  assert.match(attachJob, /actions\/checkout/, "the attach job must check out the rule it runs");
+
+  // A rerun repairs an existing release and skips the create, so a flag passed only
+  // at creation never reaches a release that is already marked wrongly.
+  assert.match(attachJob, /gh release edit "\$GITHUB_REF_NAME" --prerelease --repo/);
+  assert.match(attachJob, /gh release edit "\$GITHUB_REF_NAME" --prerelease=false --latest --repo/);
+});
