@@ -20,7 +20,9 @@ The API SHALL support `GET /branding` to retrieve branding information for the a
 
 ### Requirement: GETWebSocket
 
-The API SHALL support `GET /ws` to establish a websocket connection for real-time communication. The state snapshot it sends SHALL carry the server's credential status: which providers are configured and whether a usable model exists — never a stored key.
+The API SHALL support `GET /ws` to establish a websocket connection for real-time communication. The connection SHALL be bound to exactly one workspace: the one named in the upgrade request, or the server's default workspace when none is named. The state snapshot it sends SHALL describe that workspace, and SHALL carry the server's credential status: which providers are configured and whether a usable model exists — never a stored key. The snapshot SHALL additionally list every open project with its activity state, so a client can show background work without subscribing to it.
+
+Server messages carrying workspace content SHALL reach only the connections bound to the workspace that produced them. Workspace activity and attention changes SHALL reach every connection regardless of what it is bound to.
 
 #### Scenario: EstablishWebSocketConnection
 - **GIVEN** The application is running and the request Origin is allowed
@@ -36,6 +38,16 @@ The API SHALL support `GET /ws` to establish a websocket connection for real-tim
 - **GIVEN** a server whose agent directory holds no credentials
 - **WHEN** a client connects
 - **THEN** the snapshot reports that no provider is configured and no model is usable
+
+#### Scenario: ConnectionWithoutAWorkspaceNamed
+- **GIVEN** a client that connects without naming a workspace
+- **WHEN** the snapshot is sent
+- **THEN** it describes the server's default workspace
+
+#### Scenario: MessagesReachOnlyTheirWorkspace
+- **GIVEN** one connection bound to workspace A and another bound to workspace B
+- **WHEN** the agent in A emits a streaming event
+- **THEN** only the connection bound to A receives it
 
 ### Requirement: GETHealth
 

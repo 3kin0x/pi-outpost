@@ -49,6 +49,11 @@ lock SHALL suppress project controls regardless of the embed policy.
 - **WHEN** the widget mounts
 - **THEN** it is bound to the server's default workspace
 
+#### Scenario: WidgetOffersNoSwitching
+- **GIVEN** a mounted widget on a server with several projects open and no `embed.workspaceControls` configured
+- **WHEN** the user looks for a project selector
+- **THEN** none is offered
+
 #### Scenario: SettingsModeKeepsProjectControlsHidden
 - **GIVEN** a mounted widget configured with `embed.workspaceControls` set to `settings`
 - **WHEN** the user looks for a project opener or selector
