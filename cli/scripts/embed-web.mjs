@@ -11,12 +11,17 @@
 import { readdir, readFile, stat, writeFile, mkdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
-const MIME = {
+export const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".mjs": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  // A web app manifest served as an opaque stream is ignored, and the interface
+  // is then silently not installable from the executable while remaining
+  // installable from a built directory — the one failure this table can cause
+  // that nothing reports.
+  ".webmanifest": "application/manifest+json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",

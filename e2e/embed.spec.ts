@@ -785,6 +785,55 @@ test.describe("composer autocomplete inside the widget", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Installability belongs to the standalone interface, never to a host page.
+//
+// The widget mounts into someone else's document. Which app that document is,
+// and whether it can be installed, is that application's decision — and a
+// manifest the widget added would answer it for them.
+// ---------------------------------------------------------------------------
+test("the widget makes no installability claim on the host page", async ({ page }) => {
+  await expect(page.getByRole("textbox", { name: /message pi/i })).toBeVisible();
+
+  const claims = await page.evaluate(() => ({
+    manifestLinks: document.querySelectorAll('link[rel="manifest"]').length,
+    themeColorMetas: document.querySelectorAll('meta[name="theme-color"]').length,
+    title: document.title,
+    iconLinks: document.querySelectorAll('link[rel~="icon"]').length,
+    insideShadow: (document.querySelector("#widget")!.shadowRoot!.querySelectorAll('link[rel="manifest"]')).length,
+  }));
+
+  // The host page here declares no manifest of its own, so any of these being
+  // non-zero would mean the widget had made the page into pi-outpost.
+  expect(claims).toEqual({ manifestLinks: 0, themeColorMetas: 0, title: "embed host page", iconLinks: 0, insideShadow: 0 });
+});
+
+test("a host that already owns install metadata keeps exactly what it declared", async ({ page }) => {
+  const url = new URL(process.env.PI_E2E_HOST_URL!);
+  url.searchParams.set("server", process.env.PI_E2E_SERVER_URL!);
+  url.searchParams.set("theme", "light");
+  url.searchParams.set("hostMeta", "1");
+  await page.goto(url.toString());
+  await expect(page.getByRole("textbox", { name: /message pi/i })).toBeVisible();
+
+  const host = await page.evaluate(() => ({
+    title: document.title,
+    manifests: [...document.querySelectorAll('link[rel="manifest"]')].map((l) => l.getAttribute("href")),
+    themeColors: [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => m.getAttribute("content")),
+    icons: [...document.querySelectorAll('link[rel~="icon"]')].map((l) => l.getAttribute("href")),
+  }));
+
+  // Not "no manifest" but "the host's own, untouched": the failure this catches
+  // is a widget that replaces or removes what it found, which a page with no
+  // metadata of its own cannot show.
+  expect(host).toEqual({
+    title: "host app",
+    manifests: ["/host-app.webmanifest"],
+    themeColors: ["#00aa55"],
+    icons: ["/host-app-icon.png"],
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The embed workspace-control policy, one server per mode.
 //
 // The policy is loaded server configuration, so there is no way to see what a

@@ -125,6 +125,7 @@ import { seaExtensionFactories } from "./sea-extensions.ts";
 // Generated at build time (cli/scripts/build.mjs, server/scripts/build-sea.mjs).
 // Empty map in dev — see the comment at the static-serving block below.
 import { EMBEDDED_WEB } from "./embedded-web.ts";
+import { cacheControlFor } from "./webAssetCache.ts";
 
 // Replaced at bundle time; `typeof` on an undeclared name is safe, so a source run says "dev".
 declare const __PI_OUTPOST_VERSION__: string;
@@ -709,6 +710,7 @@ if (EMBEDDED_WEB && Object.keys(EMBEDDED_WEB).length > 0) {
       return reply.send("Not found");
     }
     reply.header("Content-Type", asset.type);
+    reply.header("Cache-Control", cacheControlFor(url));
     reply.send(Buffer.from(asset.b64, "base64"));
   };
   app.get("/*", async (req: any, reply: any) => {
