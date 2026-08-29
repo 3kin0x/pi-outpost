@@ -1,8 +1,18 @@
 # tool-result-presentations Specification
 
 ## Purpose
-TBD - created by archiving change add-tool-result-presentations. Update Purpose after archive.
+
+Decides how the result of a tool call is shown in the conversation: one ordered
+registry turns a call into at most one presentation, so a code search reads as hits
+and a Git diff as a per-file summary rather than as a wall of terminal output.
+
+Every presentation stays accountable to the call it came from — the original input
+and complete output remain reachable, the tool's own output is never treated as
+markup or script, and a presentation can only offer navigation actions the
+application already provides, never send a message or run a tool of its own.
+
 ## Requirements
+
 ### Requirement: A single registry selects at most one presentation
 
 The system SHALL resolve a tool call to at most one presentation through one
