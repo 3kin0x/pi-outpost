@@ -42,6 +42,23 @@ const theme = (params.get("theme") ?? undefined) as Theme | undefined;
 // only way to exercise that binding from outside.
 const workspace = params.get("workspace") ?? undefined;
 
+// A host that already declares its own install metadata. Off by default so the
+// bare page still shows what a widget does to a page that has none; on, it is the
+// only way to prove the widget replaces or removes nothing it found there.
+if (params.get("hostMeta") !== null) {
+  document.title = "host app";
+  const manifest = document.createElement("link");
+  manifest.rel = "manifest";
+  manifest.href = "/host-app.webmanifest";
+  const themeColor = document.createElement("meta");
+  themeColor.name = "theme-color";
+  themeColor.content = "#00aa55";
+  const icon = document.createElement("link");
+  icon.rel = "icon";
+  icon.href = "/host-app-icon.png";
+  document.head.append(manifest, themeColor, icon);
+}
+
 const handle: MountHandle = mount(container, {
   ...(serverUrl === undefined ? {} : { serverUrl }),
   ...(token === undefined ? {} : { token }),
