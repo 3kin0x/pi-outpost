@@ -30,7 +30,7 @@ new multi-project scenarios.
 
 | Scenario | Status | Proof |
 |---|---|---|
-| OpeningADirectoryFromThePicker | covered | mp "the open set is written before the project is opened, and survives a restart" (opens by path and switches to it); bench 8.4 drives the picker itself |
+| OpeningADirectoryFromThePicker | covered | `App.test.tsx` "choosing a project directory" drives the picker itself — it opens on the project affordance, walks from the server root, and its chosen directory reaches `openProject`; `useAgent.test.ts` "opens a directory as a project…" proves the frame that leaves the client; mp "the open set is written before the project is opened, and survives a restart" proves the server side; bench 8.4 |
 | OpenProjectsSurviveARestart | covered | mp same test — asserts the config file, then boots a second server from it |
 | OpeningAnAlreadyOpenDirectory | covered | mp "opening a directory that is already open reuses it" |
 | OpeningAnUnusableDirectory | covered | mp "opening an unreadable path fails and opens nothing" |

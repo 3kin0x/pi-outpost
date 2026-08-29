@@ -796,3 +796,52 @@ describe("App — model bar and tree", () => {
     expect(screen.getByText("build: passing")).toBeInTheDocument();
   });
 });
+
+// openlore: scenario=OpeningADirectoryFromThePicker spec=multi-project-workspaces
+describe("choosing a project directory", () => {
+  const alpha = workspace("/srv/alpha");
+
+  function openThePicker() {
+    const api = agentApi(
+      agentState({
+        workspace: alpha,
+        workspaces: [alpha],
+        serverBrowse: { status: "loaded", path: "/srv/beta", parent: "/srv", entries: [], requestId: "r1" },
+      }),
+    );
+    mockUseAgent.mockImplementation(() => api);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir un projet" }));
+    return api;
+  }
+
+  it("shows the picker and starts the server walk at the top", () => {
+    const api = openThePicker();
+
+    // The empty path is what asks the server where it would start.
+    expect(api.browseServerDirectory).toHaveBeenCalledWith("");
+    expect(screen.getByTestId("server-path-picker")).toBeInTheDocument();
+  });
+
+  it("opens the directory it was left on, and releases the browser with it", () => {
+    const api = openThePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+
+    expect(api.openProject).toHaveBeenCalledWith("/srv/beta");
+    // The listing is server state: leaving it behind would show a stale walk the
+    // next time the picker opens.
+    expect(api.closeServerBrowser).toHaveBeenCalled();
+    expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
+  });
+
+  it("opens nothing when the picker is cancelled", () => {
+    const api = openThePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(api.openProject).not.toHaveBeenCalled();
+    expect(api.closeServerBrowser).toHaveBeenCalled();
+    expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
+  });
+});

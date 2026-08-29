@@ -127,3 +127,47 @@ describe("attention, without interrupting anyone", () => {
     expect(within(row).getByText("t'attend")).toBeInTheDocument();
   });
 });
+
+describe("dismissing the menu", () => {
+  it("closes when the pointer lands outside it", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // A menu that survives a click elsewhere covers the screen it opened over.
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("stays open when the pointer lands inside it", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    fireEvent.mouseDown(screen.getByRole("menu"));
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("closes on Escape, and leaves other keys alone", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    fireEvent.keyDown(document, { key: "a" });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("closes itself when opening a project is chosen from inside it", () => {
+    const { props } = setup();
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Ouvrir un projet/ }));
+
+    // The picker takes over from here, so the menu must not still be over it.
+    expect(props.onOpen).toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});

@@ -247,6 +247,66 @@ describe("switching projects", () => {
     // state the menu contradicts.
     expect(result.current.state.workspace?.needsAttention).toBe(true);
   });
+
+  /** The frames this client sent, newest last, as objects. */
+  function sentFrames() {
+    return mockWs!.sent.map((raw) => JSON.parse(raw) as { type: string; root?: string });
+  }
+
+  it("asks for another project, and fades the conversation while it waits", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() => result.current.switchWorkspace("/srv/alpha"));
+
+    expect(sentFrames().at(-1)).toEqual({ type: "switch_workspace", root: "/srv/alpha" });
+    // Fading rather than emptying: a blank pane makes a switch read as a reload.
+    expect(result.current.state.switching).toBe(true);
+  });
+
+  it("says nothing when the project asked for is the one already bound", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+    const before = mockWs!.sent.length;
+
+    act(() => result.current.switchWorkspace("/srv/beta"));
+
+    // A round trip that answers with the snapshot already on screen would still
+    // fade the conversation and throw the open file away.
+    expect(mockWs!.sent.length).toBe(before);
+    expect(result.current.state.switching).toBe(false);
+  });
+
+  it("opens a directory as a project, and waits the same way a switch does", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() => result.current.openProject("/srv/gamma"));
+
+    expect(sentFrames().at(-1)).toEqual({ type: "open_project", root: "/srv/gamma" });
+    expect(result.current.state.switching).toBe(true);
+  });
+
+  it("closes a project without disturbing the one on screen", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    act(() => mockWs!.receive(switched("/srv/beta")));
+    await waitFor(() => expect(result.current.state.workspace?.root).toBe("/srv/beta"));
+
+    act(() => result.current.closeProject("/srv/alpha"));
+
+    expect(sentFrames().at(-1)).toEqual({ type: "close_project", root: "/srv/alpha" });
+    // Closing another project changes nothing here — and the server refuses it
+    // outright while that project is streaming.
+    expect(result.current.state.switching).toBe(false);
+    expect(result.current.state.workspace?.root).toBe("/srv/beta");
+  });
 });
 
 describe("hello message handling", () => {
