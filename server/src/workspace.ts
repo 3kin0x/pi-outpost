@@ -22,6 +22,7 @@ import type { SandboxConfig } from "./config.ts";
 import { type DirectoryWatcher, createDirectoryWatcher } from "./fileWatcher.ts";
 import { resolveBrowserRoot, resolveWritableRoot } from "./fileBrowser.ts";
 import { probeGit } from "./git.ts";
+import { ExtensionRenderer } from "./extensionRender.ts";
 import { createSandboxedTools } from "./sandbox.ts";
 import type { ExtensionUIRequest, WorkPlan } from "@pi-outpost/shared";
 
@@ -44,6 +45,28 @@ export interface WorkspaceToolLimits {
   xlsxMaxBytes: number;
   pptxMaxBytes: number;
   structuredExchangeMaxBytes: number;
+}
+
+/** Facts needed to decide whether an open workspace may release its resources. */
+export interface WorkspaceRetirementState {
+  timeoutMs: number;
+  now: number;
+  lastUsedAt: number;
+  watched: boolean;
+  busy: boolean;
+}
+
+/**
+ * Retirement policy kept independent from the timer that applies it, so the
+ * disabled and busy boundaries are exact decisions rather than timing tests.
+ */
+export function shouldRetireWorkspace(state: WorkspaceRetirementState): boolean {
+  return (
+    state.timeoutMs > 0 &&
+    !state.watched &&
+    !state.busy &&
+    state.now - state.lastUsedAt >= state.timeoutMs
+  );
 }
 
 export interface WorkspaceOptions {
@@ -80,6 +103,13 @@ export class Workspace {
   readonly root: string;
 
   settings: WorkspaceSettings;
+
+  /**
+   * Renders this project's tool cards and custom messages, using the renderers
+   * ITS extensions provide and its own cwd. Per-workspace because the alternative
+   * was a process-wide one, configured by whichever project started last.
+   */
+  readonly renderer = new ExtensionRenderer();
 
   browserRoot: string;
   writableRoot: string | null | undefined;
@@ -258,6 +288,7 @@ export class Workspace {
     this.stopped = true;
     this.fileWatcher?.close();
     this.fileWatcher = undefined;
+    this.renderer.configure(undefined);
     await this._runtime?.dispose();
     this._runtime = undefined;
   }
@@ -273,6 +304,10 @@ export class Workspace {
     this.retired = true;
     this.fileWatcher?.close();
     this.fileWatcher = undefined;
+    // The renderers close over the session being disposed here, so a retired
+    // workspace that kept them would hold its whole runtime alive for nothing.
+    // `ensureStarted` reconfigures them when the project is next used.
+    this.renderer.configure(undefined);
     // Detach BEFORE awaiting disposal. Awaiting first leaves `started` true for the
     // length of the dispose, and a client opening the project in that window would
     // be handed a snapshot of a runtime about to be thrown away — then every later

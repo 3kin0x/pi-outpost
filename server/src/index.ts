@@ -75,7 +75,7 @@ import {
   validProviderId,
 } from "./credentials.ts";
 import { assistantToItem, contentText, customMessageToItem, historyToItems, structuredExchangeField, truncate } from "./convert.ts";
-import { configureExtensionRender, renderToolCallHtml, renderToolResultHtml } from "./extensionRender.ts";
+
 import { isStackExhaustion, noteCompaction, noteToolOutcome, noteTurnOutcome, recordTurnFailure } from "./turnFailureLog.ts";
 import {
   assertWithinRoot,
@@ -108,7 +108,7 @@ import { createWorkPlanToolDefinition } from "./workPlanTool.ts";
 import { copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile } from "./workPlanStore.ts";
 import { composeAppendSystemPrompt } from "./systemPrompt.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
-import { Workspace, type WorkspaceOptions, type WorkspaceSettings } from "./workspace.ts";
+import { Workspace, shouldRetireWorkspace, type WorkspaceOptions, type WorkspaceSettings } from "./workspace.ts";
 import { WorkspaceRegistry } from "./workspaceRegistry.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
 import {
@@ -1211,6 +1211,7 @@ function snapshot(workspace: Workspace): SessionSnapshot {
       state.isStreaming,
       branchUserEntries(workspace).map((entry) => entry.entryId),
       workspace.browserRoot,
+      workspace.renderer,
     ),
     models: availableModels(workspace),
     commands: state.commands,
@@ -1323,9 +1324,11 @@ function send(socket: WebSocket, message: ServerMessage): void {
 // file broadcasts. Answers travel back through workspace.agent.answerExtensionUI.
 
 /** Wire extension TUI renderers into the HTML bridge used by the web UI. */
-function refreshExtensionRender(workspace: Workspace, ): void {
+function refreshExtensionRender(workspace: Workspace): void {
   const renderers = workspace.agent.renderers;
-  configureExtensionRender({
+  // This project's renderers, on this project's object: two open projects each
+  // dress their own cards, with their own extensions and their own cwd.
+  workspace.renderer.configure({
     // An RPC child cannot hand its renderer objects across the pipe, so tool cards
     // fall back to the built-in rendering rather than an extension-supplied one.
     getToolDefinition: (name) => renderers?.getToolDefinition(name) as never,
@@ -1434,10 +1437,10 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
       break;
     }
     case "custom_message":
-      broadcast(workspace, { type: "custom_message", item: customMessageToItem(event.message as never) });
+      broadcast(workspace, { type: "custom_message", item: customMessageToItem(event.message as never, workspace.renderer) });
       break;
     case "tool_start": {
-      const callHtml = renderToolCallHtml(event.toolCallId, event.toolName, event.args);
+      const callHtml = workspace.renderer.renderToolCallHtml(event.toolCallId, event.toolName, event.args);
       broadcast(workspace, {
         type: "tool_start",
         toolCallId: event.toolCallId,
@@ -1459,7 +1462,7 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
       // The reported run-up opens with a red tool card; its name and the weight
       // of what it returned are the two facts that survive into the census.
       noteToolOutcome(event.toolName, event.isError, event.content);
-      const rendered = renderToolResultHtml(
+      const rendered = workspace.renderer.renderToolResultHtml(
         event.toolCallId,
         event.toolName,
         event.content as never,
@@ -1981,6 +1984,10 @@ async function ensureStarted(target: Workspace): Promise<void> {
     const runtime = await buildRuntimeFor(target);
     target.attachRuntime(runtime);
     runtime.subscribe((event) => onRuntimeEvent(target, event));
+    // A project opened or restored after startup gets its renderers here. Only the
+    // boot workspace is refreshed at module level, so without this every other
+    // project rendered plain cards until something happened to replace its session.
+    refreshExtensionRender(target);
     target.workPlan = await loadWorkPlan(runtime.snapshot().sessionFile);
     target.workPlanSessionFile = runtime.snapshot().sessionFile;
     target.lastUsedAt = Date.now();
@@ -3300,23 +3307,24 @@ if (!credentialStatus(workspace).usableModel) {
  */
 function sweepIdleWorkspaces(): void {
   const timeout = config.workspaceIdleTimeoutMs;
-  if (timeout <= 0) return;
   const now = Date.now();
   const watched = new Set(clients.values());
   for (const open of workspaces.all()) {
     if (open === workspaces.default) continue;
     if (!open.started) continue;
-    if (watched.has(open)) {
+    const isWatched = watched.has(open);
+    const isBusy = open.isBusy();
+    if (isWatched) {
       open.lastUsedAt = now;
       continue;
     }
-    if (open.isBusy()) {
+    if (isBusy) {
       // A long turn keeps its project alive however long it runs. This is the line
       // that makes "unused" mean unused rather than unwatched.
       open.lastUsedAt = now;
       continue;
     }
-    if (now - open.lastUsedAt < timeout) continue;
+    if (!shouldRetireWorkspace({ timeoutMs: timeout, now, lastUsedAt: open.lastUsedAt, watched: isWatched, busy: isBusy })) continue;
     console.log(`[pi] retiring ${path.basename(open.root)} after ${Math.round((now - open.lastUsedAt) / 1000)}s idle`);
     void open
       .retire()

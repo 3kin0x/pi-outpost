@@ -8,6 +8,7 @@ import {
   customMessageToItem,
   messageUsage,
 } from "../src/convert.ts";
+import { ExtensionRenderer } from "../src/extensionRender.ts";
 
 // ---------------------------------------------------------------------------
 // contentText
@@ -616,5 +617,39 @@ describe("structured exchange survives a reload", () => {
       const tool = items.find((item) => item.kind === "tool") as Extract<(typeof items)[0], { kind: "tool" }>;
       assert.equal(tool.structured, undefined, `expected ${JSON.stringify(details)} not to be forwarded`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extension rendering, replayed
+// ---------------------------------------------------------------------------
+describe("replaying history with a project's own renderers", () => {
+  /** A renderer for `plan`, the way one project's extension would provide it. */
+  function rendererFor(text: string) {
+    const renderer = new ExtensionRenderer();
+    renderer.configure({
+      getToolDefinition: () => undefined,
+      getMessageRenderer: (customType: string) =>
+        customType === "plan" ? ((() => ({ render: () => [text] })) as never) : undefined,
+      cwd: "/srv/alpha",
+    });
+    return renderer;
+  }
+
+  const history = [{ role: "custom" as const, customType: "plan", content: "step one", display: true }];
+
+  test("a custom message keeps its extension HTML through a replay", () => {
+    // Live events pass the workspace's renderer; a reconnect or a switch back
+    // replays the same conversation through here. Dropping it there made the card
+    // change appearance for no reason the reader could see.
+    const [item] = historyToItems(history as never, false, [], undefined, rendererFor("drawn by the extension"));
+    assert.equal(item.kind, "custom");
+    assert.match((item as { contentHtml?: string }).contentHtml ?? "", /drawn by the extension/);
+  });
+
+  test("without a renderer it is plain text, not another project's rendering", () => {
+    const [item] = historyToItems(history as never, false, []);
+    assert.equal((item as { contentHtml?: string }).contentHtml, undefined);
+    assert.equal((item as { text: string }).text, "step one");
   });
 });
