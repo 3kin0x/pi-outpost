@@ -469,6 +469,40 @@ describe("loadConfig — resource path resolution", () => {
     });
   });
 
+  // openlore: scenario=SettingsModeIsTheDefault spec=config
+  test("an embed policy is absent until one is configured, and absence means settings", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      // The interface every embed had before the setting existed. Nothing else may
+      // become the default without changing what deployed widgets show.
+      assert.equal(loadConfig(dir, { config: configPath }).embed.workspaceControls, "settings");
+    });
+  });
+
+  // openlore: scenario=ProjectsModeIsConfigured spec=config
+  // openlore: scenario=RootModeIsConfigured spec=config
+  test("every accepted embed workspace-control value is loaded as written", async () => {
+    for (const mode of ["settings", "root", "projects"] as const) {
+      await withTempDir(async (dir) => {
+        const configPath = path.join(dir, "config.json");
+        await writeFile(configPath, JSON.stringify({ embed: { workspaceControls: mode } }, null, 2));
+        assert.equal(loadConfig(dir, { config: configPath }).embed.workspaceControls, mode);
+      });
+    }
+  });
+
+  // openlore: scenario=InvalidEmbedWorkspaceControls spec=config
+  test("an unknown embed workspace-control value fails startup, naming the setting", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({ embed: { workspaceControls: "everything" } }, null, 2));
+      // Naming the setting is the point: a typo that silently fell back to the
+      // default would leave an operator looking for a control they configured.
+      assert.throws(() => loadConfig(dir, { config: configPath }), /embed\.workspaceControls/);
+    });
+  });
+
   test("workspaceIdleTimeoutMs takes 0 as \"never retire\", and refuses nonsense", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");

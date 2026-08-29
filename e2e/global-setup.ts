@@ -184,6 +184,51 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: onlyOneFakeProvider() },
   );
 
+  // Two more servers, one per embed workspace-control policy. The policy is
+  // loaded configuration rather than a mount option, so the only way to see what
+  // a deployment would show is to run a server configured that way. The default
+  // server above is `settings`, the third policy, by saying nothing.
+  const rootModeRoot = await realpath(
+    await makeWorkspace({ "readme.md": "# root mode\n", "inner/notes.md": "# inner\n" }),
+  );
+  const embedRootMode = await startServer(
+    rootModeRoot,
+    {
+      server: { allowedOrigins: [host.url] },
+      branding: { title: "root mode" },
+      embed: { workspaceControls: "root" },
+      // Writes confined to the root itself: the harness default pins a writable
+      // root beside it that any narrowing would strand.
+      sandbox: { root: rootModeRoot, allowWrite: true, allowBash: false },
+    },
+    { env: onlyOneFakeProvider() },
+  );
+
+  const projectsSecondRoot = await realpath(await makeWorkspace({ "second.md": "# second project\n" }));
+  const embedProjectsMode = await startServer(
+    await makeWorkspace({ "readme.md": "# projects mode\n" }),
+    {
+      server: { allowedOrigins: [host.url] },
+      branding: { title: "projects mode" },
+      embed: { workspaceControls: "projects" },
+      openProjects: [projectsSecondRoot],
+    },
+    { env: onlyOneFakeProvider() },
+  );
+
+  // A server offering project controls to embeds AND pinned: the lock is the
+  // authorization boundary, and it has to win over the presentation policy.
+  const embedLockedProjects = await startServer(
+    await makeWorkspace({ "readme.md": "# locked\n" }),
+    {
+      server: { allowedOrigins: [host.url] },
+      branding: { title: "locked projects mode" },
+      embed: { workspaceControls: "projects" },
+      workspaceLock: true,
+    },
+    { env: onlyOneFakeProvider() },
+  );
+
   // A second server, token-protected. The widget then sends `Authorization`,
   // which is not a CORS-safelisted header, so the browser preflights every
   // request — the one path a curl-shaped test cannot exercise, because curl
@@ -382,6 +427,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_PRIMARY_PROJECT = await realpath(root);
   process.env.PI_E2E_SECOND_PROJECT = secondRoot;
+  process.env.PI_E2E_EMBED_ROOT_URL = embedRootMode.base;
+  process.env.PI_E2E_EMBED_ROOT_WORKSPACE = rootModeRoot;
+  process.env.PI_E2E_EMBED_PROJECTS_URL = embedProjectsMode.base;
+  process.env.PI_E2E_EMBED_PROJECTS_SECOND = projectsSecondRoot;
+  process.env.PI_E2E_EMBED_LOCKED_URL = embedLockedProjects.base;
   process.env.PI_E2E_GUARDED_URL = guarded.base;
   process.env.PI_E2E_DIAGRAMS_URL = diagrams.base;
   process.env.PI_E2E_PLANS_URL = plans.base;
@@ -395,8 +445,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await plans.stop();
     await diagrams.stop();
     await guarded.stop();
+    await embedLockedProjects.stop();
+    await embedProjectsMode.stop();
+    await embedRootMode.stop();
     await server.stop();
     await rm(secondRoot, { recursive: true, force: true });
+    await rm(projectsSecondRoot, { recursive: true, force: true });
     await host.close();
   };
 }

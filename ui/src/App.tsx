@@ -155,8 +155,26 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
    * from it — only the composer's own remount reads it, when returning to a
    * project.
    */
-  /** The server-side directory picker is open, to choose a project root. */
-  const [projectPicker, setProjectPicker] = useState(false);
+  /**
+   * Which header picker owns the single server-browse listing, or null.
+   *
+   * One value rather than a flag per control: Settings, the sandbox-root chooser
+   * and the project chooser all read the same listing, so two open at once would
+   * leave one of them showing a walk the other started, and cancelling either
+   * would close the listing the other is still reading.
+   */
+  const [headerPicker, setHeaderPicker] = useState<"project" | "root" | "settings" | null>(null);
+  const projectPicker = headerPicker === "project";
+  const setProjectPicker = (open: boolean) => setHeaderPicker(open ? "project" : null);
+  /**
+   * What a mounted widget offers for its workspace, from the server's policy.
+   *
+   * `settings` — the default, and what a server that has never heard of the
+   * setting says — keeps the interface embeds have always had: one project, its
+   * sandbox root reachable through Settings alone.
+   */
+  const embedControl =
+    state.embedWorkspaceControls === "projects" ? "projects" : state.embedWorkspaceControls === "root" ? "root" : "none";
   const drafts = useRef<Record<string, string>>({});
   const attachmentsRef = useRef<Attachment[]>([]);
   const activePreviewPathRef = useRef<string | null>(null);
@@ -532,10 +550,40 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           <Header
             workspace={state.workspace}
             workspaces={state.workspaces}
-            // The embed offers no project affordance at all, whatever the server
-            // allows: which project a widget shows is the host's decision, not its
-            // user's (embed spec, WidgetOffersNoSwitching).
-            workspaceLocked={state.workspaceLocked || embedded}
+            // The server lock alone. An embed that offers no project affordance
+            // says so through `workspaceControl` below, so the two reasons stay
+            // apart: one is what the server forbids, the other is what this
+            // deployment chose to present.
+            workspaceLocked={state.workspaceLocked}
+            // Standalone is unchanged whatever the policy says: it applies to
+            // mounted widgets only. Inside one, `settings` — the default, and
+            // what every server said before the setting existed — offers nothing.
+            workspaceControl={!embedded ? "projects" : embedControl}
+            rootControl={{
+              sandbox: state.sandbox,
+              browse: state.serverBrowse,
+              applyState: state.settingsApply,
+              blocked: headerPicker !== null && headerPicker !== "root",
+              onBrowse: browseServerDirectory,
+              onCloseBrowser: () => {
+                setHeaderPicker(null);
+                closeServerBrowser();
+              },
+              onOpened: () => setHeaderPicker("root"),
+              // The whole current sandbox with only the root replaced: the other
+              // permissions and the writable root are the user's, not this
+              // control's, and the server refuses the pair rather than quietly
+              // relocating a writable root that would fall outside the new one.
+              onSelect: (root) =>
+                updateConfig({
+                  sandbox: {
+                    root,
+                    allowWrite: state.sandbox?.allowWrite ?? false,
+                    allowBash: state.sandbox?.allowBash ?? false,
+                    ...(state.sandbox?.writableRoot ? { writableRoot: state.sandbox.writableRoot } : {}),
+                  },
+                }),
+            }}
             onSwitchWorkspace={switchWorkspace}
             onOpenProject={() => { setProjectPicker(true); browseServerDirectory(""); }}
             onCloseProject={closeProject}
@@ -577,6 +625,8 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             versions={state.versions}
             onBrowseServerPath={browseServerDirectory}
             onCloseServerBrowser={closeServerBrowser}
+            settingsPickerBlocked={headerPicker !== null && headerPicker !== "settings"}
+            onSettingsPickerOpened={() => setHeaderPicker("settings")}
             onUpdateConfig={updateConfig}
             onFetchGitLog={fetchGitLog}
             onShowCommit={fetchGitShow}

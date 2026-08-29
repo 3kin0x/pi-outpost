@@ -1202,6 +1202,11 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     // selector where there is nothing to select.
     ...(workspaces.size > 1 ? { workspace: workspaceInfo(workspace), workspaces: workspaceInfos() } : {}),
     ...(config.workspaceLock ? { workspaceLocked: true } : {}),
+    // Absent means "settings", so a client that predates the setting — or one
+    // that is not embedded — sees exactly what it saw before.
+    ...(config.embed.workspaceControls !== "settings"
+      ? { embedWorkspaceControls: config.embed.workspaceControls }
+      : {}),
     sessionId: state.sessionId,
     model: modelName(workspace),
     thinkingLevel: state.thinkingLevel,

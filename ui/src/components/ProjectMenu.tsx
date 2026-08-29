@@ -17,6 +17,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { WorkspaceActivity, WorkspaceInfo } from "@pi-outpost/shared";
+import { eventHitsNode } from "../util/clickOutside";
 
 interface ProjectMenuProps {
   workspace: WorkspaceInfo | null;
@@ -78,7 +79,11 @@ export function ProjectMenu(props: ProjectMenuProps) {
   useEffect(() => {
     if (!open) return;
     const onDocument = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      // `composedPath`, not `contains`: inside the widget every document-level
+      // event is retargeted to the shadow host, so `contains` answers "outside"
+      // for every click in the embed — including the one picking a project,
+      // which mousedown then killed before it could ever fire.
+      if (!eventHitsNode(event, rootRef.current)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);

@@ -8,6 +8,7 @@ import type {
   ContextUsage,
   CredentialStatus,
   DirEntry,
+  EmbedWorkspaceControls,
   ExtensionUIRequest,
   FileOperation,
   FileSearchEntry,
@@ -181,6 +182,12 @@ export interface AgentState {
   workspaces: WorkspaceInfo[];
   /** Opening, closing and switching are forbidden by the server's configuration. */
   workspaceLocked: boolean;
+  /**
+   * Which workspace affordances a mounted widget presents. `settings` when the
+   * server says nothing, which is what every server said before the setting
+   * existed. Read only by the embedded app; the standalone one ignores it.
+   */
+  embedWorkspaceControls: EmbedWorkspaceControls;
   /** A switch is in flight: the conversation fades rather than emptying. */
   switching: boolean;
   /** The server refused our token (WS close 4401): show the token screen, stop reconnecting. */
@@ -278,6 +285,7 @@ const initialState: AgentState = {
   workspace: null,
   workspaces: [],
   workspaceLocked: false,
+  embedWorkspaceControls: "settings",
   switching: false,
   authRequired: false,
   brandingReady: false,
@@ -411,6 +419,9 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     // selector on every unconfigured server — the bench caught it, the unit
     // suites could not, since none of them had two projects on a real wire.
     workspaceLocked: message.workspaceLocked === true,
+    // Absent means "settings" for the same reason: the policy narrows what an
+    // embed offers, and saying nothing has to mean the interface it always had.
+    embedWorkspaceControls: message.embedWorkspaceControls ?? "settings",
     switching: false,
     branding: message.branding,
     sessionId: message.sessionId,

@@ -160,6 +160,26 @@ export interface StructuredExchangeConfig {
 /** Default document ceiling — the contract's, so the viewer accepts what the schema does. */
 export const DEFAULT_STRUCTURED_EXCHANGE_MAX_BYTES = STRUCTURED_EXCHANGE_BYTES_CEILING;
 
+/**
+ * Which workspace affordances a mounted widget presents.
+ *
+ * `settings` is the default and preserves the interface embeds have always had:
+ * one project, its sandbox root editable through Settings alone. `root` adds a
+ * compact chooser that moves that one workspace's sandbox root. `projects` shows
+ * the open/switch/close controls the standalone app has.
+ *
+ * A presentation choice, not an authorization one: `workspaceLock`, the sandbox
+ * locks and the runtime capability checks remain the enforcing boundaries, and
+ * this setting can only ever narrow what is offered within them.
+ */
+export const EMBED_WORKSPACE_CONTROLS = ["settings", "root", "projects"] as const;
+export type EmbedWorkspaceControls = (typeof EMBED_WORKSPACE_CONTROLS)[number];
+
+/** Interface choices that apply to mounted widgets only. */
+export interface EmbedConfig {
+  workspaceControls: EmbedWorkspaceControls;
+}
+
 export const AGENT_RUNTIME_MODES = ["embedded", "rpc"] as const;
 export type AgentRuntimeMode = (typeof AGENT_RUNTIME_MODES)[number];
 
@@ -413,6 +433,8 @@ export interface AppConfig {
    */
   token?: string;
   branding: BrandingConfig;
+  /** Interface choices that apply to mounted widgets only. */
+  embed: EmbedConfig;
   /** File-browser behaviour (directory watching). */
   files: FilesConfig;
   /** PDF handling (size ceiling for the raw-file route). */
@@ -608,6 +630,8 @@ export function loadConfig(
     host: "127.0.0.1",
     allowedOrigins: [],
     branding: {},
+    // Absent means the interface embeds have always had: one project, no chooser.
+    embed: { workspaceControls: "settings" },
     files: { watch: true },
     pdf: { maxBytes: DEFAULT_PDF_MAX_BYTES },
     docx: { maxBytes: DEFAULT_DOCX_MAX_BYTES },
@@ -914,6 +938,17 @@ export function loadConfig(
       defaultTheme: defaultTheme as Theme | undefined,
       allowThemeToggle: optionalBoolean(branding, "allowThemeToggle", true),
     };
+  }
+
+  if (raw.embed !== undefined) {
+    const embed = asObject(raw.embed, "embed");
+    const workspaceControls = optionalString(embed, "workspaceControls", "embed.workspaceControls");
+    if (workspaceControls !== undefined) {
+      if (!EMBED_WORKSPACE_CONTROLS.includes(workspaceControls as EmbedWorkspaceControls)) {
+        fail(`"embed.workspaceControls" must be one of ${EMBED_WORKSPACE_CONTROLS.join(", ")} (got "${workspaceControls}")`);
+      }
+      config.embed.workspaceControls = workspaceControls as EmbedWorkspaceControls;
+    }
   }
 
   applyRuntime(config, flags, env);

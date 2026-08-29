@@ -783,3 +783,78 @@ test.describe("composer autocomplete inside the widget", () => {
     await expect(box).toHaveValue("@readme.md please");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The embed workspace-control policy, one server per mode.
+//
+// The policy is loaded server configuration, so there is no way to see what a
+// deployment presents without running a server configured that way — which is
+// exactly what the unit suites cannot do.
+// ---------------------------------------------------------------------------
+test.describe("embed workspace controls", () => {
+  const projectButton = /^Projet :/;
+  const rootButton = /^Sandbox root/;
+
+  test("settings mode offers no header control, and still reaches the root through Settings", async ({ page }) => {
+    await openHost(page, { theme: "light" });
+    await expect(page.getByRole("textbox", { name: /message pi/i })).toBeVisible();
+
+    await expect(page.getByTitle(projectButton)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: rootButton })).toHaveCount(0);
+
+    // The compatibility the default promises: the sandbox is still editable, in
+    // the one place it has always been.
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("button", { name: "Browse for sandbox root" })).toBeVisible();
+  });
+
+  test("root mode replaces the one sandbox root without opening a project", async ({ page }) => {
+    await openHost(page, { server: process.env.PI_E2E_EMBED_ROOT_URL!, theme: "light" });
+    const control = page.getByRole("button", { name: rootButton });
+    await expect(control).toBeVisible();
+    const workspace = process.env.PI_E2E_EMBED_ROOT_WORKSPACE!;
+    await expect(control).toHaveAttribute("aria-label", `Sandbox root: ${workspace}`);
+
+    await control.click();
+    await page.getByRole("button", { name: "inner/" }).click();
+    await expect(page.getByTestId("picker-path")).toHaveValue(`${workspace}/inner`);
+    await page.getByRole("button", { name: "Use this directory" }).click();
+
+    // The root moved and the picker closed on the server's answer, not on the
+    // click — and no second project appeared beside it.
+    await expect(page.getByRole("button", { name: rootButton })).toHaveAttribute(
+      "aria-label",
+      `Sandbox root: ${workspace}/inner`,
+      { timeout: 20_000 },
+    );
+    await expect(page.getByTestId("server-path-picker")).toHaveCount(0);
+    await expect(page.getByTitle(projectButton)).toHaveCount(0);
+  });
+
+  test("projects mode opens the selector and switches between open projects", async ({ page }) => {
+    await openHost(page, { server: process.env.PI_E2E_EMBED_PROJECTS_URL!, theme: "light" });
+    const selector = page.getByTitle(projectButton);
+    await expect(selector).toBeVisible();
+    await expect(page.getByRole("button", { name: rootButton })).toHaveCount(0);
+
+    await selector.click();
+    const second = process.env.PI_E2E_EMBED_PROJECTS_SECOND!;
+    await page.getByRole("menuitem").filter({ hasText: second }).click();
+
+    await expect(page.getByTitle(projectButton)).toHaveAttribute(
+      "title",
+      new RegExp(`^Projet : ${second.split("/").at(-1)!}`),
+      { timeout: 20_000 },
+    );
+  });
+
+  test("a workspace lock still suppresses the controls projects mode would offer", async ({ page }) => {
+    await openHost(page, { server: process.env.PI_E2E_EMBED_LOCKED_URL!, theme: "light" });
+    await expect(page.getByRole("textbox", { name: /message pi/i })).toBeVisible();
+
+    // The policy chooses among authorized controls; the lock decides what is
+    // authorized, and a presentation setting may never argue with it.
+    await expect(page.getByTitle(projectButton)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: rootButton })).toHaveCount(0);
+  });
+});
