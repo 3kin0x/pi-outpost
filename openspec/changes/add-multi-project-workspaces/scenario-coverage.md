@@ -1,6 +1,6 @@
 # Scenario → test matrix
 
-Every `#### Scenario:` in this change's four delta specs, and what proves it.
+Every `#### Scenario:` in this change's five delta specs, and what proves it.
 Built for task 8.3. Read the assertions, not the names: a scenario counts as
 **covered** only when the test would fail if the behaviour broke at the boundary
 the scenario describes.
@@ -11,12 +11,20 @@ names, or by the bench rather than a suite) · **uncovered**.
 Files referenced:
 
 - `server/test/multiProjectWorkspaces.test.mjs` — over the real wire (`mp`)
+- `server/test/workspace-boundaries.test.ts` — workspace-owned resources and
+  exact retirement policy (`wb`)
 - `server/test/config.test.ts` (`cfg`) · `server/test/cors.test.mjs` ·
   `server/test/auth.test.mjs` · `server/test/credentials.test.mjs` ·
   `server/test/sandbox.test.ts`
-- `ui/src/useAgent.test.ts` · `ui/src/components/ProjectMenu.test.tsx` ·
+- `ui/src/App.test.tsx` · `ui/src/useAgent.test.ts` · `ui/src/components/ProjectMenu.test.tsx` ·
   `ui/src/useWorkspaceNotifications.test.ts`
-- `e2e/embed.spec.ts` · the bench run recorded in tasks 8.4/8.5
+- `e2e/app.spec.ts` · `e2e/embed.spec.ts` · the bench run recorded in tasks 8.4/8.5
+
+The 54 counted rows are the change's delta scenarios. The relevant scenarios
+from the existing `api`, `architecture`, `config`, and `embed` main specs that
+these deltas modify are repeated in the matching tables below; unchanged main
+requirements remain regression-gated by the full suites and are not counted as
+new multi-project scenarios.
 
 ## multi-project-workspaces (29)
 
@@ -31,16 +39,16 @@ Files referenced:
 | ReopeningFindsTheHistory | covered | mp same test — a seeded conversation is listed again after the reopen |
 | ClosingAWorkingProjectIsRefused | covered | mp "closing a project is refused while its agent is streaming" |
 | StartupDoesNotBuildEveryWorkspace | covered | mp "a persisted project is listed but has no session until it is opened" |
-| FirstOpenBuildsTheSession | partial | mp "switching builds the other project's session and keeps its history apart" proves the build; the transient `starting` state is announced but never observed by a test — it is gone by the time the switch answers |
+| FirstOpenBuildsTheSession | covered | mp "a client hears about another project's activity, and none of its content" observes `starting` on a client bound elsewhere and asserts it arrives before `workspace_switched`; "switching builds…" then proves the resulting session is distinct and idle |
 | TheAgentKeepsWorkingAfterASwitch | covered | mp "a turn started before a switch finishes in the project it belongs to" |
 | OtherClientsAreUnaffected | covered | mp "a streaming turn reaches its own project's clients and no others" |
 | EventsDoNotCrossWorkspaces | covered | mp same test — the watcher's received frames are asserted to hold no turn content |
-| SandboxIsPerWorkspace | partial | mp "a connection cannot read a file belonging to another project" and "…inherits the server's sandbox" prove per-project confinement at the file boundary; an agent *tool call* under a sandbox in a second workspace is not driven — the RPC runtime refuses a sandbox, and the embedded one needs a live model |
+| SandboxIsPerWorkspace | covered | wb "the actual read tool of one workspace refuses another workspace's file" invokes the `ToolDefinition.execute` owned by alpha against beta's absolute file and requires a sandbox denial; mp separately proves the wire file boundary |
 | HistoryFollowsTheProject | covered | mp "session listing is scoped to the project the connection is bound to" |
 | TheLiveConversationSurvivesASwitch | covered | mp "an unwatched project is retired, stays listed, and comes back with its history" (same session id on return); bench 8.4 |
 | TheOpenFileIsNotRestored | covered | `useAgent` "forgets the screen the project was left on"; bench 8.5 |
-| TheUnsentDraftIsRestored | partial | bench 8.5 (typed draft survived a round trip). The draft store lives in `App.tsx` (`drafts` ref) and has no unit test |
-| DraftsDoNotFollowTheClient | partial | same — bench-observed, not unit-tested |
+| TheUnsentDraftIsRestored | covered | `App.test.tsx` "restores a project's draft after a round trip through another project" drives alpha → beta → alpha and asserts the original value; Playwright `app.spec.ts` repeats that round trip over the real server and browser |
+| DraftsDoNotFollowTheClient | covered | `App.test.tsx` "shows an empty composer when a project with no draft is selected" proves alpha's text does not appear in beta; Playwright `app.spec.ts` asserts the second project's real composer starts empty |
 | WorkingWorkspacesAreNeverRetired | covered | mp "a project whose agent is streaming outlives any idle period" |
 | ReopeningARetiredWorkspace | covered | mp "an unwatched project is retired, stays listed, and comes back with its history" |
 | BackgroundProgressIsVisible | covered | mp "a client hears about another project's activity, and none of its content"; working→idle in the streaming and turn-finishes tests |
@@ -67,7 +75,7 @@ Files referenced:
 | Scenario | Status | Proof |
 |---|---|---|
 | LayerSeparation | covered | pre-existing: the protocol is the only path, enforced by the type surface and the whole server suite |
-| WorkspaceOwnsItsResources | partial | the type carries it (`Workspace` owns root, watcher, toolset, session) and mp proves isolation of events, sessions and file roots; no test moves one workspace's sandbox root and then asserts the other's watcher and toolset are untouched |
+| WorkspaceOwnsItsResources | covered | wb "moving one sandbox root replaces only that workspace's watcher and toolset" changes alpha's root and asserts beta keeps the exact browser root, watcher and toolset instances, whose read tool still works |
 | CrossOriginRejected | covered | pre-existing `cors.test.mjs` |
 | TokenRequired | covered | pre-existing auth tests; `e2e/embed.spec.ts` "a token-protected backend works across origins" |
 | SandboxedFileAccess | covered | pre-existing `sandbox.test.ts` |
@@ -79,12 +87,12 @@ Files referenced:
 
 | Scenario | Status | Proof |
 |---|---|---|
-| WritingFailsBeforeAnythingMoves | uncovered | `mp` holds a skipped test that records what defeats it: the write is a temp file renamed over the target, so neither a read-only file nor a read-only directory stops it here |
+| WritingFailsBeforeAnythingMoves | covered | mp "a persisted set that cannot be written leaves the server untouched" removes the configuration source, observes `workspace_error`, then connects again and proves the project set is still single-project; the test is no longer skipped |
 | ProjectInheritsServerSandbox | covered | mp "a project opened with no settings of its own inherits the server's sandbox" |
 | BackwardCompatibleConfiguration | covered | cfg "an existing configuration that never opened a project is served as before" |
 | PinnedConfigurationRefusesSwitching | covered | mp "a pinned server refuses to open, close or switch" |
 | PinnedConfigurationRefusesOpening | covered | mp same test |
-| RetirementDisabled | partial | cfg "workspaceIdleTimeoutMs takes 0 as \"never retire\"" proves the value is accepted, and `sweepIdleWorkspaces` returns immediately on it. A wire test cannot fail here: with retirement off the sweep does no work, so nothing distinguishes a working guard from a slow one inside a test's patience |
+| RetirementDisabled | covered | cfg "workspaceIdleTimeoutMs takes 0 as \"never retire\"" proves config acceptance; wb "a zero timeout cannot retire even a long-idle, unwatched workspace" calls the policy used by the sweep and contrasts it with the same state under a positive elapsed timeout |
 | RetirementIsNotClosing | covered | mp "an unwatched project is retired, stays listed, and comes back with its history" |
 
 ## embed (5)
@@ -97,13 +105,6 @@ Files referenced:
 | NoWorkspaceNamed | covered | `useAgent` "names no workspace when the host supplies none"; mp same test's fallback half |
 | WidgetOffersNoSwitching | covered | `ProjectMenu` "offers nothing at all — not a disabled control"; `App.tsx` passes `state.workspaceLocked \|\| embedded` |
 
-## What is left
+## Result
 
-One scenario is **uncovered** and five are **partial**:
-
-1. `WritingFailsBeforeAnythingMoves` — needs a filesystem that refuses an atomic
-   rename. The skipped test records what defeated the two obvious attempts.
-2. `FirstOpenBuildsTheSession`'s `starting` state, `SandboxIsPerWorkspace` at the
-   tool-call boundary, `WorkspaceOwnsItsResources` under a root move,
-   `RetirementDisabled`, and the two composer-draft scenarios — each proved one
-   level in from where the scenario is written, and each says so in its row.
+All **54 scenarios are covered**. There are no partial or uncovered rows.

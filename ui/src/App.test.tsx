@@ -170,6 +170,47 @@ describe("App — onboarding", () => {
   });
 });
 
+function workspace(root: string) {
+  return { root, name: root.split("/").at(-1)!, activity: "idle" as const, needsAttention: false };
+}
+
+// openlore: scenario=TheUnsentDraftIsRestored spec=multi-project-workspaces
+describe("TheUnsentDraftIsRestored", () => {
+  it("restores a project's draft after a round trip through another project", () => {
+    const alpha = workspace("/srv/alpha");
+    const beta = workspace("/srv/beta");
+    let api = agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+
+    fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: "alpha draft" } });
+    api = agentApi(agentState({ workspace: beta, workspaces: [alpha, beta] }));
+    view.rerender(<App />);
+    fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: "beta draft" } });
+    api = agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] }));
+    view.rerender(<App />);
+
+    expect(screen.getByPlaceholderText(/message/i)).toHaveValue("alpha draft");
+  });
+});
+
+// openlore: scenario=DraftsDoNotFollowTheClient spec=multi-project-workspaces
+describe("DraftsDoNotFollowTheClient", () => {
+  it("shows an empty composer when a project with no draft is selected", () => {
+    const alpha = workspace("/srv/alpha");
+    const beta = workspace("/srv/beta");
+    let api = agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+    fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: "alpha only" } });
+
+    api = agentApi(agentState({ workspace: beta, workspaces: [alpha, beta] }));
+    view.rerender(<App />);
+
+    expect(screen.getByPlaceholderText(/message/i)).toHaveValue("");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Session analysis — the conversation side of the panel: anchors and jumps.
 // The panel's own content is covered in components/SessionAnalysis.test.tsx;

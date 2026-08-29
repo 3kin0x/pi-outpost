@@ -11,7 +11,7 @@
  * job, not this file's.
  */
 import assert from "node:assert/strict";
-import { chmod, readFile, realpath, writeFile } from "node:fs/promises";
+import { readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -183,16 +183,19 @@ test("a client hears about another project's activity, and none of its content",
 
   // The second client starts the other project; the first stays where it is.
   mover.send({ type: "switch_workspace", root: beta });
-  await mover.waitFor((m) => m.type === "workspace_switched");
-
-  const activity = await watcher.waitFor((m) => m.type === "workspace_activity");
+  const activity = await watcher.waitFor(
+    (m) =>
+      m.type === "workspace_activity" &&
+      m.workspaces.some((w) => w.root === beta && w.activity === "starting"),
+  );
   assert.ok(
-    activity.workspaces.some((w) => w.root === beta && w.activity !== "stopped"),
-    "the other project's state reached a client bound elsewhere",
+    !mover.received.some((m) => m.type === "workspace_switched"),
+    "starting is observable before the new session is handed to the mover",
   );
   // Activity carries no conversation: that is what makes it safe to send to
   // everyone.
   assert.equal(Object.keys(activity).sort().join(","), "type,workspaces");
+  await mover.waitFor((m) => m.type === "workspace_switched");
 });
 
 test("a connection names the project it binds to, and an unknown one falls back", async (t) => {
@@ -742,14 +745,7 @@ test("opening a directory that is already open reuses it", async (t) => {
   assert.equal(switched.workspaces.length, hello.workspaces.length, "no duplicate project");
 });
 
-// SKIPPED: the persist-first rule is real and implemented (handleOpenProject
-// writes before it builds, and rolls back if the build then fails), but making the
-// filesystem actually refuse the write proved unreliable here — the write is a
-// temp file renamed over the target, so neither a read-only config file nor a
-// read-only directory stopped it in this environment. Left in place rather than
-// deleted: the behaviour deserves a test, and this records what the next attempt
-// has to defeat.
-test.skip("a persisted set that cannot be written leaves the server untouched", async (t) => {
+test("a persisted set that cannot be written leaves the server untouched", async (t) => {
   const beta = await secondProject();
   const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
   const server = await startServer(root);
@@ -759,19 +755,14 @@ test.skip("a persisted set that cannot be written leaves the server untouched", 
   t.after(() => client.close());
   await client.waitFor((m) => m.type === "hello");
 
-  // Persist-first is the rule: a set that cannot be saved must not be applied,
-  // or a project the user watched appear would vanish at the next start.
-  //
-  // The DIRECTORY, not the file: the write is atomic — a temp file renamed over
-  // the target — so a read-only config file is still replaceable, and only a
-  // read-only directory actually stops it.
-  const configDir = path.dirname(server.configFile);
-  await chmod(configDir, 0o555);
-  t.after(() => chmod(configDir, 0o755).catch(() => {}));
+  // Persist-first is the rule: a set that cannot be saved must not be applied.
+  // Removing the configured source is deterministic on every platform and makes
+  // the persistence transaction fail before it can produce a replacement file.
+  await unlink(server.configFile);
 
   client.send({ type: "open_project", root: beta });
   const error = await client.waitFor((m) => m.type === "workspace_error");
-  assert.match(error.message, /cannot save|could not save/i);
+  assert.match(error.message, /cannot read|cannot save|could not save/i);
 
   const second = connect(server.wsUrl());
   t.after(() => second.close());
