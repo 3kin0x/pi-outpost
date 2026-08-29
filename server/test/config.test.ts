@@ -456,10 +456,16 @@ describe("loadConfig — resource path resolution", () => {
   test("open projects are resolved against the config file, like every other path", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");
-      await writeFile(configPath, JSON.stringify({ openProjects: ["./beta", "/srv/gamma"] }, null, 2));
+      // Absolute means absolute on THIS platform. A bare "/srv/gamma" is not
+      // absolute on Windows — it is rooted on whichever drive the process is on,
+      // so resolving it there legitimately yields "C:\\srv\\gamma" and an
+      // assertion written against the POSIX spelling fails for no real reason.
+      const absolute = path.resolve(path.sep, "srv", "gamma");
+      await writeFile(configPath, JSON.stringify({ openProjects: ["./beta", absolute] }, null, 2));
       // A relative entry has to mean the same thing here as it does for every
-      // other configured path, or the set moves with the process's cwd.
-      assert.deepEqual(loadConfig(dir, { config: configPath }).openProjects, [path.join(dir, "beta"), "/srv/gamma"]);
+      // other configured path, or the set moves with the process's cwd; an
+      // absolute one has to come back untouched.
+      assert.deepEqual(loadConfig(dir, { config: configPath }).openProjects, [path.join(dir, "beta"), absolute]);
     });
   });
 
