@@ -28,6 +28,10 @@ interface SettingsMenuProps {
   userSkillPaths: string[];
   /** The open server-directory listing, or null when no picker is open. */
   serverBrowse: ServerBrowseState | null;
+  /** Another picker in the header opened: close this one rather than stack it. */
+  pickerBlocked?: boolean;
+  /** Opening this picker, so whoever coordinates the header can close the others. */
+  onPickerOpened?: () => void;
   /** In-flight apply, so the menu can stay open and say why one was refused. */
   applyState: SettingsApplyState | null;
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
@@ -43,6 +47,8 @@ export function SettingsMenu({
   sandbox,
   userSkillPaths,
   serverBrowse,
+  pickerBlocked = false,
+  onPickerOpened,
   applyState,
   versions,
   onBrowseServerPath,
@@ -56,7 +62,23 @@ export function SettingsMenu({
   const [sandboxAllowBash, setSandboxAllowBash] = useState(false);
   const [draftSkillPaths, setDraftSkillPaths] = useState<string[]>(userSkillPaths);
   const [picking, setPicking] = useState<PickerField | null>(null);
-  const ref = useClickOutside(() => close());
+
+  useEffect(() => {
+    // Yield to whichever picker opened after this one: two open at once would
+    // compete for the single server-browse listing behind them.
+    //
+    // This picker only. The control that just opened has already asked for its
+    // own listing, and releasing the shared one here would discard the request it
+    // is waiting on — leaving the new picker up with nothing in it.
+    if (pickerBlocked && picking !== null) setPicking(null);
+  }, [pickerBlocked, picking]);
+  // Only when this menu is actually open. The handler runs on every mousedown
+  // anywhere else in the app, and `close()` releases the shared server-browse
+  // listing — so an unconditional call took the listing out from under whichever
+  // other control was walking it, on the first click inside that control.
+  const ref = useClickOutside(() => {
+    if (open || picking !== null) close();
+  });
   const activeTools = tools.filter((tool) => tool.active);
   const inactiveTools = tools.filter((tool) => !tool.active);
   const skills = commands.filter((command) => command.source === "skill");
@@ -96,6 +118,7 @@ export function SettingsMenu({
 
   /** Open the picker for one field, starting from whatever that field points at. */
   function startPicking(field: PickerField, from: string) {
+    onPickerOpened?.();
     setPicking(field);
     onBrowseServerPath(from.trim() || "/");
   }

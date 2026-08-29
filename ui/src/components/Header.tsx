@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode, type WorkspaceInfo } from "@pi-outpost/shared";
 import { ProjectMenu } from "./ProjectMenu";
+import { WorkspaceRootControl, type WorkspaceRootSandbox } from "./WorkspaceRootControl";
 import type { GitStatusState, ServerBrowseState, SessionSearch, SettingsApplyState } from "../useAgent";
 import { stripAnsi } from "../util/ansi";
 import { useClickOutside } from "../util/clickOutside";
@@ -20,6 +21,23 @@ interface HeaderProps {
   workspace: WorkspaceInfo | null;
   workspaces: WorkspaceInfo[];
   workspaceLocked: boolean;
+  /**
+   * Which workspace affordance this header carries. `projects` is the selector
+   * the standalone app has always shown; `root` is the single-root chooser an
+   * embed gets under that policy; `none` is the embed that offers neither.
+   */
+  workspaceControl: "projects" | "root" | "none";
+  /** Everything the `root` control needs; required only in that mode. */
+  rootControl?: {
+    sandbox: WorkspaceRootSandbox | null;
+    browse: ServerBrowseState | null;
+    applyState: SettingsApplyState | null;
+    blocked: boolean;
+    onBrowse: (path: string) => void;
+    onCloseBrowser: () => void;
+    onOpened: () => void;
+    onSelect: (root: string) => void;
+  };
   onSwitchWorkspace: (root: string) => void;
   onOpenProject: () => void;
   onCloseProject: (root: string) => void;
@@ -46,6 +64,10 @@ interface HeaderProps {
   settingsApply: SettingsApplyState | null;
   onBrowseServerPath: (path: string) => void;
   onCloseServerBrowser: () => void;
+  /** Another header picker owns the server-browse listing: Settings closes its own. */
+  settingsPickerBlocked?: boolean;
+  /** Settings opened a picker, so the other header controls close theirs. */
+  onSettingsPickerOpened?: () => void;
   onUpdateConfig: (update: {
     sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
     userSkillPaths?: string[];
@@ -311,16 +333,32 @@ export function Header(props: HeaderProps) {
     // own, the header competes there on DOM order alone — and the open FileViewer,
     // declared after it, wins. The menus would open *behind* the file preview.
     <header className="relative z-30 flex items-center gap-3 border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
-      {/* The project comes first: it scopes everything else in this bar. Renders
-          nothing at all while a single project is open, or on a pinned server. */}
-      <ProjectMenu
-        workspace={props.workspace}
-        workspaces={props.workspaces}
-        locked={props.workspaceLocked}
-        onSwitch={props.onSwitchWorkspace}
-        onOpen={props.onOpenProject}
-        onClose={props.onCloseProject}
-      />
+      {/* The workspace affordance comes first: it scopes everything else in this
+          bar. Which one appears is the deployment's choice; the project selector
+          still renders nothing while a single project is open or on a pinned
+          server, and `none` is an embed that offers neither. */}
+      {props.workspaceControl === "projects" && (
+        <ProjectMenu
+          workspace={props.workspace}
+          workspaces={props.workspaces}
+          locked={props.workspaceLocked}
+          onSwitch={props.onSwitchWorkspace}
+          onOpen={props.onOpenProject}
+          onClose={props.onCloseProject}
+        />
+      )}
+      {props.workspaceControl === "root" && props.rootControl && (
+        <WorkspaceRootControl
+          sandbox={props.rootControl.sandbox}
+          browse={props.rootControl.browse}
+          applyState={props.rootControl.applyState}
+          blocked={props.rootControl.blocked}
+          onBrowse={props.rootControl.onBrowse}
+          onCloseBrowser={props.rootControl.onCloseBrowser}
+          onOpened={props.rootControl.onOpened}
+          onSelect={props.rootControl.onSelect}
+        />
+      )}
       {/* File/repo controls live on the left, the side their panel opens on */}
       <button
         type="button"
@@ -412,6 +450,8 @@ export function Header(props: HeaderProps) {
           versions={props.versions}
           onBrowseServerPath={props.onBrowseServerPath}
           onCloseServerBrowser={props.onCloseServerBrowser}
+          pickerBlocked={props.settingsPickerBlocked}
+          onPickerOpened={props.onSettingsPickerOpened}
           onUpdateConfig={props.onUpdateConfig}
         />
         <span

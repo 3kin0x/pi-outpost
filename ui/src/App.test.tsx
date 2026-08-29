@@ -845,3 +845,142 @@ describe("choosing a project directory", () => {
     expect(screen.queryByTestId("server-path-picker")).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Embed workspace controls — which affordance a mounted widget presents, and
+// which of them are refusals rather than choices.
+// ---------------------------------------------------------------------------
+function embedded(overrides: Record<string, unknown> = {}) {
+  const alpha = workspace("/srv/alpha");
+  const beta = workspace("/srv/beta");
+  const api = agentApi(
+    agentState({
+      workspace: alpha,
+      workspaces: [alpha, beta],
+      // An embed paints nothing until branding has settled, so a widget never
+      // flashes the default brand before the host's.
+      brandingReady: true,
+      sandbox: { root: "/srv/alpha", allowWrite: true, allowBash: false, writableRoot: "/srv/alpha/out" },
+      serverBrowse: { status: "loaded", path: "/srv/gamma", parent: "/srv", entries: [], requestId: "r1" },
+      ...overrides,
+    }),
+  );
+  mockUseAgent.mockImplementation(() => api);
+  const view = render(<App rootElement={document.createElement("div")} />);
+  return { ...view, api };
+}
+
+// openlore: scenario=SettingsModeKeepsProjectControlsHidden spec=embed
+describe("an embed under the default policy", () => {
+  it("offers neither a project selector nor a root chooser", () => {
+    embedded();
+
+    // What every widget showed before the setting existed, and what a server
+    // that says nothing still means.
+    expect(screen.queryByTitle(/^Projet :/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Sandbox root/ })).not.toBeInTheDocument();
+    // Settings stays reachable in every mode — that is where the root lives here.
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("leaves the standalone app's project selector alone", () => {
+    const alpha = workspace("/srv/alpha");
+    const beta = workspace("/srv/beta");
+    mockUseAgent.mockImplementation(() => agentApi(agentState({ workspace: alpha, workspaces: [alpha, beta] })));
+    render(<App />);
+
+    // The policy is about mounted widgets. A standalone client on the same server
+    // keeps the controls it has always had.
+    expect(screen.getByTitle(/^Projet :/)).toBeInTheDocument();
+  });
+});
+
+// openlore: scenario=RootModeReplacesTheSingleSandboxRoot spec=embed
+describe("an embed in root mode", () => {
+  it("replaces the sandbox root, preserving every other sandbox setting", () => {
+    const { api } = embedded({ embedWorkspaceControls: "root" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Sandbox root/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+
+    // The whole current sandbox with only the root replaced: dropping a flag here
+    // would quietly widen or narrow what the agent may do.
+    expect(api.updateConfig).toHaveBeenCalledWith({
+      sandbox: { root: "/srv/gamma", allowWrite: true, allowBash: false, writableRoot: "/srv/alpha/out" },
+    });
+    // A root replacement is not an open: no second project is created.
+    expect(api.openProject).not.toHaveBeenCalled();
+  });
+
+  it("offers no project selector beside the root chooser", () => {
+    embedded({ embedWorkspaceControls: "root" });
+
+    expect(screen.getByRole("button", { name: /Sandbox root/ })).toBeInTheDocument();
+    expect(screen.queryByTitle(/^Projet :/)).not.toBeInTheDocument();
+  });
+});
+
+// openlore: scenario=ProjectsModeOffersProjectControls spec=embed
+// openlore: scenario=WorkspaceLockOverridesProjectsMode spec=embed
+describe("an embed in projects mode", () => {
+  it("offers the project controls the standalone app has", () => {
+    embedded({ embedWorkspaceControls: "projects" });
+
+    expect(screen.getByTitle(/^Projet :/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Sandbox root/ })).not.toBeInTheDocument();
+  });
+
+  it("offers nothing once the server is workspace-locked", () => {
+    embedded({ embedWorkspaceControls: "projects", workspaceLocked: true });
+
+    // The lock is the server's answer and the policy cannot argue with it: a
+    // presentation choice may only narrow what the server already allows.
+    expect(screen.queryByTitle(/^Projet :/)).not.toBeInTheDocument();
+  });
+});
+
+describe("one listing, one picker", () => {
+  it("closes the project picker when the sandbox-root chooser opens", () => {
+    const { api } = embedded({ embedWorkspaceControls: "projects" });
+    fireEvent.click(screen.getByTitle(/^Projet :/));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Ouvrir un projet/ }));
+    expect(screen.getByTestId("server-path-picker")).toBeInTheDocument();
+
+    // Settings owns the same server-browse listing; opening its picker has to
+    // take the project one down rather than stack a second over the same walk.
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+
+    expect(screen.getAllByTestId("server-path-picker")).toHaveLength(1);
+    expect(api.closeServerBrowser).not.toHaveBeenCalled();
+  });
+
+  it("keeps the listing a control is walking when the pointer lands elsewhere", () => {
+    const { api } = embedded({ embedWorkspaceControls: "root" });
+    fireEvent.click(screen.getByRole("button", { name: /Sandbox root/ }));
+
+    // Every menu in the header watches for a press outside itself. One of them
+    // released the shared listing on every such press — including the first click
+    // inside another control's picker, which emptied it before it was used.
+    fireEvent.mouseDown(screen.getByTestId("server-path-picker"));
+
+    expect(screen.getByTestId("server-path-picker")).toBeInTheDocument();
+    expect(api.closeServerBrowser).not.toHaveBeenCalled();
+  });
+
+  it("hands the listing to Settings rather than taking it away from both", () => {
+    const { api } = embedded({ embedWorkspaceControls: "root" });
+    fireEvent.click(screen.getByRole("button", { name: /Sandbox root/ }));
+    expect(screen.getByTestId("server-path-picker")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse for sandbox root" }));
+
+    // One picker, and it is a usable one: the control that yields must not
+    // release the listing, or it discards the request the new owner just made
+    // and leaves it showing nothing at all.
+    expect(screen.getAllByTestId("server-path-picker")).toHaveLength(1);
+    expect(api.closeServerBrowser).not.toHaveBeenCalled();
+    expect(api.browseServerDirectory).toHaveBeenLastCalledWith("/srv/alpha");
+  });
+});

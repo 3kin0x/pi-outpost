@@ -338,6 +338,15 @@ export interface WorkspaceInfo {
   needsAttention?: boolean;
 }
 
+/**
+ * Which workspace affordances a mounted widget presents.
+ *
+ * `settings`: one project, its sandbox root editable through Settings alone.
+ * `root`: a compact chooser in the header that moves that one workspace's
+ * sandbox root. `projects`: the open/switch/close controls.
+ */
+export type EmbedWorkspaceControls = "settings" | "root" | "projects";
+
 /** Snapshot of session state, sent on connect and after session replacement. */
 export interface SessionSnapshot {
   /**
@@ -353,6 +362,16 @@ export interface SessionSnapshot {
    * offers no affordance for them — this is what pins an embedded widget.
    */
   workspaceLocked?: boolean;
+  /**
+   * Which workspace affordances a mounted widget presents. Absent means
+   * `"settings"`, the default and the interface embeds have always had — so a
+   * client that does not know the field behaves as it always did.
+   *
+   * Presentation, not authorization: `workspaceLocked` above and the sandbox
+   * locks remain the enforcing boundaries, and this can only narrow what is
+   * offered within them. The standalone interface ignores it.
+   */
+  embedWorkspaceControls?: EmbedWorkspaceControls;
   /**
    * Every open project, this one included. Absent for the same reason as above.
    * Kept current by `workspace_activity`, which reaches every client regardless of

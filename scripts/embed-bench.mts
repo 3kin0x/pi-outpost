@@ -221,6 +221,38 @@ const diagrams = await startServer(
   { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: fakeConfig } },
 );
 
+// The three embed workspace-control policies, each on its own server, because the
+// policy is loaded configuration rather than a mount option: the only way to see
+// what a deployment would show is to run a server configured that way.
+const rootModeRoot = await realpath(
+  await makeWorkspace({ "readme.md": "# root mode\n", "inner/notes.md": "# inner\n", "other/notes.md": "# other\n" }),
+);
+const rootMode = await startServer(
+  rootModeRoot,
+  {
+    server: { allowedOrigins: [host.url], port: HOST_PORT + 3 },
+    branding: { title: "bench root mode" },
+    embed: { workspaceControls: "root" },
+    // Writes confined to the root itself rather than a directory beside it: the
+    // harness default pins a writable root that any narrowing would strand, which
+    // is a refusal worth testing and a poor thing to leave a bench stuck on.
+    sandbox: { root: rootModeRoot, allowWrite: true, allowBash: false },
+  },
+  { env: onlyOneFakeProvider() },
+);
+
+const projectsSecond = await realpath(await makeWorkspace({ "readme.md": "# second project\n" }));
+const projectsMode = await startServer(
+  await makeWorkspace({ "readme.md": "# projects mode\n" }),
+  {
+    server: { allowedOrigins: [host.url], port: HOST_PORT + 4 },
+    branding: { title: "bench projects mode" },
+    embed: { workspaceControls: "projects" },
+    openProjects: [projectsSecond],
+  },
+  { env: onlyOneFakeProvider() },
+);
+
 const link = (server: string) => `${host.url}/?server=${encodeURIComponent(server)}&theme=light`;
 console.log("\n  embed bench — the widget inside a host page that fights it\n");
 console.log(`  settings, files, sessions   ${link(plain.base)}`);
@@ -231,12 +263,18 @@ console.log(
     : "  offline: no model (BENCH_LIVE=1 npm run bench to talk to a real one)",
 );
 console.log(`  seeded transcript           ${link(diagrams.base)}   (diagrams + table)`);
+console.log("\n  embed workspace controls — the same widget under each policy\n");
+console.log(`  settings (the default)      ${link(plain.base)}   no header control; the root lives in Settings`);
+console.log(`  root                        ${link(rootMode.base)}   one root, moved from the header`);
+console.log(`  projects                    ${link(projectsMode.base)}   open, switch and close, with a second project already open`);
 console.log("\n  ctrl-c to stop\n");
 
 let stopping = false;
 const stop = async () => {
   if (stopping) return;
   stopping = true;
+  await projectsMode.stop();
+  await rootMode.stop();
   await diagrams.stop();
   await plain.stop();
   await host.close();
