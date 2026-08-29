@@ -79,13 +79,48 @@ describe("what the selector offers", () => {
     expect(props.onClose).toHaveBeenCalledWith("/srv/beta");
   });
 
-  it("keeps opening reachable with a single project, where there is nothing to choose", () => {
+  // openlore: scenario=OneProjectIsStillNamed spec=multi-project-workspaces
+  it("names the project even when it is the only one open", () => {
+    setup({ workspaces: [workspace()] });
+
+    // The one thing a user cannot work without is which project this is. A bare
+    // "+" stood here and said it nowhere.
+    const button = screen.getByRole("button", { expanded: false });
+    expect(button).toHaveAttribute("title", "Projet : alpha (au repos)");
+    expect(button).toHaveTextContent("alpha");
+  });
+
+  // openlore: scenario=OpeningStaysReachableFromTheControl spec=multi-project-workspaces
+  it("keeps opening reachable with a single project, from that same control", () => {
     const { props } = setup({ workspaces: [workspace()] });
 
-    // No selector — but the one-to-two flow has to start somewhere.
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Ouvrir un projet" }));
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    const menu = screen.getByRole("menu");
+    // One row, and the way to add another. Closing is absent because the server
+    // refuses to close the last project anyway.
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    expect(within(menu).queryByRole("button", { name: /^Fermer/ })).not.toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Ouvrir un projet/ }));
     expect(props.onOpen).toHaveBeenCalled();
+  });
+
+  // openlore: scenario=TheControlDoesNotChangeShape spec=multi-project-workspaces
+  it("does not change shape when a second project appears", () => {
+    const one = [workspace()];
+    const two = [workspace(), workspace({ root: "/srv/beta", name: "beta" })];
+    const { rerender, props } = setup({ workspaces: one });
+    const before = screen.getByRole("button", { expanded: false });
+    const shape = { tag: before.tagName, title: before.getAttribute("title"), text: before.textContent };
+
+    rerender(<ProjectMenu {...props} workspaces={two} />);
+
+    // The same control, saying the same thing about the current project. What
+    // changed is the number of rows behind it, not the interface.
+    const after = screen.getByRole("button", { expanded: false });
+    expect({ tag: after.tagName, title: after.getAttribute("title"), text: after.textContent }).toEqual(shape);
+    fireEvent.click(after);
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem")).toHaveLength(3);
   });
 });
 
@@ -169,5 +204,46 @@ describe("dismissing the menu", () => {
     // The picker takes over from here, so the menu must not still be over it.
     expect(props.onOpen).toHaveBeenCalled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+// openlore: scenario=TheControlDoesNotChangeShape spec=multi-project-workspaces
+describe("what one project shows that only several used to", () => {
+  it("marks the single project's activity like any other", () => {
+    const working = workspace({ activity: "working" });
+    setup({ workspace: working, workspaces: [working] });
+
+    // The deleted branch is what kept these from ever being reached below two
+    // projects: a bare "+" has no state to show.
+    expect(screen.getByRole("button", { expanded: false })).toHaveAttribute(
+      "title",
+      "Projet : alpha (travaille)",
+    );
+  });
+
+  it("raises attention for the single project too", () => {
+    setup({ workspaces: [workspace({ activity: "waiting", needsAttention: true })] });
+
+    const button = screen.getByRole("button", { expanded: false });
+    expect(button).toHaveTextContent("1");
+    expect(button.className).toMatch(/amber/);
+  });
+
+  it("says so in words once the menu is open", () => {
+    setup({ workspaces: [workspace({ activity: "waiting", needsAttention: true })] });
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    expect(within(screen.getByRole("menu")).getByText("t'attend")).toBeInTheDocument();
+  });
+});
+
+// openlore: scenario=APinnedServerStillOffersNothing spec=multi-project-workspaces
+describe("naming a project never resurrects a control a deployment refused", () => {
+  it("offers nothing on a pinned server, with one project open", () => {
+    const { container } = setup({ workspaces: [workspace()], locked: true });
+
+    // The lock is the deployment's answer. Naming the project is about what the
+    // control says when there is one, never about whether there is one.
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -811,7 +811,10 @@ describe("choosing a project directory", () => {
     );
     mockUseAgent.mockImplementation(() => api);
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Ouvrir un projet" }));
+    // Through the selector, which names the project whether one is open or several
+    // — there is no separate single-project control to click any more.
+    fireEvent.click(screen.getByTitle(/^Projet :/));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Ouvrir un projet/ }));
     return api;
   }
 
