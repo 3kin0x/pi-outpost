@@ -245,6 +245,33 @@ const progress = await startServer(
   { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: progressConfig } },
 );
 
+// A server whose model accepts only a subset of the thinking levels — no `high` —
+// so the model-aware thinking slider can be watched by hand.
+const thinkingRoot = await makeWorkspace({ "readme.md": "# thinking\n" });
+const thinkingConfig = path.join(thinkingRoot, "fake-rpc.json");
+await writeFile(
+  thinkingConfig,
+  JSON.stringify({
+    state: { sessionId: "thinking-1", model: { provider: "local", id: "qwen3.8-27b", name: "Qwen3.8 27B", reasoning: true } },
+    commands_: { get_available_thinking_levels: { data: { levels: ["low", "medium", "xhigh"] } } },
+  }),
+);
+const thinking = await startServer(
+  thinkingRoot,
+  {
+    server: { allowedOrigins: [host.url], port: HOST_PORT + 6 },
+    branding: { title: "bench thinking" },
+    agentRuntime: {
+      mode: "rpc",
+      executable: process.execPath,
+      args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")],
+      startupTimeoutMs: 20_000,
+    },
+    sandbox: undefined,
+  },
+  { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: thinkingConfig } },
+);
+
 // The three embed workspace-control policies, each on its own server, because the
 // policy is loaded configuration rather than a mount option: the only way to see
 // what a deployment would show is to run a server configured that way.
@@ -288,6 +315,7 @@ console.log(
 );
 console.log(`  seeded transcript           ${link(diagrams.base)}   (diagrams + table)`);
 console.log(`  tool progress bar           ${link(progress.base)}   (send any prompt, watch the tool card)`);
+console.log(`  model-aware thinking slider ${link(thinking.base)}   (open the 🧠 control: off..xhigh, no high)`);
 console.log("\n  embed workspace controls — the same widget under each policy\n");
 console.log(`  settings (the default)      ${link(plain.base)}   no header control; the root lives in Settings`);
 console.log(`  root                        ${link(rootMode.base)}   one root, moved from the header`);
@@ -300,6 +328,7 @@ const stop = async () => {
   stopping = true;
   await projectsMode.stop();
   await rootMode.stop();
+  await thinking.stop();
   await progress.stop();
   await diagrams.stop();
   await plain.stop();
