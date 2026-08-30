@@ -66,6 +66,15 @@ interface AppProps {
   workspace?: string;
 }
 
+/**
+ * How close to the end counts as "at the bottom", in pixels.
+ *
+ * One number, two readers: the effect that follows streamed content, and the
+ * return-to-latest control's visibility. A second literal would let the button
+ * claim the reader is away while the transcript keeps scrolling under them.
+ */
+const NEAR_BOTTOM_PX = 120;
+
 const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootElement, initialTheme, token, workspace }, ref) {
   const embedded = rootElement !== undefined;
   const accentTarget = rootElement ?? document.documentElement;
@@ -380,23 +389,185 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     initialTheme,
   );
   useImperativeHandle(ref, () => ({ setTheme }), [setTheme]);
-  const mainRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+  /**
+   * The scroller, as state as well as a ref.
+   *
+   * The embed renders nothing until its branding request settles, so an effect
+   * that reached for the ref on the first render found null — and nothing in its
+   * dependencies changed when the real interface finally mounted, so it never
+   * looked again. A callback ref reports the mount itself.
+   */
+  const [scrollerElement, setScrollerElement] = useState<HTMLElement | null>(null);
+  const attachScroller = useCallback((node: HTMLElement | null) => {
+    mainRef.current = node;
+    setScrollerElement(node);
+  }, []);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  /**
+   * The same fact as `stickToBottom`, in a form a render can read.
+   *
+   * The ref stays authoritative: the effect below reads it in the tick a scroll
+   * writes it, where state would still be one render behind and would follow
+   * content the reader had just scrolled away from. This mirror exists only so
+   * the return-to-latest control can appear and disappear, and it is written
+   * everywhere the ref is — see `setStick` and `useConversationJump`.
+   */
+  const [atBottom, setAtBottom] = useState(true);
+
+  /** Writes both representations of the near-bottom fact, so they cannot drift. */
+  const setStick = useCallback((next: boolean) => {
+    if (next !== stickToBottom.current) setAtBottom(next);
+    stickToBottom.current = next;
+  }, []);
+
+  /** Reads the near-bottom fact off the scroller's current geometry. */
+  const syncStick = useCallback(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    setStick(main.scrollHeight - main.scrollTop - main.clientHeight < NEAR_BOTTOM_PX);
+  }, [setStick]);
+
+  /**
+   * True while a return-to-latest animation is still on its way to the end.
+   *
+   * A smooth scroll emits a scroll event per frame, and every one of them but the
+   * last reports a viewport still far from the end. Read naively they say the
+   * reader has gone back to the scrollback, which flickers the control on again
+   * for the length of the animation and — worse — stops the transcript following
+   * anything that streams in while it runs.
+   */
+  const returning = useRef<number | null>(null);
+
+  /**
+   * Arms the guard for a scroll this app is about to start towards the end.
+   *
+   * Only when that scroll has somewhere to travel. From inside the near-bottom
+   * region it covers less ground than the region itself, so none of its frames
+   * can read as a departure — and arming there would leave the guard held by an
+   * animation that never ran, swallowing the reader's next scroll instead.
+   */
+  const beginReturn = useCallback(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    if (main.scrollHeight - main.scrollTop - main.clientHeight < NEAR_BOTTOM_PX) return;
+    returning.current = main.scrollTop;
+  }, []);
 
   // Track whether the user is reading scrollback: only auto-scroll when
   // already near the bottom (avoids yanking during streaming).
-  function handleScroll() {
+  const evaluatePosition = useCallback(() => {
     const main = mainRef.current;
     if (!main) return;
-    stickToBottom.current = main.scrollHeight - main.scrollTop - main.clientHeight < 120;
+    const near = main.scrollHeight - main.scrollTop - main.clientHeight < NEAR_BOTTOM_PX;
+    const from = returning.current;
+    if (from !== null) {
+      if (main.scrollTop < from) {
+        // Away from the end: nothing this app started moves that way, so this is
+        // the reader — with the scrollbar, say, which emits no gesture of its own.
+        returning.current = null;
+      } else {
+        returning.current = near ? null : main.scrollTop;
+        // Still on its way. Reporting the position it is passing through would
+        // say the reader had left the bottom, which shows the control mid-flight
+        // and stops the transcript following anything that streams in meanwhile.
+        if (!near) return;
+      }
+    }
+    setStick(near);
+  }, [setStick]);
+
+  /** A scroll the reader started: whatever we were animating towards, they own it now. */
+  function handleScrollGesture() {
+    returning.current = null;
   }
+
+  /**
+   * Two things the scroll handler alone would miss.
+   *
+   * `scrollend` is what finally ends a guarded return, whatever ended it: the
+   * animation arriving, or a reader dragging the scrollbar *towards* the end and
+   * letting go short of it — a drag that emits no gesture and only ever moves the
+   * way the animation was going, so nothing else can tell it apart.
+   *
+   * The observer covers the geometry moving under a scroll position that did not:
+   * a resized window, a composer that grew, tool cards revealed. None of those
+   * scroll, and all of them can put the end out of reach without a word.
+   */
+  useEffect(() => {
+    const main = scrollerElement;
+    if (!main) return;
+    const settle = () => {
+      returning.current = null;
+      evaluatePosition();
+    };
+    main.addEventListener("scrollend", settle);
+    let observer: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        if (stickToBottom.current) {
+          // A reader being followed has not gone anywhere: the end moved. Content
+          // that finishes rendering after it arrived — a diagram, an image — grows
+          // the transcript with no item to trigger the effect that follows it, and
+          // reporting the new distance would file the reader as having walked away
+          // from a page they never touched.
+          beginReturn();
+          bottomRef.current?.scrollIntoView({ behavior: "auto" });
+          return;
+        }
+        evaluatePosition();
+      });
+      observer.observe(main);
+      // The transcript's own box: its height is what tool cards and streamed
+      // content change, and the scroller's own box never moves for either.
+      if (main.firstElementChild) observer.observe(main.firstElementChild);
+    }
+    return () => {
+      main.removeEventListener("scrollend", settle);
+      observer?.disconnect();
+    };
+  }, [scrollerElement, evaluatePosition, beginReturn]);
+
+  /**
+   * Return to the newest message.
+   *
+   * The near-bottom state is restored here rather than left to the scroll events
+   * the animation emits: a smooth scroll that a reduced-motion setting turns into
+   * a jump may never emit a settling event, which would strand the button on
+   * screen and leave streamed content unfollowed.
+   */
+  const scrollToLatest = useCallback(() => {
+    setStick(true);
+    beginReturn();
+    // `smooth` is not softened by a reduced-motion preference the way a CSS
+    // transition is — the browser animates it regardless — so the preference is
+    // read here and the scroll becomes a jump when it is set.
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    bottomRef.current?.scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
+  }, [setStick, beginReturn]);
 
   useEffect(() => {
     if (stickToBottom.current) {
+      // Guarded like the explicit return, and for the same reason: a turn or a
+      // tool card taller than the near-bottom region starts this animation from
+      // outside it, and its own intermediate frames would otherwise read as the
+      // reader walking away — ending the follow midway through a stream.
+      beginReturn();
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
     }
-  }, [state.items]);
+    /**
+     * The transcript changed under a reader who is not at the end.
+     *
+     * `<main>` survives a session switch, so a reader parked at the top of a long
+     * conversation who switches to a short or empty one keeps `scrollTop = 0` —
+     * a position that is now the bottom, with no scroll event to say so. Reading
+     * the geometry back is the only thing that notices, and it is safe here
+     * precisely because the reader is not being followed: nothing moves.
+     */
+    syncStick();
+  }, [state.items, syncStick, beginReturn]);
 
   // Recomputed only when the transcript itself changes, not on every unrelated
   // render of a component this tall.
@@ -429,12 +600,40 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     [readFile, fetchGitFileHistory, searchFiles],
   );
   const showTools = useCallback(() => setHideTools(false), []);
+  /**
+   * Stop following the bottom, because a jump has taken the reader elsewhere.
+   *
+   * Unless it has not. Jumping to something already on screen at the end of the
+   * conversation moves nothing and emits no scroll event, so suppressing the
+   * follow there would strand a reader who is *at* the bottom with a transcript
+   * that no longer follows and no control offered to fix it — the control being
+   * hidden precisely because they are at the bottom.
+   *
+   * The target's own box is what settles it, not the scroll position alone: a
+   * jump from the bottom to something far above does move the reader, and waiting
+   * for its first frame to prove that leaves a window in which a streamed item
+   * pulls them straight back and cancels the navigation they just asked for.
+   */
+  const handleJump = useCallback(
+    (target: Element) => {
+      const main = mainRef.current;
+      if (main) {
+        const view = main.getBoundingClientRect();
+        const box = target.getBoundingClientRect();
+        const onScreen = box.top >= view.top && box.bottom <= view.bottom;
+        const near = main.scrollHeight - main.scrollTop - main.clientHeight < NEAR_BOTTOM_PX;
+        if (onScreen && near) return;
+      }
+      setStick(false);
+    },
+    [setStick],
+  );
   const { jumpToItem, highlightIndex } = useConversationJump({
     items: state.items,
     scrollerRef: mainRef,
     hideTools,
     onShowTools: showTools,
-    stickToBottom,
+    onJump: handleJump,
   });
 
   useEffect(() => {
@@ -696,8 +895,13 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           {/* The drawer overlays the right side; padding keeps the conversation
               beside it rather than behind it, so a jump lands somewhere visible. */}
           <main
-            ref={mainRef}
-            onScroll={handleScroll}
+            ref={attachScroller}
+            onScroll={evaluatePosition}
+            // A gesture beats an animation: whichever of these the reader makes,
+            // the return we were still animating stops being what they asked for.
+            onWheel={handleScrollGesture}
+            onTouchStart={handleScrollGesture}
+            onKeyDown={handleScrollGesture}
             /* During a switch the outgoing conversation fades and holds rather than
                emptying: a blank pane makes a switch read as a page reload, which is
                the one thing this transition exists to avoid. No skeleton — the old
@@ -833,6 +1037,35 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               <div ref={bottomRef} />
             </div>
           </main>
+          {/* Outside <main> on purpose: a child of the scroller travels with the
+              transcript. Absolute against the `relative z-0` wrapper rather than
+              `fixed`, which would resolve against the host page's viewport when
+              this widget is embedded in one, not against the widget.
+
+              `z-0` rather than `z-10`: the drawers that overlay the conversation
+              sit at `z-10` and are rendered above this in the tree, so an equal
+              level would let a control for the transcript paint over the panel
+              covering it — full-width, on a narrow viewport. Still above the
+              transcript, which is not positioned at all.
+
+              The strip carries the same padding <main> takes beside an open
+              drawer, so the button centres on the conversation the reader can
+              see rather than on the region the drawer is sitting in. */}
+          <div
+            className={`pointer-events-none absolute inset-x-0 bottom-4 z-0 flex justify-center ${analysisOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
+          >
+          {!atBottom && (
+            <button
+              type="button"
+              onClick={scrollToLatest}
+              aria-label="Scroll to the latest message"
+              className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-zinc-300 bg-white/95 px-3 py-1.5 text-xs text-zinc-600 shadow-lg backdrop-blur transition-colors hover:bg-zinc-50 motion-reduce:transition-none dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              <span aria-hidden>↓</span>
+              Latest
+            </button>
+          )}
+          </div>
           </div>
 
           <footer className="border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
