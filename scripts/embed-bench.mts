@@ -221,6 +221,30 @@ const diagrams = await startServer(
   { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: fakeConfig } },
 );
 
+// A server whose scripted RPC child runs a tool that reports a rising completion
+// fraction on every prompt — so the tool-card progress bar can be watched by hand.
+const progressRoot = await makeWorkspace({ "readme.md": "# progress\n" });
+const progressConfig = path.join(progressRoot, "fake-rpc.json");
+await writeFile(
+  progressConfig,
+  JSON.stringify({ state: { sessionId: "progress-1" }, progressDemo: { steps: 8, intervalMs: 600, toolName: "crawl" } }),
+);
+const progress = await startServer(
+  progressRoot,
+  {
+    server: { allowedOrigins: [host.url], port: HOST_PORT + 5 },
+    branding: { title: "bench progress" },
+    agentRuntime: {
+      mode: "rpc",
+      executable: process.execPath,
+      args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")],
+      startupTimeoutMs: 20_000,
+    },
+    sandbox: undefined,
+  },
+  { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: progressConfig } },
+);
+
 // The three embed workspace-control policies, each on its own server, because the
 // policy is loaded configuration rather than a mount option: the only way to see
 // what a deployment would show is to run a server configured that way.
@@ -263,6 +287,7 @@ console.log(
     : "  offline: no model (BENCH_LIVE=1 npm run bench to talk to a real one)",
 );
 console.log(`  seeded transcript           ${link(diagrams.base)}   (diagrams + table)`);
+console.log(`  tool progress bar           ${link(progress.base)}   (send any prompt, watch the tool card)`);
 console.log("\n  embed workspace controls — the same widget under each policy\n");
 console.log(`  settings (the default)      ${link(plain.base)}   no header control; the root lives in Settings`);
 console.log(`  root                        ${link(rootMode.base)}   one root, moved from the header`);
@@ -275,6 +300,7 @@ const stop = async () => {
   stopping = true;
   await projectsMode.stop();
   await rootMode.stop();
+  await progress.stop();
   await diagrams.stop();
   await plain.stop();
   await host.close();
