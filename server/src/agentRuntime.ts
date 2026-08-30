@@ -80,7 +80,12 @@ export interface RuntimeSnapshot {
   commands: CommandInfo[];
   contextUsage?: ContextUsage;
   providers: ProviderStatus[];
-  extensionPaths: string[];
+  /**
+   * Extension files this runtime loaded. Absent when the runtime cannot say — an
+   * RPC child builds its own extensions and never reports them — which the
+   * interface must show differently from having loaded none.
+   */
+  extensionPaths?: string[];
   /** Tools registered by the runtime, with their current model visibility. */
   tools?: { name: string; active: boolean }[];
 }

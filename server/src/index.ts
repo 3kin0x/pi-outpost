@@ -61,7 +61,7 @@ import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
 import { runStartupUpdateNotice, runUpdateCommand, updateCheckEnabled, whyCheckingDisabled } from "./update.ts";
-import { allSkillPaths, ConfigWriteError, type EditableSettings, loadConfig, NoConfigError, persistEditableSettings } from "./config.ts";
+import { allExtensionPaths, allSkillPaths, ConfigWriteError, type EditableSettings, loadConfig, NoConfigError, persistEditableSettings } from "./config.ts";
 import { listServerDirectories, ServerDirectoryError } from "./serverDirectories.ts";
 import {
   CredentialError,
@@ -802,7 +802,7 @@ const makeCreateRuntime =
   // extensionPaths), which uses createRequire under the hood — this works
   // inside SEA blobs where native import() can only resolve built-in modules.
   const allExtPaths = [
-    ...config.extensionPaths,
+    ...allExtensionPaths(config),
     ...config.extensionScripts,
   ];
   const services = await createAgentSessionServices({
@@ -1238,12 +1238,18 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     writableRoot: workspace.writableRoot,
     gitAvailable: workspace.git !== null,
     credentials: credentialStatus(workspace),
-    extensionPaths: state.extensionPaths,
+    // Omitted, not emptied, when the runtime cannot report an inventory: "none
+    // loaded" and "this runtime never sees them" are different facts, and only one
+    // of them is ours to state.
+    ...(state.extensionPaths ? { extensionPaths: state.extensionPaths } : {}),
     // What is configured, not what got loaded — built-in skills reach the menu
     // through `commands` instead. The two lists are separate because only one of
     // them is the user's to edit.
     skillPaths: config.skillPaths,
     userSkillPaths: config.userSkillPaths,
+    configuredExtensionPaths: config.extensionPaths,
+    userExtensionPaths: config.userExtensionPaths,
+    ...(config.extensionLock ? { extensionLock: true } : {}),
     tools: state.tools,
     // One line for what answers prompts: the SDK in this process, or the child.
     versions: {
@@ -1727,7 +1733,11 @@ async function handleSetCredential(workspace: Workspace, socket: WebSocket, prov
 async function handleUpdateConfig(
   workspace: Workspace,
   socket: WebSocket,
-  update: { sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string }; userSkillPaths?: string[] },
+  update: {
+    sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
+    userSkillPaths?: string[];
+    userExtensionPaths?: string[];
+  },
 ): Promise<void> {
   if (workspace.replacingSession) {
     send(socket, { type: "error", message: "Session change already in progress" });
@@ -1743,6 +1753,17 @@ async function handleUpdateConfig(
   }
   if (update.sandbox && config.sandbox === undefined) {
     send(socket, { type: "error", message: "No sandbox configured — cannot update" });
+    return;
+  }
+  // Refused here rather than merged away like a locked sandbox field: the interface
+  // draws no control for this, so a request carrying one did not come from the
+  // interface, and silently applying the rest of it would tell that client its
+  // extension change succeeded. Nothing is persisted and no session is replaced.
+  if (update.userExtensionPaths !== undefined && config.extensionLock) {
+    send(socket, {
+      type: "error",
+      message: "Extension paths are locked by this deployment's configuration",
+    });
     return;
   }
 
@@ -1768,10 +1789,12 @@ async function handleUpdateConfig(
         }
       : undefined;
   const mergedSkillPaths = update.userSkillPaths?.map(resolve);
+  const mergedExtensionPaths = update.userExtensionPaths?.map(resolve);
 
   const persisted: EditableSettings = {
     ...(mergedSandbox ? { sandbox: mergedSandbox } : {}),
     ...(mergedSkillPaths ? { userSkillPaths: mergedSkillPaths } : {}),
+    ...(mergedExtensionPaths ? { userExtensionPaths: mergedExtensionPaths } : {}),
   };
   try {
     persistEditableSettings(config, persisted);
@@ -1789,6 +1812,7 @@ async function handleUpdateConfig(
   workspace.replacingSession = true;
   try {
     if (mergedSkillPaths) config.userSkillPaths = mergedSkillPaths;
+    if (mergedExtensionPaths) config.userExtensionPaths = mergedExtensionPaths;
     if (mergedSandbox) {
       config.sandbox = {
         root: mergedSandbox.root,
@@ -1799,13 +1823,14 @@ async function handleUpdateConfig(
       };
     }
     if (config.sandbox) {
-      // Recomputed rather than carried over: skill paths are read-only exceptions to
-      // the sandbox (see loadConfig), so a skill directory added outside the root
-      // would otherwise be a skill the agent is forbidden to read.
+      // Recomputed rather than carried over: skill and extension paths are read-only
+      // exceptions to the sandbox (see loadConfig), so a directory added outside the
+      // root would otherwise hold a skill — or an extension — the agent is forbidden
+      // to read.
       config.sandbox.readExceptions = [
         ...allSkillPaths(config),
         ...config.promptPaths,
-        ...config.extensionPaths,
+        ...allExtensionPaths(config),
         ...config.extensionScripts,
       ];
     }
@@ -3216,13 +3241,24 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
           return;
         }
       }
-      if (message.sandbox === undefined && message.userSkillPaths === undefined) {
+      if (message.userExtensionPaths !== undefined) {
+        if (!Array.isArray(message.userExtensionPaths) || message.userExtensionPaths.some((p) => typeof p !== "string" || p.trim() === "")) {
+          send(socket, { type: "error", message: "Invalid extension paths" });
+          return;
+        }
+      }
+      if (
+        message.sandbox === undefined &&
+        message.userSkillPaths === undefined &&
+        message.userExtensionPaths === undefined
+      ) {
         send(socket, { type: "error", message: "Nothing to update" });
         return;
       }
       handleUpdateConfig(workspace, socket, {
         ...(message.sandbox ? { sandbox: message.sandbox } : {}),
         ...(message.userSkillPaths ? { userSkillPaths: message.userSkillPaths } : {}),
+        ...(message.userExtensionPaths ? { userExtensionPaths: message.userExtensionPaths } : {}),
       }).catch(reportError);
       break;
     }

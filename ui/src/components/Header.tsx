@@ -51,7 +51,10 @@ interface HeaderProps {
   gitAvailable: boolean;
   gitStatus: GitStatusState | null;
   gitLog: GitLogEntry[] | null;
-  extensionPaths: string[];
+  extensionPaths: string[] | null;
+  configuredExtensionPaths: string[];
+  userExtensionPaths: string[];
+  extensionLock: boolean;
   tools?: { name: string; active: boolean }[];
   commands?: { name: string; source: string }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
@@ -71,6 +74,7 @@ interface HeaderProps {
   onUpdateConfig: (update: {
     sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
     userSkillPaths?: string[];
+    userExtensionPaths?: string[];
   }) => void;
   onToggleSidebar: () => void;
   onToggleHideTools: () => void;
@@ -441,6 +445,9 @@ export function Header(props: HeaderProps) {
         />
         <SettingsMenu
           extensionPaths={props.extensionPaths}
+          configuredExtensionPaths={props.configuredExtensionPaths}
+          userExtensionPaths={props.userExtensionPaths}
+          extensionLock={props.extensionLock}
           tools={props.tools ?? []}
           commands={props.commands ?? []}
           sandbox={props.sandbox}

@@ -11,11 +11,35 @@ interface SandboxConfig {
   locks?: { root?: boolean; allowWrite?: boolean; allowBash?: boolean; writableRoot?: boolean };
 }
 
+/**
+ * A copy in a stable order.
+ *
+ * The server sorts what it sends today, but the menu is what the reader looks at:
+ * a list that reorders between two openings because a runtime changed its mind is
+ * a list nobody can scan. Sorting here makes that independent of the wire.
+ */
+function sorted(values: string[]): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
 /** Which path field the directory picker is currently open for. */
-type PickerField = "root" | "writableRoot" | "skill";
+type PickerField = "root" | "writableRoot" | "skill" | "extension";
 
 interface SettingsMenuProps {
-  extensionPaths: string[];
+  /**
+   * Extension files the runtime reported loading, or null when it cannot report an
+   * inventory. Null is not the empty list — see the extensions section below.
+   */
+  extensionPaths: string[] | null;
+  /**
+   * Extension paths from the configuration file. Shown so an operator can see what
+   * is loaded and why, never editable here: they are the deployment's.
+   */
+  configuredExtensionPaths: string[];
+  /** Extension paths added through Settings — the editable list. */
+  userExtensionPaths: string[];
+  /** When true the deployment forbids editing them, and no control is drawn. */
+  extensionLock: boolean;
   tools: { name: string; active: boolean }[];
   commands: { name: string; source: string }[];
   sandbox: SandboxConfig | null;
@@ -37,11 +61,18 @@ interface SettingsMenuProps {
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
   onBrowseServerPath: (path: string) => void;
   onCloseServerBrowser: () => void;
-  onUpdateConfig: (update: { sandbox?: SandboxConfig; userSkillPaths?: string[] }) => void;
+  onUpdateConfig: (update: {
+    sandbox?: SandboxConfig;
+    userSkillPaths?: string[];
+    userExtensionPaths?: string[];
+  }) => void;
 }
 
 export function SettingsMenu({
   extensionPaths,
+  configuredExtensionPaths,
+  userExtensionPaths,
+  extensionLock,
   tools,
   commands,
   sandbox,
@@ -61,6 +92,7 @@ export function SettingsMenu({
   const [sandboxAllowWrite, setSandboxAllowWrite] = useState(false);
   const [sandboxAllowBash, setSandboxAllowBash] = useState(false);
   const [draftSkillPaths, setDraftSkillPaths] = useState<string[]>(userSkillPaths);
+  const [draftExtensionPaths, setDraftExtensionPaths] = useState<string[]>(userExtensionPaths);
   const [picking, setPicking] = useState<PickerField | null>(null);
 
   useEffect(() => {
@@ -82,6 +114,9 @@ export function SettingsMenu({
   const activeTools = tools.filter((tool) => tool.active);
   const inactiveTools = tools.filter((tool) => !tool.active);
   const skills = commands.filter((command) => command.source === "skill");
+  const sortedTools = [...tools].sort(
+    (a, b) => a.name.localeCompare(b.name) || Number(b.active) - Number(a.active),
+  );
   const applying = applyState?.status === "applying";
   const applyError = applyState?.status === "error" ? applyState.message : null;
 
@@ -100,6 +135,11 @@ export function SettingsMenu({
   useEffect(() => {
     setDraftSkillPaths(userSkillPaths);
   }, [userSkillPaths]);
+
+  // And the same for extension paths, for the same reason.
+  useEffect(() => {
+    setDraftExtensionPaths(userExtensionPaths);
+  }, [userExtensionPaths]);
 
   // Close on a *successful* apply only. A refusal keeps the menu up with the
   // server's reason on it — the previous version closed on send, so the one
@@ -127,6 +167,9 @@ export function SettingsMenu({
     if (picking === "root") setSandboxRoot(path);
     else if (picking === "writableRoot") setSandboxWritableRoot(path);
     else if (picking === "skill" && !draftSkillPaths.includes(path)) setDraftSkillPaths([...draftSkillPaths, path]);
+    else if (picking === "extension" && !draftExtensionPaths.includes(path)) {
+      setDraftExtensionPaths([...draftExtensionPaths, path]);
+    }
     setPicking(null);
     onCloseServerBrowser();
   }
@@ -142,12 +185,26 @@ export function SettingsMenu({
           writableRoot: sandboxWritableRoot.trim() || undefined,
         }
       : undefined;
-    onUpdateConfig({ ...(payload ? { sandbox: payload } : {}), userSkillPaths: draftSkillPaths });
+    onUpdateConfig({
+      ...(payload ? { sandbox: payload } : {}),
+      userSkillPaths: draftSkillPaths,
+      // Omitted under a lock rather than sent unchanged: the server refuses any
+      // update that carries them, which would take the skill change down with it.
+      ...(extensionLock ? {} : { userExtensionPaths: draftExtensionPaths }),
+    });
   }
 
   const picker = picking !== null && (
     <ServerPathPicker
-      label={picking === "skill" ? "Choose a skills directory" : picking === "root" ? "Choose the sandbox root" : "Choose the writable root"}
+      label={
+        picking === "skill"
+          ? "Choose a skills directory"
+          : picking === "extension"
+            ? "Choose an extensions directory"
+            : picking === "root"
+              ? "Choose the sandbox root"
+              : "Choose the writable root"
+      }
       browse={serverBrowse}
       onBrowse={onBrowseServerPath}
       onSelect={handlePicked}
@@ -178,18 +235,18 @@ export function SettingsMenu({
           <div className="min-h-0 overflow-y-auto p-4">
             <section className="mb-4">
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Agent resources</h3>
-              {tools.length === 0 ? <p className="text-xs text-zinc-400 dark:text-zinc-500">Tool inventory unavailable for this runtime</p> : <details>
+              {tools.length === 0 ? <p className="text-xs text-zinc-400 dark:text-zinc-500">Tool inventory unavailable for this runtime</p> : <details data-testid="tools-loaded">
                 <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">{activeTools.length} tools active{inactiveTools.length ? ` · ${inactiveTools.length} inactive` : ""}</summary>
                 <ul className="mt-2 space-y-1">
-                  {tools.map((tool) => <li key={tool.name} className="flex justify-between rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"><span>{tool.name}</span><span>{tool.active ? "active" : "inactive"}</span></li>)}
+                  {sortedTools.map((tool) => <li key={tool.name} className="flex justify-between rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"><span>{tool.name}</span><span>{tool.active ? "active" : "inactive"}</span></li>)}
                 </ul>
               </details>}
-              {skills.length === 0 ? <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">No skills loaded</p> : <details className="mt-2">
+              {skills.length === 0 ? <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">No skills loaded</p> : <details className="mt-2" data-testid="skills-loaded">
                 <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">{skills.length} skills loaded</summary>
                 {/* Inventory, not settings: this lists what the session actually has,
                     built-in skills included, and offers no way to remove any of them.
                     What can be added and removed is the path list below. */}
-                <ul className="mt-2 space-y-1">{skills.map((skill) => <li key={skill.name} className="rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{skill.name}</li>)}</ul>
+                <ul className="mt-2 space-y-1">{sorted(skills.map((skill) => skill.name)).map((name) => <li key={name} className="rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{name}</li>)}</ul>
               </details>}
 
               <div className="mt-3">
@@ -200,14 +257,14 @@ export function SettingsMenu({
                     onClick={() => startPicking("skill", draftSkillPaths[draftSkillPaths.length - 1] ?? "/")}
                     className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
                   >
-                    Add directory…
+                    Add skills directory…
                   </button>
                 </div>
                 {draftSkillPaths.length === 0 ? (
                   <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">No skill directories added</p>
                 ) : (
                   <ul className="mt-1 space-y-1">
-                    {draftSkillPaths.map((skillPath) => (
+                    {sorted(draftSkillPaths).map((skillPath) => (
                       <li
                         key={skillPath}
                         className="flex items-center justify-between gap-2 rounded bg-zinc-50 px-2 py-1 dark:bg-zinc-800"
@@ -235,16 +292,106 @@ export function SettingsMenu({
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 Extensions
               </h3>
-              {extensionPaths.length === 0 ? (
+              {/* Three states, not two. `null` is a runtime that cannot report an
+                  inventory — an RPC child loads its own — and saying "none" there
+                  states a fact this server was never given. */}
+              {extensionPaths === null ? (
+                <p className="text-xs text-zinc-400 dark:text-zinc-500" data-testid="extensions-unknown">
+                  Not reported by this runtime
+                </p>
+              ) : extensionPaths.length === 0 ? (
                 <p className="text-xs text-zinc-400 dark:text-zinc-500">No extensions loaded</p>
               ) : (
-                <ul className="space-y-1">
-                  {extensionPaths.map((p, i) => (
-                    <li key={i} className="rounded bg-zinc-50 px-2 py-1 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" title={p}>
-                      {p}
-                    </li>
-                  ))}
-                </ul>
+                <details data-testid="extensions-loaded">
+                  <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">
+                    {extensionPaths.length} {extensionPaths.length === 1 ? "extension" : "extensions"} loaded
+                  </summary>
+                  {/* Inventory, not settings: what the session actually loaded, the
+                      deployment's and the user's together. What can be added and
+                      removed is the path list below. */}
+                  <ul className="mt-2 space-y-1">
+                    {sorted(extensionPaths).map((p) => (
+                      <li key={p} className="truncate rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" title={p}>
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+
+              {configuredExtensionPaths.length > 0 && (
+                <details className="mt-2" data-testid="extensions-configured">
+                  <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">
+                    {configuredExtensionPaths.length} configured by this deployment
+                  </summary>
+                  <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                    Declared in the configuration file. They load either way, and nothing here can remove them.
+                  </p>
+                  <ul className="mt-1 space-y-1">
+                    {sorted(configuredExtensionPaths).map((p) => (
+                      <li key={p} className="truncate rounded bg-zinc-50 px-2 py-1 font-mono text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" title={p}>
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+
+              {extensionLock ? (
+                <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500" data-testid="extensions-locked">
+                  Extension paths are locked by this deployment.
+                </p>
+              ) : (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-600 dark:text-zinc-400">User extension paths</span>
+                    <button
+                      type="button"
+                      onClick={() => startPicking("extension", draftExtensionPaths[draftExtensionPaths.length - 1] ?? "/")}
+                      className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
+                    >
+                      Add extensions directory…
+                    </button>
+                  </div>
+                  {/* Said at the moment of adding, not as a caption above the list: a
+                      permanent caption is read once and then never again, and this is
+                      about an act. Both facts are non-obvious and both are true. */}
+                  {picking === "extension" && (
+                    <p
+                      className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
+                      data-testid="extension-warning"
+                      role="note"
+                    >
+                      Extensions are code, and they run with the agent's privileges. Every extension in
+                      the directory you choose is loaded.
+                    </p>
+                  )}
+                  {draftExtensionPaths.length === 0 ? (
+                    <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">No extension directories added</p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {sorted(draftExtensionPaths).map((extensionPath) => (
+                        <li
+                          key={extensionPath}
+                          className="flex items-center justify-between gap-2 rounded bg-zinc-50 px-2 py-1 dark:bg-zinc-800"
+                        >
+                          <span className="truncate font-mono text-xs text-zinc-600 dark:text-zinc-400" title={extensionPath}>
+                            {extensionPath}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${extensionPath}`}
+                            onClick={() => setDraftExtensionPaths(draftExtensionPaths.filter((entry) => entry !== extensionPath))}
+                            className="shrink-0 text-xs text-zinc-500 hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400"
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {picking === "extension" && <div className="mt-2">{picker}</div>}
+                </div>
               )}
             </section>
 

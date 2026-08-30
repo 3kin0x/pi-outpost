@@ -21,6 +21,9 @@ function setup(overrides: Partial<Props> = {}) {
   const onCloseServerBrowser = vi.fn();
   const props: Props = {
     extensionPaths: [],
+    configuredExtensionPaths: [],
+    userExtensionPaths: [],
+    extensionLock: false,
     tools: [],
     commands: [],
     sandbox: sandbox(),
@@ -96,7 +99,7 @@ describe("SettingsMenu", () => {
       expect(screen.getByText("No sandbox configured")).toBeInTheDocument();
       // A deployment with no sandbox still has skill paths worth changing.
       fireEvent.click(applyButton());
-      expect(onUpdateConfig).toHaveBeenCalledWith({ userSkillPaths: ["/mnt/skills"] });
+      expect(onUpdateConfig).toHaveBeenCalledWith({ userSkillPaths: ["/mnt/skills"], userExtensionPaths: [] });
     });
 
     it("starts from the current configuration", () => {
@@ -125,6 +128,7 @@ describe("SettingsMenu", () => {
       expect(onUpdateConfig).toHaveBeenCalledWith({
         sandbox: { root: "/new-root", allowWrite: true, allowBash: true, writableRoot: undefined },
         userSkillPaths: [],
+        userExtensionPaths: [],
       });
     });
 
@@ -226,7 +230,7 @@ describe("SettingsMenu", () => {
     it("adds a directory chosen from the server and reports it on apply", () => {
       const { onUpdateConfig, onBrowseServerPath, rerenderWith } = setup();
       openMenu();
-      fireEvent.click(screen.getByRole("button", { name: "Add directory…" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add skills directory…" }));
       expect(onBrowseServerPath).toHaveBeenCalledWith("/");
 
       rerenderWith({ serverBrowse: browse({ entries: [{ name: "mnt", path: "/mnt" }] }) });
@@ -257,11 +261,126 @@ describe("SettingsMenu", () => {
     it("does not add the same directory twice", () => {
       const { onUpdateConfig, rerenderWith } = setup({ userSkillPaths: ["/mnt/skills"] });
       openMenu();
-      fireEvent.click(screen.getByRole("button", { name: "Add directory…" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add skills directory…" }));
       rerenderWith({ serverBrowse: browse({ path: "/mnt/skills", parent: "/mnt" }) });
       fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
       fireEvent.click(applyButton());
       expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ userSkillPaths: ["/mnt/skills"] }));
+    });
+  });
+
+  describe("extension paths", () => {
+    it("adds a directory chosen from the server and reports it on apply", () => {
+      const { onUpdateConfig, onBrowseServerPath, rerenderWith } = setup();
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Add extensions directory…" }));
+      expect(onBrowseServerPath).toHaveBeenCalledWith("/");
+
+      rerenderWith({ serverBrowse: browse({ path: "/mnt/ext", parent: "/mnt", entries: [] }) });
+      fireEvent.click(screen.getByRole("button", { name: "Use this directory" }));
+
+      expect(screen.getByText("/mnt/ext")).toBeInTheDocument();
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ userExtensionPaths: ["/mnt/ext"] }));
+    });
+
+    it("removes one, and reports the rest", () => {
+      const { onUpdateConfig } = setup({ userExtensionPaths: ["/mnt/a", "/mnt/b"] });
+      openMenu();
+      fireEvent.click(screen.getByRole("button", { name: "Remove /mnt/a" }));
+      expect(screen.queryByText("/mnt/a")).not.toBeInTheDocument();
+      fireEvent.click(applyButton());
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ userExtensionPaths: ["/mnt/b"] }));
+    });
+
+    it("says what adding one means, at the moment of adding and not before", () => {
+      setup();
+      openMenu();
+      expect(screen.queryByTestId("extension-warning")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Add extensions directory…" }));
+      const warning = screen.getByTestId("extension-warning");
+      // Both facts, because both are non-obvious: what an extension is allowed to do,
+      // and that choosing a directory is choosing everything inside it.
+      expect(warning).toHaveTextContent(/run with the agent's privileges/i);
+      expect(warning).toHaveTextContent(/every extension in the directory/i);
+    });
+
+    it("offers nothing to change when the deployment locks them", () => {
+      setup({ extensionLock: true, extensionPaths: ["/opt/ext/a.ts"], userExtensionPaths: ["/mnt/a"] });
+      openMenu();
+      expect(screen.getByTestId("extensions-locked")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add extensions directory…" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remove /mnt/a" })).not.toBeInTheDocument();
+      // Still says what is loaded: the lock is about changing them, not about hiding them.
+      expect(screen.getByText("1 extension loaded")).toBeInTheDocument();
+    });
+
+    it("leaves a locked list out of the payload rather than sending it unchanged", () => {
+      const { onUpdateConfig } = setup({ extensionLock: true, userExtensionPaths: ["/mnt/a"] });
+      openMenu();
+      fireEvent.click(applyButton());
+      // The server refuses any update carrying extension paths under a lock, which
+      // would take the rest of the apply down with it.
+      expect(onUpdateConfig).toHaveBeenCalledWith(expect.not.objectContaining({ userExtensionPaths: expect.anything() }));
+    });
+
+    it("tells an unreported inventory apart from an empty one", () => {
+      const { rerenderWith } = setup({ extensionPaths: null });
+      openMenu();
+      expect(screen.getByTestId("extensions-unknown")).toHaveTextContent("Not reported by this runtime");
+      expect(screen.queryByText("No extensions loaded")).not.toBeInTheDocument();
+
+      rerenderWith({ extensionPaths: [] });
+      expect(screen.getByText("No extensions loaded")).toBeInTheDocument();
+      expect(screen.queryByTestId("extensions-unknown")).not.toBeInTheDocument();
+    });
+
+    it("opens every inventory from a counted summary and sorts every list", () => {
+      setup({
+        tools: [
+          { name: "write", active: true },
+          { name: "bash", active: false },
+          { name: "read", active: true },
+        ],
+        commands: [
+          { name: "z-last", source: "skill" },
+          { name: "a-first", source: "skill" },
+        ],
+        extensionPaths: ["/opt/ext/c.ts", "/opt/ext/a.ts", "/opt/ext/b.ts"],
+      });
+      openMenu();
+
+      const tools = screen.getByTestId("tools-loaded");
+      const skills = screen.getByTestId("skills-loaded");
+      const extensions = screen.getByTestId("extensions-loaded");
+      for (const inventory of [tools, skills, extensions]) expect(inventory).not.toHaveAttribute("open");
+
+      expect(screen.getByText("2 tools active · 1 inactive")).toBeInTheDocument();
+      expect(screen.getByText("2 skills loaded")).toBeInTheDocument();
+      expect(screen.getByText("3 extensions loaded")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("2 tools active · 1 inactive"));
+      fireEvent.click(screen.getByText("2 skills loaded"));
+      fireEvent.click(screen.getByText("3 extensions loaded"));
+
+      expect(Array.from(tools.querySelectorAll("li span:first-child")).map((span) => span.textContent)).toEqual([
+        "bash",
+        "read",
+        "write",
+      ]);
+      expect(Array.from(skills.querySelectorAll("li")).map((li) => li.textContent)).toEqual(["a-first", "z-last"]);
+      expect(Array.from(extensions.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
+        "/opt/ext/a.ts",
+        "/opt/ext/b.ts",
+        "/opt/ext/c.ts",
+      ]);
+    });
+
+    it("shows the deployment's own paths, and offers no way to remove them", () => {
+      setup({ configuredExtensionPaths: ["/opt/deployment"] });
+      openMenu();
+      expect(screen.getByText("1 configured by this deployment")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remove /opt/deployment" })).not.toBeInTheDocument();
     });
   });
 
