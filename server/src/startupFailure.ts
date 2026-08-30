@@ -136,6 +136,27 @@ export interface Holdable {
 }
 
 /**
+ * Hold the console open if this process owns it, then return so the caller can exit.
+ *
+ * The bind failure was not the only way a launch with no terminal behind it can
+ * die before the server is listening: a missing configuration file, a mistyped
+ * flag, an unreadable setting. Each one is a `process.exit` on a console that
+ * closes with the process, and the sentence goes with it. This is the same hold
+ * the bind path already does, factored out so every pre-listen exit can share it.
+ *
+ * Where the console belongs to a shell, a script or a CI runner, `ownsItsConsole`
+ * says no and this returns at once — nothing waits that should not.
+ */
+export async function holdConsoleIfOwned(
+  opts: { probe?: ParentProbe; stdin?: Holdable } & Omit<ConsoleOwnership, "parent"> = {},
+): Promise<void> {
+  const { probe = parentImageName, stdin = process.stdin, ...ownership } = opts;
+  if (!ownsItsConsole({ ...ownership, parent: probe() })) return;
+  console.error("[pi] press any key to close this window");
+  await waitForAKey(stdin);
+}
+
+/**
  * Hold the window until the operator dismisses it.
  *
  * A key, not a timeout: the window is the only copy of the message there is, and

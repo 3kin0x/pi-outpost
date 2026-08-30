@@ -58,7 +58,7 @@ import { readInstalledPiSdkVersion } from "./piSdkVersion.ts";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
-import { bindFailureMessage, ownsItsConsole, parentImageName, waitForAKey } from "./startupFailure.ts";
+import { bindFailureMessage, holdConsoleIfOwned } from "./startupFailure.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
 import { runStartupUpdateNotice, runUpdateCommand, updateCheckEnabled, whyCheckingDisabled } from "./update.ts";
@@ -151,11 +151,13 @@ function complain(error: unknown): void {
   console.error(message.startsWith("[") ? message : `[pi] ${message}`);
 }
 
-const cli = (() => {
+const cli = await (async () => {
   try {
     return parseCli(process.argv.slice(2));
   } catch (error) {
     complain(error);
+    // A shortcut with a mistyped flag is still a double-click: hold the window.
+    await holdConsoleIfOwned();
     process.exit(2);
   }
 })();
@@ -238,7 +240,7 @@ if (cli.command === "update") {
   );
 }
 
-const config = (() => {
+const config = await (async () => {
   try {
     return loadConfig(LAUNCH_DIR, cli.flags);
   } catch (error) {
@@ -253,9 +255,13 @@ const config = (() => {
           "      Or point at one:  pi-outpost --config <path>",
         ].join("\n"),
       );
+      // The likeliest failure of a first double-click, and the one whose window
+      // vanished before this: hold it so the instructions above can be read.
+      await holdConsoleIfOwned();
       process.exit(1);
     }
     complain(error);
+    await holdConsoleIfOwned();
     process.exit(1);
   }
 })();
@@ -738,16 +744,14 @@ if (EMBEDDED_WEB && Object.keys(EMBEDDED_WEB).length > 0) {
  * threw into an unhandled rejection, and the operator got a stack trace. Held open
  * afterwards where the console belongs to this process — a double-clicked executable
  * has no terminal behind it, so exiting would close the window and take the only
- * copy of the message with it.
+ * copy of the message with it. `holdConsoleIfOwned()` is the same hold the config
+ * and flag failures above now do, for the same reason.
  */
 try {
   await app.listen({ port: PORT, host: HOST });
 } catch (error) {
   complain(bindFailureMessage(error, HOST, PORT));
-  if (ownsItsConsole({ parent: parentImageName() })) {
-    console.error("[pi] press any key to close this window");
-    await waitForAKey();
-  }
+  await holdConsoleIfOwned();
   process.exit(1);
 }
 

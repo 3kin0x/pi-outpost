@@ -14,10 +14,32 @@
 
 ## 4. Proving it where it was found
 
-- [ ] 4.1 On Windows, double-click the standalone executable while another instance holds the port, and confirm the window stays open with the message in it until dismissed; record what appears verbatim.
-- [ ] 4.2 On the same machine, run the same failing start from PowerShell and confirm it exits immediately with the same line and no prompt to dismiss.
+- [x] 4.1 On Windows, double-click the standalone executable while another instance holds the port, and confirm the window stays open with the message in it until dismissed; record what appears verbatim. Done on Windows 11 against a fresh SEA. Launched through a shortcut (a double-click, parent `explorer.exe` confirmed via `ParentProcessId`) with port 3141 already bound. The window stayed open — process alive 9–20+ s, no timeout — showing verbatim:
+  ```
+  [config] loaded C:\Users\lfran\pi-outpost\server\dist\pi-outpost.config.json
+  [config] agent runtime embedded
+  [config] no sandbox: full toolset in C:\Users\lfran\pi-outpost\server\dist
+  [server] serving web UI from embedded bundle (190 assets)
+  [pi] cannot start: 127.0.0.1:3141 is already in use — something is listening there already; "--port <n>" starts this one somewhere else
+  [pi] press any key to close this window
+  ```
+  A space keypress ended it and the process exited. One `[pi] cannot start:` line, no stack trace.
+- [x] 4.2 On the same machine, run the same failing start from PowerShell and confirm it exits immediately with the same line and no prompt to dismiss. Done. Parent = `pwsh.exe`; exit code 1; stderr was exactly `[pi] cannot start: 127.0.0.1:3141 is already in use — something is listening there already; "--port <n>" starts this one somewhere else` — no "press any key", no stack, no `unhandled`. It returned as soon as the bind failed (the ~2.6 s was startup work, not a wait).
 
-## 5. Scenario coverage and validation
+## 5. The rest of the pre-listen failures
 
-- [x] 5.1 Enumerate every `#### Scenario:` in the delta, write the scenario-to-test matrix with assertion-level evidence, and leave none partial or uncovered; name explicitly which scenarios only tasks 4.1/4.2 can establish — `scenario-coverage.md`: 4/5 covered, `TheMessageOutlivesTheWindow` partial by construction, since only a Windows machine can prove a double-clicked process has `explorer.exe` above it.
-- [x] 5.2 Run the focused tests, then the server suite, typecheck, lint, and `openspec validate say-why-the-server-could-not-start --strict` — 18 focused tests passed; server suite 1,642 passed with nothing skipped; typecheck and lint clean; strict validation passed.
+The Windows check turned up the gap this section closes. The hold wrapped only the
+`await app.listen()` rejection. Every earlier exit — no configuration file, a flag that
+will not parse, an unreadable setting — went straight to `process.exit(1)`, so a
+double-clicked launch that failed for the commonest first-run reason (no config yet)
+still flashed its message and vanished. Verified on Windows before the fix: the no-config
+window closed on its own in ~2 s.
+
+- [x] 5.1 Factor the hold into `holdConsoleIfOwned()` in `startupFailure.ts` and call it before the `NoConfigError`, the `complain()`-then-exit, and the `parseCli` failure exits, as well as the existing bind catch; the decision stays injectable so a test can drive both directions off Windows. `server/src/startupFailure.ts`, `server/src/index.ts` (the config and `parseCli` IIFEs become `await`ed).
+- [x] 5.2 Unit tests for `holdConsoleIfOwned`: a file-manager parent on Windows prints the prompt and drives `waitForAKey` (raw on, wait, raw off, pause, in order); a shell parent, a CI runner, a non-Windows platform, and a probe that could not answer each touch nothing. Integration test in `startup-failure.test.mjs`: a real `index.ts` started with a launch dir that has no config and an empty `XDG_CONFIG_HOME` exits non-zero with the "no configuration file found" line, no stack, and — run from a test runner, not a file manager — no "press any key" and no hang.
+- [x] 5.3 On Windows 11, a fresh SEA double-clicked (shortcut, parent `explorer.exe`) with no discoverable config now holds the window until a keypress, showing the "no configuration file found" block followed by `[pi] press any key to close this window`. The same start from PowerShell still exits at once with no prompt.
+
+## 6. Scenario coverage and validation
+
+- [x] 6.1 Enumerate every `#### Scenario:` in the delta, write the scenario-to-test matrix with assertion-level evidence, and leave none partial or uncovered — `scenario-coverage.md`. `TheMessageOutlivesTheWindow` and the new `AFailureBeforeListeningIsHeldToo` are now established on a real Windows machine (task 4.1 / 5.3), not left partial.
+- [x] 6.2 Run the focused tests, then the server suite, typecheck, lint, and `openspec validate say-why-the-server-could-not-start --strict` — see `scenario-coverage.md` for the run.

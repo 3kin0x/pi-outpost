@@ -13,8 +13,9 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import net from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
@@ -88,6 +89,50 @@ describe("a port that is already taken", () => {
     } finally {
       await held.release();
     }
+  });
+});
+
+// openlore: {"domain":"cli","requirement":"AFailureToStartIsSaidOutLoud","scenario":"NobodyElseIsMadeToWait","specFile":"openspec/changes/say-why-the-server-could-not-start/specs/cli/spec.md"}
+describe("a start that fails before it ever reaches listen", () => {
+  test("no configuration file: one readable line, no stack, and nothing to dismiss from a shell", async () => {
+    // A launch directory with no pi-outpost.config.json, and an XDG dir with no
+    // fallback config either — so the only outcome is NoConfigError, which used to
+    // exit straight away and, on a double-click, take its window with it.
+    const emptyLaunchDir = await mkdtemp(path.join(tmpdir(), "pi-outpost-noconfig-"));
+    const emptyXdg = await mkdtemp(path.join(tmpdir(), "pi-outpost-xdg-"));
+    // cwd stays SERVER_DIR so `tsx` resolves; LAUNCH_DIR is INIT_CWD, and that is
+    // the directory findConfigFile() actually searches.
+    const env = { ...process.env, INIT_CWD: emptyLaunchDir, XDG_CONFIG_HOME: emptyXdg, PI_OFFLINE: "1" };
+    delete env.PI_OUTPOST_CONFIG;
+    delete env.PI_OUTPOST_PROFILE;
+    delete env.NODE_V8_COVERAGE;
+
+    const child = spawn(process.execPath, ["--import=tsx/esm", ENTRY], {
+      cwd: SERVER_DIR,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    // A hang here is the failure: run from a test runner, the parent is not a file
+    // manager, so holdConsoleIfOwned() must fall straight through and let it exit.
+    const code = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`did not exit; stderr so far:\n${stderr}`)), 20_000);
+      child.once("exit", (c) => {
+        clearTimeout(timer);
+        resolve(c);
+      });
+    });
+
+    assert.notEqual(code, 0, "a server with no configuration must not report success");
+    assert.match(stderr, /no configuration file found/, "the reason is named");
+    assert.match(stderr, /pi-outpost init|--config/, "the way forward is named");
+    assert.doesNotMatch(stderr, /^\s+at /m, "no stack frames");
+    assert.doesNotMatch(stderr, /unhandled|UnhandledPromiseRejection/i);
+    assert.doesNotMatch(stderr, /press any key/, "a shell is not made to wait");
+    assert.equal(stdout.includes("[server]"), false, "it never got as far as serving");
   });
 });
 
