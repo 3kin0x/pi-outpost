@@ -292,14 +292,16 @@ describe("build-exe and the browser flags", () => {
 
 describe("--open-in", () => {
   test("names the shape the interface opens in", () => {
-    assert.equal(parseCli(["--open-in", "browser"]).openIn, "browser");
-    assert.equal(parseCli(["--open-in", "window"]).openIn, "window");
+    // In `flags`, because that is the bag loadConfig() reads to override the file;
+    // a copy anywhere else on the result would be parsed and then ignored.
+    assert.equal(parseCli(["--open-in", "browser"]).flags.openIn, "browser");
+    assert.equal(parseCli(["--open-in", "window"]).flags.openIn, "window");
   });
 
   test("left out, configuration still decides", () => {
     // Undefined rather than a default here: a flag that always had a value would
     // silently override whatever the file said.
-    assert.equal(parseCli([]).openIn, undefined);
+    assert.equal(parseCli([]).flags.openIn, undefined);
   });
 
   test("an unknown shape is refused, naming the flag and what it accepts", () => {
@@ -309,8 +311,8 @@ describe("--open-in", () => {
   test("it says nothing about whether a browser opens at all", () => {
     // Two questions, two flags. Asking for a shape must not be read as asking to
     // open, or `--no-open --open-in window` would contradict itself.
-    const flags = parseCli(["--no-open", "--open-in", "window"]);
-    assert.equal(flags.open, false);
-    assert.equal(flags.openIn, "window");
+    const parsed = parseCli(["--no-open", "--open-in", "window"]);
+    assert.equal(parsed.open, false);
+    assert.equal(parsed.flags.openIn, "window");
   });
 });

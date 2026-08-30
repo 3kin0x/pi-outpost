@@ -17,6 +17,7 @@ import {
   loadConfig,
 } from "../src/config.ts";
 import type { AppConfig, CliOptions } from "../src/config.ts";
+import { parseCli } from "../src/cli.ts";
 import { STRUCTURED_EXCHANGE_BYTES_CEILING } from "@pi-outpost/shared/structured-exchange/bounds";
 
 // ---------------------------------------------------------------------------
@@ -932,6 +933,19 @@ describe("loadConfig — the shape the interface opens in", () => {
       const configPath = path.join(dir, "config.json");
       await writeFile(configPath, JSON.stringify({ openIn: "window" }, null, 2));
       assert.equal(loadConfig(dir, { config: configPath, openIn: "browser" }).openIn, "browser");
+    });
+  });
+
+  // openlore: scenario=TheOperatorCanAskForATab spec=cli
+  test("--open-in on the real command line reaches config, not just a hand-built flags object", async () => {
+    // The seam the other tests skip: they pass `{ openIn }` straight to loadConfig,
+    // so they pass even when parseCli drops the flag on the floor. Drive the actual
+    // argv → parseCli → loadConfig path the server uses at startup.
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({ openIn: "window" }, null, 2));
+      const { flags } = parseCli(["--config", configPath, "--open-in", "browser"]);
+      assert.equal(loadConfig(dir, flags).openIn, "browser");
     });
   });
 });
