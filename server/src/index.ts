@@ -58,6 +58,7 @@ import { readInstalledPiSdkVersion } from "./piSdkVersion.ts";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
+import { bindFailureMessage, ownsItsConsole, parentImageName, waitForAKey } from "./startupFailure.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
 import { runStartupUpdateNotice, runUpdateCommand, updateCheckEnabled, whyCheckingDisabled } from "./update.ts";
@@ -730,7 +731,25 @@ if (EMBEDDED_WEB && Object.keys(EMBEDDED_WEB).length > 0) {
   console.log(`[server] serving web UI from ${WEB_DIST}`);
 }
 
-await app.listen({ port: PORT, host: HOST });
+/**
+ * The one startup step that used to fail without a sentence.
+ *
+ * Everything else in this file reports through `complain()` and an exit code; this
+ * threw into an unhandled rejection, and the operator got a stack trace. Held open
+ * afterwards where the console belongs to this process — a double-clicked executable
+ * has no terminal behind it, so exiting would close the window and take the only
+ * copy of the message with it.
+ */
+try {
+  await app.listen({ port: PORT, host: HOST });
+} catch (error) {
+  complain(bindFailureMessage(error, HOST, PORT));
+  if (ownsItsConsole({ parent: parentImageName() })) {
+    console.error("[pi] press any key to close this window");
+    await waitForAKey();
+  }
+  process.exit(1);
+}
 
 /**
  * Land the operator in the interface they just started.
