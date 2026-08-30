@@ -199,6 +199,8 @@ export interface AgentState {
   model: string;
   thinkingLevel: string;
   modelSupportsReasoning: boolean;
+  /** The levels the current model accepts; undefined means offer the full set. */
+  thinkingLevels?: ThinkingLevel[];
   models: ModelChoice[];
   commands: CommandInfo[];
   sessions: SessionSummary[] | null;
@@ -441,6 +443,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     sessionId: message.sessionId,
     model: message.model,
     thinkingLevel: message.thinkingLevel,
+    thinkingLevels: message.thinkingLevels,
     modelSupportsReasoning: current?.reasoning ?? false,
     models: message.models,
     commands: message.commands,
@@ -647,7 +650,13 @@ function reduce(state: AgentState, action: Action): AgentState {
         editorPrefill: { text: message.text, nonce: state.editorPrefill ? state.editorPrefill.nonce + 1 : 1 },
       };
     case "model_changed":
-      return { ...state, model: message.model, modelSupportsReasoning: message.reasoning };
+      return {
+        ...state,
+        model: message.model,
+        modelSupportsReasoning: message.reasoning,
+        // Replace outright — a message with no set means "offer the full set".
+        thinkingLevels: message.thinkingLevels,
+      };
     case "credentials_changed": {
       // Onboarding landed: new models, new status, same session — so nothing else here
       // is touched (a snapshot would wipe live extension dialogs and widgets).
@@ -657,6 +666,10 @@ function reduce(state: AgentState, action: Action): AgentState {
         models: message.models,
         model: message.model,
         modelSupportsReasoning: current?.reasoning ?? false,
+        // The model may have changed here; the old model's accepted set no longer
+        // applies. Fall back to the full set until a snapshot or model_changed says
+        // otherwise — this message does not carry the new one.
+        thinkingLevels: undefined,
         credentials: message.credentials,
         // errors stay: the "credentials stored, but allowedModels leaves no model"
         // case sends an error *and* this message — clearing them would eat it

@@ -16,6 +16,7 @@ import type {
   ModelChoice,
   ThinkingLevel,
 } from "@pi-outpost/shared";
+import { normalizeThinkingLevels } from "@pi-outpost/shared";
 import type {
   AgentRuntime,
   CredentialCapability,
@@ -91,6 +92,15 @@ class EmbeddedRuntime implements AgentRuntime {
   snapshot(): RuntimeSnapshot {
     const session = this.session;
     const model = session.model as { provider?: string; id?: string; name?: string; reasoning?: boolean } | undefined;
+    // The SDK knows which levels this model honours; a missing method (older SDK)
+    // or a throw degrades to "cannot say", and the client offers the full set.
+    let acceptedLevels: unknown;
+    try {
+      acceptedLevels = (session as { getAvailableThinkingLevels?: () => unknown }).getAvailableThinkingLevels?.();
+    } catch {
+      acceptedLevels = undefined;
+    }
+    const thinkingLevels = normalizeThinkingLevels(acceptedLevels);
     return {
       sessionId: session.sessionId,
       sessionFile: session.sessionManager.getSessionFile(),
@@ -98,6 +108,7 @@ class EmbeddedRuntime implements AgentRuntime {
         ? { model: { provider: model.provider, id: model.id, name: model.name, reasoning: model.reasoning } }
         : {}),
       thinkingLevel: session.thinkingLevel as ThinkingLevel,
+      ...(thinkingLevels ? { thinkingLevels } : {}),
       isStreaming: session.isStreaming,
       messages: session.messages as unknown[],
       models: this.models(),

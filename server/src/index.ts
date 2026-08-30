@@ -1244,6 +1244,7 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     sessionId: state.sessionId,
     model: modelName(workspace),
     thinkingLevel: state.thinkingLevel,
+    ...(state.thinkingLevels ? { thinkingLevels: state.thinkingLevels } : {}),
     isStreaming: state.isStreaming,
     items: historyToItems(
       state.messages as never,
@@ -3040,7 +3041,15 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       const { provider, id } = message;
       workspace.agent
         .setModel(provider, id)
-        .then((model) => broadcast(workspace, { type: "model_changed", model: modelName(workspace), reasoning: model.reasoning ?? false }))
+        .then((model) => {
+          const levels = workspace.agent.snapshot().thinkingLevels;
+          broadcast(workspace, {
+            type: "model_changed",
+            model: modelName(workspace),
+            reasoning: model.reasoning ?? false,
+            ...(levels ? { thinkingLevels: levels } : {}),
+          });
+        })
         .catch((error) => {
           if (!refuseUnsupported(socket, error)) {
             send(socket, { type: "error", message: error instanceof Error ? error.message : String(error) });

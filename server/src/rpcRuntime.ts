@@ -22,6 +22,7 @@ import type {
   ModelChoice,
   ThinkingLevel,
 } from "@pi-outpost/shared";
+import { normalizeThinkingLevels } from "@pi-outpost/shared";
 import type {
   AgentRuntime,
   PromptOptions,
@@ -82,6 +83,8 @@ class RpcRuntime implements AgentRuntime {
   private sessionFile: string | undefined;
   private model: RpcModel | undefined;
   private thinkingLevel: ThinkingLevel = "off";
+  /** The levels the current model accepts; undefined when the child has no command for it. */
+  private acceptedThinkingLevels: ThinkingLevel[] | undefined;
   private streaming = false;
   private messages: unknown[] = [];
   private sessionEntries: RuntimeEntry[] = [];
@@ -201,6 +204,23 @@ class RpcRuntime implements AgentRuntime {
         } satisfies CommandInfo,
       ];
     });
+    await this.refreshThinkingLevels();
+  }
+
+  /**
+   * Which thinking levels the current model accepts. Optional: a dialect without
+   * `get_available_thinking_levels` (OMP) leaves it undefined, and the client
+   * offers the full set. Depends on the model, so it is refreshed on every
+   * catalog refresh and after a `set_model`.
+   */
+  private async refreshThinkingLevels(): Promise<void> {
+    try {
+      const answer = (await this.process.command("get_available_thinking_levels")) as { levels?: unknown } | undefined;
+      this.acceptedThinkingLevels = normalizeThinkingLevels(answer?.levels);
+    } catch (error) {
+      if (!isUnknownCommand(error, "get_available_thinking_levels")) throw error;
+      this.acceptedThinkingLevels = undefined;
+    }
   }
 
   /** History, entries, tree and context usage — everything a finished turn can change. */
@@ -526,6 +546,7 @@ class RpcRuntime implements AgentRuntime {
       ...(this.sessionFile ? { sessionFile: this.sessionFile } : {}),
       ...(this.model ? { model: this.model } : {}),
       thinkingLevel: this.thinkingLevel,
+      ...(this.acceptedThinkingLevels ? { thinkingLevels: this.acceptedThinkingLevels } : {}),
       isStreaming: this.streaming,
       messages: this.messages,
       models: this.availableModels,
@@ -618,6 +639,8 @@ class RpcRuntime implements AgentRuntime {
     const data = await this.command("set_model", { provider, modelId: id });
     const model = toModel(data) ?? { provider, id };
     this.model = model;
+    // A different model accepts a different set of thinking levels.
+    await this.refreshThinkingLevels();
     return model;
   }
 
