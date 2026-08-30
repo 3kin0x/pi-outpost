@@ -11,7 +11,7 @@ const items: ChatItem[] = [
 ];
 
 /** Stands in for the conversation: same anchors, same hideTools filter. */
-function Conversation({ startHidden = false }: { startHidden?: boolean }) {
+function Conversation({ startHidden = false, onStick }: { startHidden?: boolean; onStick?: (next: boolean) => void }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [hideTools, setHideTools] = useState(startHidden);
@@ -20,7 +20,10 @@ function Conversation({ startHidden = false }: { startHidden?: boolean }) {
     scrollerRef,
     hideTools,
     onShowTools: () => setHideTools(false),
-    stickToBottom,
+    onJump: () => {
+      stickToBottom.current = false;
+      onStick?.(false);
+    },
   });
 
   return (
@@ -96,6 +99,19 @@ describe("useConversationJump", () => {
       screen.getByText("jump to turn").click();
     });
     expect(screen.getByTestId("stick").textContent).toBe("false");
+  });
+
+  it("reports the jump to its owner rather than writing the fact itself", () => {
+    // The conversation keeps a second, render-visible copy of this fact and knows
+    // the scroller's geometry. A hook that wrote the ref directly could reach only
+    // one of the two, and could not tell a jump that moved the reader from one
+    // that changed nothing.
+    const onStick = vi.fn();
+    render(<Conversation onStick={onStick} />);
+    act(() => {
+      screen.getByText("jump to turn").click();
+    });
+    expect(onStick).toHaveBeenCalledWith(false);
   });
 
   it("does nothing for an index outside the conversation", () => {

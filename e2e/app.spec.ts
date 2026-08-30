@@ -64,3 +64,124 @@ test("reports no console error while loading", async ({ page }) => {
 
   expect(errors).toEqual([]);
 });
+
+/**
+ * The return-to-latest control, in a conversation with something to scroll.
+ *
+ * On the seeded server rather than the default one: the offline workspace has an
+ * empty transcript, and a viewport with nothing above it can never leave the
+ * near-bottom region. Placement and stickiness are the two claims jsdom cannot
+ * make — it computes no layout, so a control that travelled with the transcript
+ * or resolved its position against the wrong box would look identical there.
+ */
+test.describe("the return-to-latest control", () => {
+  const CONTROL = "Scroll to the latest message";
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto(process.env.PI_E2E_DIAGRAMS_URL!);
+    await expect(page.getByTitle("connected")).toBeVisible();
+    // The seeded transcript arrives over the socket; wait for it before scrolling.
+    await expect(page.locator("[data-item-index]").first()).toBeVisible();
+  });
+
+  const scroller = (page: import("@playwright/test").Page) => page.locator("main");
+
+  async function scrollTo(page: import("@playwright/test").Page, top: number) {
+    await scroller(page).evaluate((main, value) => {
+      main.scrollTop = value;
+    }, top);
+  }
+
+  // openlore: scenario=FixedAboveComposer spec=conversation-scroll-navigation
+  test("stays put above the composer while the transcript scrolls under it", async ({ page }) => {
+    await scrollTo(page, 0);
+    const control = page.getByRole("button", { name: CONTROL });
+    await expect(control).toBeVisible();
+
+    const before = (await control.boundingBox())!;
+    const composer = (await page.locator("footer").boundingBox())!;
+    expect(before.y + before.height).toBeLessThanOrEqual(composer.y);
+
+    await scrollTo(page, 600);
+    // A child of the scroller would have travelled 600px by now.
+    const after = (await control.boundingBox())!;
+    expect(after.y).toBeCloseTo(before.y, 0);
+    expect(after.x).toBeCloseTo(before.x, 0);
+  });
+
+  test("returns to the end of the transcript and takes itself away", async ({ page }) => {
+    await scrollTo(page, 0);
+    await page.getByRole("button", { name: CONTROL }).click();
+
+    await expect(page.getByRole("button", { name: CONTROL })).toHaveCount(0);
+    await expect
+      .poll(() =>
+        scroller(page).evaluate((main) => main.scrollHeight - main.scrollTop - main.clientHeight),
+      )
+      .toBeLessThan(120);
+  });
+
+  test("does not flicker back on through the frames of its own scroll", async ({ page }) => {
+    // The browser animates `behavior: "smooth"` over many frames, each emitting a
+    // scroll event that still reports a viewport far from the end. jsdom fires
+    // none of them, so this is the only place the flicker was ever visible.
+    await scrollTo(page, 0);
+    await page.getByRole("button", { name: CONTROL }).click();
+
+    const samples = await page.evaluate(async () => {
+      const seen: boolean[] = [];
+      for (let i = 0; i < 60; i++) {
+        seen.push(!!document.querySelector('button[aria-label="Scroll to the latest message"]'));
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      return seen;
+    });
+
+    // The first sample can still catch the frame the click landed on.
+    expect(samples.slice(1).some(Boolean)).toBe(false);
+  });
+
+  test("gives the scroll back to a reader who changes their mind mid-return", async ({ page }) => {
+    await scrollTo(page, 0);
+    await page.getByRole("button", { name: CONTROL }).click();
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    await page.locator("main").evaluate((main) => {
+      main.dispatchEvent(new WheelEvent("wheel", { deltaY: -400, bubbles: true }));
+      main.scrollTop = 100;
+    });
+
+    await expect(page.getByRole("button", { name: CONTROL })).toBeVisible();
+  });
+
+  // openlore: scenario=KeyboardActivation spec=conversation-scroll-navigation
+  test("answers the keyboard, not only the pointer", async ({ page }) => {
+    // jsdom dispatches no click from a keydown, so this is the only place the
+    // claim that the control is keyboard-operable is actually tested.
+    await scrollTo(page, 0);
+    const control = page.getByRole("button", { name: CONTROL });
+    await control.focus();
+    await page.keyboard.press("Enter");
+
+    await expect(control).toHaveCount(0);
+    await expect
+      .poll(() =>
+        scroller(page).evaluate((main) => main.scrollHeight - main.scrollTop - main.clientHeight),
+      )
+      .toBeLessThan(120);
+  });
+
+  // openlore: scenario=ComposerStaysUsable spec=conversation-scroll-navigation
+  test("leaves the composer usable underneath it", async ({ page }) => {
+    await scrollTo(page, 0);
+    await expect(page.getByRole("button", { name: CONTROL })).toBeVisible();
+
+    const box = page.getByRole("textbox", { name: /message/i });
+    await box.click();
+    await box.fill("typed past the control");
+
+    await expect(box).toHaveValue("typed past the control");
+    // Clicking into the composer is not a scroll: the control is still there.
+    await expect(page.getByRole("button", { name: CONTROL })).toBeVisible();
+  });
+});

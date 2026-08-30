@@ -990,3 +990,562 @@ describe("one listing, one picker", () => {
     expect(api.browseServerDirectory).toHaveBeenLastCalledWith("/srv/alpha");
   });
 });
+
+// ---------------------------------------------------------------------------
+// conversation-scroll-navigation — the return-to-latest control
+// ---------------------------------------------------------------------------
+describe("ReturnToLatest", () => {
+  const CONTROL = "Scroll to the latest message";
+
+  /**
+   * Gives the conversation scroller a layout jsdom will not.
+   *
+   * jsdom implements none, so `scrollHeight`, `clientHeight` and `scrollTop` all
+   * read 0 and the near-bottom expression is `0 < 120` — always true. A test that
+   * skipped this would find the control never rendered and would pass its
+   * "hidden at the bottom" assertion for entirely the wrong reason. Every test
+   * below therefore drives both directions.
+   */
+  function layout(main: HTMLElement, geometry: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+    for (const [name, value] of Object.entries(geometry)) {
+      Object.defineProperty(main, name, { value, writable: true, configurable: true });
+    }
+  }
+
+  const scroller = () => document.querySelector("main")!;
+
+  /** Puts the reader far above the end and lets the app notice. */
+  function scrollUp(main = scroller()) {
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 0 });
+    fireEvent.scroll(main);
+  }
+
+  /** Puts the reader back inside the near-bottom region and lets the app notice. */
+  function scrollDown(main = scroller()) {
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 3400 });
+    fireEvent.scroll(main);
+  }
+
+  const control = () => screen.queryByRole("button", { name: CONTROL });
+
+  /** Where the transcript's bottom anchor lives: the scroller's last leaf. */
+  function bottomAnchor() {
+    const inner = scroller().firstElementChild!;
+    return inner.lastElementChild!;
+  }
+
+  let scrolledInto: Element[];
+
+  function mount(overrides: Record<string, unknown> = {}) {
+    const api = agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[], ...overrides }));
+    mockUseAgent.mockReturnValue(api);
+    return { api, view: render(<App />) };
+  }
+
+  beforeEach(() => {
+    scrolledInto = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolledInto.push(this);
+    });
+  });
+
+  // openlore: scenario=HiddenAtBottom spec=conversation-scroll-navigation
+  it("shows nothing while the reader is already at the bottom", () => {
+    mount();
+    scrollDown();
+    expect(control()).toBeNull();
+  });
+
+  // openlore: scenario=AppearsOnScrollUp spec=conversation-scroll-navigation
+  it("appears once the reader scrolls out of the near-bottom region", () => {
+    mount();
+    scrollDown();
+    expect(control()).toBeNull();
+
+    scrollUp();
+    expect(control()).toBeInTheDocument();
+  });
+
+  // openlore: scenario=HidesOnScrollBackDown spec=conversation-scroll-navigation
+  it("disappears once the reader scrolls back into it", () => {
+    mount();
+    scrollUp();
+    expect(control()).toBeInTheDocument();
+
+    scrollDown();
+    expect(control()).toBeNull();
+  });
+
+  // openlore: scenario=NotShownWhenNothingToScroll spec=conversation-scroll-navigation
+  it("stays away when the conversation is shorter than the viewport", () => {
+    mount();
+    const main = scroller();
+    layout(main, { scrollHeight: 400, clientHeight: 400, scrollTop: 0 });
+    fireEvent.scroll(main);
+    expect(control()).toBeNull();
+  });
+
+  // openlore: scenario=AbsentFromTreeWhenHidden spec=conversation-scroll-navigation
+  it("exposes no button at all to assistive technology while hidden", () => {
+    mount();
+    scrollUp();
+    expect(screen.getAllByRole("button", { name: CONTROL })).toHaveLength(1);
+
+    scrollDown();
+    // Not merely invisible: gone from the tree, so it is never a focus stop.
+    expect(screen.queryAllByRole("button", { name: CONTROL })).toHaveLength(0);
+  });
+
+  // openlore: scenario=NamedForAssistiveTech spec=conversation-scroll-navigation
+  it("is a named button, not an unlabelled decoration", () => {
+    mount();
+    scrollUp();
+    const button = screen.getByRole("button", { name: CONTROL });
+    // A native button is what makes Enter and Space work; the browser test
+    // presses them for real (e2e/app.spec.ts).
+    expect(button.tagName).toBe("BUTTON");
+    expect(button).toHaveAttribute("type", "button");
+    expect(button).not.toBeDisabled();
+  });
+
+  // openlore: scenario=ScrollsToEnd spec=conversation-scroll-navigation
+  it("scrolls to the end of the transcript when activated", () => {
+    mount();
+    scrollUp();
+    scrolledInto = [];
+
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    expect(scrolledInto).toContain(bottomAnchor());
+  });
+
+  // openlore: scenario=ReducedMotionJumps spec=conversation-scroll-navigation
+  it("jumps rather than animates for a reader who asked for less motion", () => {
+    // `behavior: "smooth"` is not softened by the preference the way a CSS
+    // transition is: the browser animates it either way unless asked not to.
+    const matchMedia = vi.fn((query: string) => ({ matches: query.includes("reduce"), media: query }));
+    vi.stubGlobal("matchMedia", matchMedia);
+    const behaviors: (string | undefined)[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element, options?: ScrollIntoViewOptions | boolean) {
+      scrolledInto.push(this);
+      behaviors.push(typeof options === "object" ? options.behavior : undefined);
+    });
+
+    mount();
+    scrollUp();
+    behaviors.length = 0;
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    expect(behaviors).toContain("auto");
+    expect(behaviors).not.toContain("smooth");
+    vi.unstubAllGlobals();
+  });
+
+  it("animates for everyone else", () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: false, media: query })));
+    const behaviors: (string | undefined)[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element, options?: ScrollIntoViewOptions | boolean) {
+      behaviors.push(typeof options === "object" ? options.behavior : undefined);
+    });
+
+    mount();
+    scrollUp();
+    behaviors.length = 0;
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    expect(behaviors).toContain("smooth");
+    vi.unstubAllGlobals();
+  });
+
+  // openlore: scenario=HidesAfterActivation spec=conversation-scroll-navigation
+  it("takes itself away once it has done its job", () => {
+    mount();
+    scrollUp();
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    // Not waiting for the smooth scroll to settle: a reduced-motion jump may
+    // never emit the settling event that would otherwise hide it.
+    expect(control()).toBeNull();
+  });
+
+  // openlore: scenario=ResumesAutoScroll spec=conversation-scroll-navigation
+  it("puts the reader back in the path of streamed content", () => {
+    let api = agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+
+    scrollUp();
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+    scrolledInto = [];
+
+    api = agentApi(
+      agentState({ items: [{ kind: "user", text: "go" }, { kind: "user", text: "and on" }] as ChatItem[] }),
+    );
+    view.rerender(<App />);
+
+    expect(scrolledInto).toContain(bottomAnchor());
+  });
+
+  // openlore: scenario=SendsNothing spec=conversation-scroll-navigation
+  it("changes nothing but the scroll position", () => {
+    const { api } = mount();
+    const box = screen.getByPlaceholderText(/message/i);
+    fireEvent.change(box, { target: { value: "still writing this" } });
+    const itemsBefore = document.querySelectorAll("[data-item-index]").length;
+
+    scrollUp();
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(api.editPrompt).not.toHaveBeenCalled();
+    expect(api.abort).not.toHaveBeenCalled();
+    expect(document.querySelectorAll("[data-item-index]")).toHaveLength(itemsBefore);
+    expect(box).toHaveValue("still writing this");
+  });
+
+  // openlore: scenario=NoYankWhileReadingScrollback spec=conversation-scroll-navigation
+  it("leaves a reader in the scrollback where they are while content streams", () => {
+    let api = agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+
+    scrollUp();
+    scrolledInto = [];
+
+    api = agentApi(
+      agentState({ items: [{ kind: "user", text: "go" }, { kind: "user", text: "and on" }] as ChatItem[] }),
+    );
+    view.rerender(<App />);
+
+    expect(scrolledInto).toHaveLength(0);
+    expect(control()).toBeInTheDocument();
+  });
+
+  // openlore: scenario=FollowsWhenNearBottom spec=conversation-scroll-navigation
+  it("follows streamed content for a reader who never left the bottom", () => {
+    let api = agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+
+    scrollDown();
+    scrolledInto = [];
+
+    api = agentApi(
+      agentState({ items: [{ kind: "user", text: "go" }, { kind: "user", text: "and on" }] as ChatItem[] }),
+    );
+    view.rerender(<App />);
+
+    expect(scrolledInto).toContain(bottomAnchor());
+    expect(control()).toBeNull();
+  });
+
+  it("stays away through the frames of its own animation", () => {
+    // A smooth scroll emits a scroll event per frame, and all but the last report
+    // a viewport still far from the end. Read naively they flicker the control
+    // back on for the length of the animation — observed in the browser before
+    // this guard existed — and stop streamed content being followed meanwhile.
+    mount();
+    scrollUp();
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    const main = scroller();
+    for (const scrollTop of [400, 1200, 2400, 3400]) {
+      layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop });
+      fireEvent.scroll(main);
+      expect(control()).toBeNull();
+    }
+  });
+
+  it("hands control straight back to a reader who scrolls during the return", () => {
+    mount();
+    scrollUp();
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+
+    const main = scroller();
+    fireEvent.wheel(main);
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 200 });
+    fireEvent.scroll(main);
+
+    // Their gesture, not our animation: the button comes back and the transcript
+    // stops following, which is the whole point of the scrollback protection.
+    expect(control()).toBeInTheDocument();
+  });
+
+  it("hands control back to a drag that emits no gesture of its own", () => {
+    // A scrollbar drag fires scroll events and nothing else. The only thing that
+    // separates it from the animation is the direction: nothing this app starts
+    // moves away from the end.
+    mount();
+    const main = scroller();
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 2000 });
+    fireEvent.scroll(main);
+    expect(control()).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+    expect(control()).toBeNull();
+
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 1500 });
+    fireEvent.scroll(main);
+
+    expect(control()).toBeInTheDocument();
+  });
+
+  it("lets go of the guard when the scroll settles short of the end", () => {
+    // A reader who drags the scrollbar towards the end and releases early emits
+    // no gesture, and every position they pass through moves the same way the
+    // animation was going. `scrollend` is the only thing that separates them.
+    mount();
+    const main = scroller();
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 2000 });
+    fireEvent.scroll(main);
+    fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+    expect(control()).toBeNull();
+
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 2600 });
+    fireEvent.scroll(main);
+    expect(control()).toBeNull(); // indistinguishable from the animation, so far
+
+    fireEvent(main, new Event("scrollend"));
+
+    // Settled, and not at the end: the reader is reading scrollback again.
+    expect(control()).toBeInTheDocument();
+  });
+
+  describe("the end moving without a scroll", () => {
+    /** A ResizeObserver whose notifications this test fires by hand. */
+    function stubResizeObserver() {
+      const callbacks: (() => void)[] = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: () => void) {
+            callbacks.push(callback);
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      return () => act(() => {
+        for (const notify of callbacks) notify();
+      });
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("goes with content that finishes rendering under a reader it is following", () => {
+      // A diagram or image that lays out after its message arrived grows the
+      // transcript with no item to trigger the effect that follows it. Reading the
+      // new distance back would file a reader who never touched the page as having
+      // walked away from it — and strand them there, no control offered.
+      const resize = stubResizeObserver();
+      mount();
+      scrollDown();
+      scrolledInto = [];
+
+      layout(scroller(), { scrollHeight: 4000, clientHeight: 600, scrollTop: 1000 });
+      resize();
+
+      expect(scrolledInto).toContain(bottomAnchor());
+      expect(control()).toBeNull();
+    });
+
+    it("takes the control away when the end comes back within reach", () => {
+      // The other direction, and the one no scroll event reports: a window that
+      // grew, or a transcript that shrank, can put the end back inside the region
+      // without the reader moving at all.
+      const resize = stubResizeObserver();
+      mount();
+      scrollUp();
+      expect(control()).toBeInTheDocument();
+
+      layout(scroller(), { scrollHeight: 640, clientHeight: 600, scrollTop: 0 });
+      resize();
+
+      expect(control()).toBeNull();
+    });
+  });
+
+  it("watches the scroller an embed mounts only once its branding has settled", () => {
+    // The embed paints nothing until the branding request returns. An effect that
+    // reached for the scroller on the first render found null, and nothing in its
+    // dependencies changed when the real interface arrived — so the embedded
+    // widget got no observer at all.
+    const callbacks: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+
+    let api = agentApi(agentState({ brandingReady: false, items: [] as ChatItem[] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App rootElement={document.createElement("div")} />);
+    expect(document.querySelector("main")).toBeNull(); // nothing painted yet
+
+    api = agentApi(agentState({ brandingReady: true, items: [{ kind: "user", text: "go" }] as ChatItem[] }));
+    view.rerender(<App rootElement={document.createElement("div")} />);
+
+    expect(callbacks.length).toBeGreaterThan(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not let a stream cancel a jump that has only just set off", () => {
+    // The jump is a smooth scroll: for its first frames the reader is still
+    // inside the near-bottom region. Waiting for one of them to prove they left
+    // leaves a window in which a streamed item pulls them back to the end and
+    // undoes the navigation they asked for.
+    const items: ChatItem[] = [
+      { kind: "user", text: "go" },
+      { kind: "assistant", blocks: [{ type: "text", text: "first" }], usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 } },
+      { kind: "user", text: "more" },
+      { kind: "assistant", blocks: [{ type: "text", text: "second" }], usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 } },
+    ];
+    let api = agentApi(agentState({ items }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+    scrollDown();
+
+    // The target sits above the viewport: jsdom gives every box zeros, so the
+    // one fact this turns on has to be stated.
+    const main = scroller();
+    main.getBoundingClientRect = () => ({ top: 0, bottom: 600, left: 0, right: 800, width: 800, height: 600, x: 0, y: 0, toJSON: () => ({}) });
+    const target = document.querySelector('[data-item-index="1"]')!;
+    target.getBoundingClientRect = () => ({ top: -900, bottom: -700, left: 0, right: 800, width: 800, height: 200, x: 0, y: -900, toJSON: () => ({}) });
+
+    fireEvent.click(screen.getByTitle(/turns? ·/));
+    fireEvent.click(screen.getAllByRole("button", { name: /^Turn 1:/ })[0]);
+
+    scrolledInto = [];
+    api = agentApi(agentState({ items: [...items, { kind: "user", text: "and on" }] as ChatItem[] }));
+    view.rerender(<App />);
+
+    // The stream did not drag them back to the end.
+    expect(scrolledInto).not.toContain(bottomAnchor());
+  });
+
+  it("keeps following a stream whose own catch-up scroll starts far from the end", () => {
+    // A turn or tool card taller than the near-bottom region starts the automatic
+    // scroll from outside it. Its intermediate frames report a viewport far from
+    // the end, and read as a departure they would show the control and stop the
+    // follow midway through the stream.
+    let api = agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+    scrollDown();
+
+    const main = scroller();
+    // The tall card has landed: the end is now far below the viewport.
+    layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 1000 });
+    api = agentApi(
+      agentState({ items: [{ kind: "user", text: "go" }, { kind: "user", text: "a tall one" }] as ChatItem[] }),
+    );
+    view.rerender(<App />);
+
+    for (const scrollTop of [1600, 2600, 3400]) {
+      layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop });
+      fireEvent.scroll(main);
+      expect(control()).toBeNull();
+    }
+
+    // And still following: another item arrives and the transcript goes with it.
+    scrolledInto = [];
+    api = agentApi(
+      agentState({
+        items: [
+          { kind: "user", text: "go" },
+          { kind: "user", text: "a tall one" },
+          { kind: "user", text: "and another" },
+        ] as ChatItem[],
+      }),
+    );
+    view.rerender(<App />);
+    expect(scrolledInto).toContain(bottomAnchor());
+  });
+
+  it("goes away when the transcript is replaced by one with nothing to scroll", () => {
+    // The scroller survives a session switch. A reader parked at the top of a
+    // long conversation who switches to a short one keeps scrollTop 0 — now the
+    // bottom — and the browser emits no scroll event to say so.
+    let api = agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[] }));
+    mockUseAgent.mockImplementation(() => api);
+    const view = render(<App />);
+
+    scrollUp();
+    expect(control()).toBeInTheDocument();
+
+    layout(scroller(), { scrollHeight: 400, clientHeight: 400, scrollTop: 0 });
+    api = agentApi(agentState({ sessionId: "sess_2", items: [] as ChatItem[] }));
+    view.rerender(<App />);
+
+    expect(control()).toBeNull();
+  });
+
+  it("keeps out from under the panels that overlay the conversation", () => {
+    // Analysis and Work Plan are drawers at z-10, full width on a narrow
+    // viewport. This control is rendered after them, so an equal level would
+    // paint a transcript affordance on top of the panel covering the transcript.
+    mockUseAgent.mockReturnValue(agentApi(agentState({ items: [{ kind: "user", text: "go" }] as ChatItem[] })));
+    render(<App />);
+    scrollUp();
+
+    const strip = screen.getByRole("button", { name: CONTROL }).parentElement!;
+    expect(strip.className).toContain("z-0");
+    expect(strip.className).not.toContain("z-10");
+  });
+
+  describe("an analysis jump", () => {
+    const items: ChatItem[] = [
+      { kind: "user", text: "go" },
+      { kind: "assistant", blocks: [{ type: "text", text: "first" }], usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 } },
+      { kind: "user", text: "more" },
+      { kind: "assistant", blocks: [{ type: "text", text: "second" }], usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 } },
+    ];
+
+    function jumpToFirstTurn() {
+      fireEvent.click(screen.getByTitle(/turns? ·/));
+      fireEvent.click(screen.getAllByRole("button", { name: /^Turn 1:/ })[0]);
+    }
+
+    beforeEach(() => {
+      mockUseAgent.mockReturnValue(agentApi(agentState({ items })));
+      render(<App />);
+    });
+
+    it("offers the way back once it has taken the reader out of the region", () => {
+      scrollDown();
+      jumpToFirstTurn();
+      // What the browser does next, and jsdom does not: the jump's own scroll.
+      scrollUp();
+
+      expect(control()).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: CONTROL }));
+      expect(control()).toBeNull();
+    });
+
+    it("leaves a reader at the bottom alone when it moves them nowhere", () => {
+      // Jumping to something already on screen at the end scrolls nothing and
+      // emits no scroll event. Treating that as a departure would strand the
+      // reader: the transcript stops following, and the control that would fix
+      // it is hidden precisely because they are at the bottom.
+      scrollDown();
+      jumpToFirstTurn();
+
+      expect(control()).toBeNull();
+
+      // Still followed: the point of not having called it a departure.
+      scrolledInto = [];
+      const main = scroller();
+      layout(main, { scrollHeight: 4000, clientHeight: 600, scrollTop: 3400 });
+      fireEvent.scroll(main);
+      expect(control()).toBeNull();
+    });
+  });
+});
