@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { connect, makeWorkspace, startServer } from "./harness.mjs";
-import { UNKNOWN_VERSION } from "../src/piSdkVersion.ts";
+import { UNKNOWN_VERSION, readInstalledPiSdkVersion } from "../src/piSdkVersion.ts";
 
 const FAKE = fileURLToPath(new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url));
 
@@ -38,6 +38,9 @@ test("a server run from source names the SDK it has installed, not a placeholder
       "a source run with the SDK installed must name its version, not stand in for it",
     );
     assert.match(versions.piSdk, /^\d+\.\d+\.\d+/, `unexpected version: ${versions.piSdk}`);
+    // Exactly what the module returns, with nothing substituted on the way to the wire:
+    // this is what a second fallback bolted on at the call site would fail.
+    assert.equal(versions.piSdk, readInstalledPiSdkVersion());
     assert.equal(versions.agent, undefined, "the embedded runtime names an SDK, not a child");
   } finally {
     await server.stop();

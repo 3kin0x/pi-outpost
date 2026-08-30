@@ -93,28 +93,31 @@ describe("the pi SDK version a source run reports", () => {
     );
   });
 
-  // openlore: scenario=ADistributedBuildNamesItsSdk spec=api
-  test("the bundler inlines the installed version rather than leaving the build to guess", async () => {
-    // The executable cannot read its own node_modules, so a bundle gets the answer
-    // substituted in. Asserted against the script because building one takes minutes;
-    // that the substitution then arrives is what the release job's own version check
-    // and a run of the built executable prove.
+  test("every build script inlines the installed version rather than leaving a build to guess", async () => {
+    // An executable and the npm bundle have no node_modules to read, so the answer is
+    // substituted in. Three define sites ship today — the npm bundle, its SEA-ready
+    // twin, and the SEA build — and a new one that hardcoded a literal would report a
+    // version nobody installed. That the substitution then reaches the wire is proved
+    // at the boundary in versionsBundled.test.mjs; this guards where it comes from.
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
-    const script = readFileSync(
-      fileURLToPath(new URL("../scripts/build-sea.mjs", import.meta.url)),
-      "utf-8",
-    );
-    assert.match(
-      script,
-      /__PI_SDK_VERSION__:\s*JSON\.stringify\(piSdkVersion\)/,
-      "the bundle must define the SDK version",
-    );
-    assert.match(
-      script,
-      /piSdkVersion\s*=\s*JSON\.parse\(readFileSync\(/,
-      "and take it from the installed package's manifest, not from a literal",
-    );
+    const scripts = ["../scripts/build-sea.mjs", "../../cli/scripts/build.mjs"];
+    let defineSites = 0;
+    for (const rel of scripts) {
+      const script = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf-8");
+      const sites = script.match(/__PI_SDK_VERSION__:[^,}]*/g) ?? [];
+      assert.ok(sites.length > 0, `${rel} defines no SDK version`);
+      for (const site of sites) {
+        assert.match(site, /JSON\.stringify\(piSdkVersion\)/, `${rel}: ${site}`);
+      }
+      assert.match(
+        script,
+        /piSdkVersion\s*=\s*JSON\.parse\(readFileSync\(/,
+        `${rel} must take the version from the installed package's manifest, not a literal`,
+      );
+      defineSites += sites.length;
+    }
+    assert.equal(defineSites, 3, "a define site was added or removed — check it reads the manifest");
   });
 
   test("says it does not know when nothing on the way up bears the name", () => {
