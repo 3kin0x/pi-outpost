@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   bindFailureMessage,
+  holdConsoleIfOwned,
   ownsItsConsole,
   parentImageName,
   parseTasklistImageName,
@@ -173,5 +174,95 @@ describe("holding the window", () => {
     assert.equal(resumed, true, "the stream was read before it was waited on");
     assert.deepEqual(raw, [true, false]);
     assert.equal(paused, true);
+  });
+});
+
+// openlore: {"domain":"cli","requirement":"AFailureToStartIsSaidOutLoud","scenario":"TheMessageOutlivesTheWindow","specFile":"openspec/changes/say-why-the-server-could-not-start/specs/cli/spec.md"}
+describe("holding the console for any pre-listen failure", () => {
+  const heldStream = (calls: string[]): Parameters<typeof holdConsoleIfOwned>[0]["stdin"] => ({
+    isTTY: true,
+    setRawMode: (mode) => calls.push(`raw:${mode}`),
+    resume: () => calls.push("resume"),
+    pause: () => calls.push("pause"),
+    once: (_event, listener) => {
+      calls.push("wait");
+      listener();
+    },
+  });
+
+  test("a file-manager launch that fails before listening still holds the window", async () => {
+    const calls: string[] = [];
+    const errs: string[] = [];
+    const realErr = console.error;
+    console.error = (line: string) => void errs.push(line);
+    try {
+      await holdConsoleIfOwned({
+        platform: "win32",
+        env: {},
+        probe: () => "explorer.exe",
+        stdin: heldStream(calls),
+      });
+    } finally {
+      console.error = realErr;
+    }
+    assert.deepEqual(errs, ["[pi] press any key to close this window"]);
+    assert.deepEqual(calls, ["raw:true", "resume", "wait", "raw:false", "pause"]);
+  });
+
+  test("a shell launch is not held and is not told to press a key", async () => {
+    const calls: string[] = [];
+    const errs: string[] = [];
+    const realErr = console.error;
+    console.error = (line: string) => void errs.push(line);
+    try {
+      await holdConsoleIfOwned({
+        platform: "win32",
+        env: {},
+        probe: () => "pwsh.exe",
+        stdin: heldStream(calls),
+      });
+    } finally {
+      console.error = realErr;
+    }
+    assert.deepEqual(errs, [], "nothing printed");
+    assert.deepEqual(calls, [], "the stream was never touched");
+  });
+
+  test("a runner is never held, whatever launched it", async () => {
+    const calls: string[] = [];
+    await holdConsoleIfOwned({
+      platform: "win32",
+      env: { CI: "true" },
+      probe: () => "explorer.exe",
+      stdin: heldStream(calls),
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  test("off Windows there is nothing to hold", async () => {
+    const calls: string[] = [];
+    await holdConsoleIfOwned({
+      platform: "linux",
+      env: {},
+      probe: () => "explorer.exe",
+      stdin: heldStream(calls),
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  test("the probe is only consulted through this call, and its failure is not a yes", async () => {
+    const calls: string[] = [];
+    let probed = 0;
+    await holdConsoleIfOwned({
+      platform: "win32",
+      env: {},
+      probe: () => {
+        probed += 1;
+        return undefined; // a probe that could not answer
+      },
+      stdin: heldStream(calls),
+    });
+    assert.equal(probed, 1);
+    assert.deepEqual(calls, []);
   });
 });

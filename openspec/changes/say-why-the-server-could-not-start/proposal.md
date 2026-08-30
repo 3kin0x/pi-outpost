@@ -23,6 +23,10 @@ build was judged on the old one's state.
 - Hold the console open when the process owns it, so the line can be read. A shell, a
   script and CI SHALL NOT be made to wait — only the launch that has nowhere else to
   print.
+- Hold it for the failures that come *before* the bind, too. A missing configuration file
+  and an unparseable flag both `process.exit` on a console that a double-click owns, and
+  the Windows check found the no-config window vanishing the same way the bind one did.
+  One shared hold now wraps every pre-listen exit.
 - No change to a server that starts: this is entirely on the path where it does not.
 
 ## Capabilities
