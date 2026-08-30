@@ -167,8 +167,6 @@ export interface ParsedCli {
   update: { check: boolean };
   /** undefined when neither --open nor --no-open was given, so config still decides. */
   open?: boolean;
-  /** undefined when --open-in was not given, so config still decides the shape. */
-  openIn?: OpenShape;
 }
 
 type Command = "init" | "config" | "login" | "build-exe" | "update";
@@ -256,6 +254,10 @@ export function parseCli(argv: string[]): ParsedCli {
     host: values.host,
     // Only an override when actually passed: a bare false must not beat the file.
     ...(values.offline ? { offline: true } : {}),
+    // Same rule for the window's shape: left out unless --open-in was given, so the
+    // config file still decides. It rides in `flags` because that is the bag
+    // loadConfig() reads — a copy on the top-level result would never reach it.
+    ...(openIn === undefined ? {} : { openIn: openIn as OpenShape }),
   };
 
   const kind = values.help ? "help" : values.version ? "version" : (command ?? "serve");
@@ -268,7 +270,6 @@ export function parseCli(argv: string[]): ParsedCli {
     update: { check: values.check },
     // Left undefined unless asked for, so configuration still has its say.
     ...(values.open ? { open: true } : values["no-open"] ? { open: false } : {}),
-    ...(openIn === undefined ? {} : { openIn: openIn as OpenShape }),
   };
 }
 

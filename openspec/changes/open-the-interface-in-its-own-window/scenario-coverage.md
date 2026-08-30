@@ -8,17 +8,20 @@ Files referenced:
 - `server/test/openBrowser.test.ts` (`ob`) — the three decisions the opener makes,
   with the candidate list injected so the choice is testable on any machine
 - `server/test/open-browser-failure.test.mjs` (`fail`) — the wiring, over a real server
-- `server/test/config.test.ts` (`cfg`) · `server/test/cli.test.ts` (`cli`)
+- `server/test/config.test.ts` (`cfg`) · `server/test/cli.test.ts` (`cli`) — the setting
+  and the flag; `cfg` now also drives the full `argv → parseCli → loadConfig` seam
 - **live** — a real server on macOS, whose window was read back from inside it over CDP
+- **win** — a real server on Windows 11, from a fresh SEA, whose Edge window was read
+  back by process command line and window title (tasks 4.1 / 4.2)
 
 ## cli — StartingOpensTheInterface (9)
 
 | Scenario | Status | Evidence |
 | --- | --- | --- |
-| StartingOnADesktopOpensTheInterface | covered | live: a real server opened Edge at its bound address, and the page reports connected, composer present, workspace visible — it is being served by the time it loads. ob "whether to open a browser" pins the desktop decision |
-| ItOpensInAWindowOfItsOwn | covered | live: that window reports `display-mode: standalone` and not `browser`, read from inside it. ob "every platform's candidates produce a command asking for the window" walks the production candidate list and requires each to produce `--app=<url>`, so a candidate that stops asking for the window fails here |
-| WhereNoOwnWindowIsPossible | covered | ob "a machine with no candidate gets no own-window opener" (every listed platform, plus one nothing is listed for, which must not throw) and "asking for a window on a machine that has none falls back to what this always did", which asserts the chosen command is identical to the one a tab would have used |
-| TheOperatorCanAskForATab | covered | ob "asking for a tab uses the platform's own opener, even where a window was possible" asserts it on a machine where a candidate *is* present, which is the only case that can tell the two shapes apart; cfg and cli cover the setting and the flag that select it |
+| StartingOnADesktopOpensTheInterface | covered | live: a real server opened Edge at its bound address, and the page reports connected, composer present, workspace visible — it is being served by the time it loads. win: same on Windows, the Edge window's title is the server's branding, which only lands after the UI connects. ob "whether to open a browser" pins the desktop decision |
+| ItOpensInAWindowOfItsOwn | covered | live: that window reports `display-mode: standalone` and not `browser`, read from inside it. win: on Windows the spawned process is `msedge.exe --app=<bound url>` — `--app=` is the no-tabs, no-address-bar mode. ob "every platform's candidates produce a command asking for the window" walks the production candidate list and requires each to produce `--app=<url>`, so a candidate that stops asking for the window fails here |
+| WhereNoOwnWindowIsPossible | covered | ob "a machine with no candidate gets no own-window opener" (every listed platform, plus one nothing is listed for, which must not throw) and "asking for a window on a machine that has none falls back to what this always did", which asserts the chosen command is identical to the one a tab would have used. win: `chooseOpener("win32","window", () => false)` at the module boundary on Windows produces byte-identical `cmd /c start "" <url>` |
+| TheOperatorCanAskForATab | covered | ob "asking for a tab uses the platform's own opener, even where a window was possible" asserts it on a machine where a candidate *is* present, which is the only case that can tell the two shapes apart; cfg and cli cover the setting and the flag that select it; **cfg "--open-in on the real command line reaches config"** drives `argv → parseCli → loadConfig` and would have caught the bug below. win: starting the Windows SEA with `--open-in browser` produces a plain tab (`cmd /c start` → `msedge.exe --single-argument <url>`), no `--app` window |
 | LaunchedWithoutATerminal | covered | pre-existing ob assertions on `shouldOpenBrowser`: the decision is a desktop session, never a terminal. Untouched by this change |
 | TheOpenedAddressIsTheBoundOne | covered | pre-existing ob assertions on `browsableUrl`, including a port chosen by the operating system. Untouched |
 | NothingOpensWhereNothingCanSeeIt | covered | pre-existing ob assertions. Untouched |
@@ -33,13 +36,29 @@ All **9 scenarios are covered**. There are no partial or uncovered rows.
 
 The Windows entries in the candidate list are paths, and a test asserts the command
 built *from* a path — never that Edge or Chrome actually lives there on a Windows
-machine. Only running it on Windows can say that, and it is task 4.1/4.2, still open:
-the requester will check it against a beta build.
+machine. Tasks 4.1 / 4.2 closed most of this on Windows 11: the real `openBrowser.ts`
+there resolves the first win32 candidate to the Edge that is actually installed, and a
+real SEA opened `msedge.exe --app=<bound url>` on a single gesture. What is still
+untestable without a browserless Windows box is the *branch selection* when no
+candidate exists — both Edge and Chrome are installed on the machine used. The
+fallback *command* that branch would run is verified (`cmd /c start "" <url>`, byte
+-identical whether reached by `--open-in browser` or by `() => false`).
 
 The cost of those paths being wrong is bounded by design rather than by luck: no
 candidate found means no own-window opener, which means the platform opener, which is
 what this did before the change. A wrong path loses the feature on Windows and breaks
 nothing.
+
+## A third near-miss, caught on Windows: `--open-in` never reached configuration
+
+Task 4.2 found that `--open-in browser` on Windows still opened an own-window Edge.
+`parseCli` parsed and validated the flag but returned it as a top-level field of
+`ParsedCli`, beside `flags` — while the server starts with `loadConfig(dir, cli.flags)`
+and `applyRuntime` reads `flags.openIn`, which was always `undefined`. `--open-in
+window` masked it by matching the default. Every unit passed: `cli.test.ts` asserted
+the top-level field, `cfg` hand-built a `{ openIn }` object — the seam between them,
+`parseCli`'s output actually fed to `loadConfig`, was tested by nothing. Fixed by
+moving `openIn` into `flags`; a new `cfg` test now drives that seam.
 
 ## A second near-miss, caught by CI
 
