@@ -108,7 +108,11 @@ export async function startServer(root, config = {}, options = {}) {
     else env[key] = value;
   }
 
-  const child = spawn(process.execPath, [TSX_LOADER, ENTRY], {
+  // `options.entry` runs an already-bundled server instead of the TypeScript source —
+  // the only way to observe a build-time define (`__PI_SDK_VERSION__`) at the wire,
+  // since a source run is precisely the shape those defines are absent from.
+  const argv = options.entry ? [options.entry] : [TSX_LOADER, ENTRY];
+  const child = spawn(process.execPath, argv, {
     cwd: SERVER_DIR,
     env,
     stdio: ["ignore", "pipe", "pipe"],

@@ -54,6 +54,7 @@ import { createEmbeddedRuntime } from "./embeddedRuntime.ts";
 import { createRpcRuntime } from "./rpcRuntime.ts";
 import { rpcResourceArgs, resolveToolsExtension } from "./rpcResourceArgs.ts";
 import { TOOLS_ENV_VAR, type PiOutpostToolsSettings } from "./piOutpostTools.ts";
+import { readInstalledPiSdkVersion } from "./piSdkVersion.ts";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
@@ -133,9 +134,12 @@ const VERSION = typeof __PI_OUTPOST_VERSION__ === "string" ? __PI_OUTPOST_VERSIO
 
 // Resolved at bundle time (not from the SDK's runtime VERSION, which walks up
 // from __dirname for package.json and resolves the wrong file inside a SEA
-// bundle). `typeof` guard lets source runs fall back to "dev".
+// bundle). Outside a bundle the define is absent and the version is read from the
+// installed package: a source run used to report "dev", which is the one situation
+// where knowing the SDK version matters most.
 declare const __PI_SDK_VERSION__: string;
-const PI_SDK_VERSION = typeof __PI_SDK_VERSION__ === "string" ? __PI_SDK_VERSION__ : "dev";
+const PI_SDK_VERSION =
+  typeof __PI_SDK_VERSION__ === "string" ? __PI_SDK_VERSION__ : readInstalledPiSdkVersion();
 
 // npm workspace scripts run with cwd=server/ — INIT_CWD is where `npm run` was invoked
 const LAUNCH_DIR = process.env.INIT_CWD ?? process.cwd();
