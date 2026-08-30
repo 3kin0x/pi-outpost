@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import {
   contentText,
   truncate,
+  toProgressFraction,
   historyToItems,
   assistantToItem,
   customMessageToItem,
@@ -81,6 +82,37 @@ describe("truncate", () => {
   test("uses the default max (20 000)", () => {
     const short = "ok";
     assert.equal(truncate(short), short);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toProgressFraction — the completion fraction, sanitised for the wire
+// ---------------------------------------------------------------------------
+
+describe("toProgressFraction", () => {
+  test("passes a fraction inside 0..1 through unchanged", () => {
+    assert.equal(toProgressFraction(0), 0);
+    assert.equal(toProgressFraction(0.3), 0.3);
+    assert.equal(toProgressFraction(1), 1);
+  });
+
+  test("clamps a value outside the range rather than dropping it", () => {
+    assert.equal(toProgressFraction(1.7), 1);
+    assert.equal(toProgressFraction(-0.2), 0);
+  });
+
+  test("does not police the trajectory — a decrease is a legitimate report", () => {
+    assert.equal(toProgressFraction(0.3), 0.3);
+  });
+
+  test("a value that is not a finite number yields undefined", () => {
+    assert.equal(toProgressFraction(Number.NaN), undefined);
+    assert.equal(toProgressFraction(Number.POSITIVE_INFINITY), undefined);
+    assert.equal(toProgressFraction(Number.NEGATIVE_INFINITY), undefined);
+    assert.equal(toProgressFraction("0.5"), undefined);
+    assert.equal(toProgressFraction(null), undefined);
+    assert.equal(toProgressFraction(undefined), undefined);
+    assert.equal(toProgressFraction({ progress: 0.5 }), undefined);
   });
 });
 
@@ -235,6 +267,25 @@ describe("historyToItems", () => {
     assert.equal(running.running, true);
     assert.equal(running.toolName, "bash");
     assert.equal(running.output, "");
+  });
+
+  test("a tool call rebuilt from history carries no completion fraction", () => {
+    // Progress is never persisted, so it cannot be reconstructed — mid-run or done.
+    const midRunItems = historyToItems(
+      [{ role: "assistant", content: [{ type: "toolCall", id: "run1", name: "crawl", arguments: {} }] }],
+      true,
+    );
+    const midRun = midRunItems.find((i) => i.kind === "tool") as Extract<(typeof midRunItems)[0], { kind: "tool" }>;
+    assert.equal(midRun.running, true);
+    assert.equal(midRun.progress, undefined);
+
+    const doneItems = historyToItems([
+      { role: "assistant", content: [{ type: "toolCall", id: "run2", name: "crawl", arguments: {} }] },
+      { role: "toolResult", toolCallId: "run2", toolName: "crawl", content: "done", isError: false },
+    ]);
+    const done = doneItems.find((i) => i.kind === "tool") as Extract<(typeof doneItems)[0], { kind: "tool" }>;
+    assert.equal(done.running ?? false, false);
+    assert.equal(done.progress, undefined);
   });
 
   test("does not add running tool cards without streaming flag", () => {

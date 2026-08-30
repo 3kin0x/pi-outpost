@@ -29,6 +29,7 @@ import type {
   RuntimeTreeNode,
   TitleCapability,
 } from "./agentRuntime.ts";
+import { toolUpdateEvent } from "./agentRuntime.ts";
 import { CredentialError, providerConfig, type ProviderDeclaration, storeApiKey, storeProvider } from "./credentials.ts";
 import { ExtensionUiBridge } from "./extensionUiBridge.ts";
 import { generateSessionTitle } from "./sessions.ts";
@@ -230,7 +231,7 @@ class EmbeddedRuntime implements AgentRuntime {
         this.emit({ type: "tool_start", toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
         break;
       case "tool_execution_update":
-        this.emit({ type: "tool_update", toolCallId: event.toolCallId, content: event.partialResult?.content });
+        this.emit(toolUpdateEvent(event.toolCallId, event.partialResult));
         break;
       case "tool_execution_end":
         this.emit({

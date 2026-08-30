@@ -325,4 +325,56 @@ describe("ToolCard", () => {
 
     expect(cardRoot(container)).toHaveTextContent("running…");
   });
+
+  describe("completion progress bar", () => {
+    const running = (extra: Partial<ToolItem> = {}): ToolItem => ({
+      kind: "tool",
+      toolName: "crawl",
+      running: true,
+      isError: false,
+      args: {},
+      output: "",
+      ...extra,
+    });
+
+    it("shows no bar while running before a fraction has arrived", () => {
+      const { container } = render(<ToolCard item={running()} />);
+      expect(cardRoot(container).querySelector("progress")).toBeNull();
+    });
+
+    it("shows a determinate bar at the reported fraction", () => {
+      const { container } = render(<ToolCard item={running({ progress: 0.25 })} />);
+      const bar = cardRoot(container).querySelector("progress");
+      expect(bar).not.toBeNull();
+      expect(bar).toHaveAttribute("max", "1");
+      expect(bar?.value).toBeCloseTo(0.25);
+    });
+
+    it("keeps the last fraction the item carries", () => {
+      // useAgent only writes progress when an update carries one; the card just
+      // renders whatever value the item holds.
+      const { container, rerender } = render(<ToolCard item={running({ progress: 0.25 })} />);
+      rerender(<ToolCard item={running({ progress: 0.25, output: "more text" })} />);
+      expect(cardRoot(container).querySelector("progress")?.value).toBeCloseTo(0.25);
+    });
+
+    it("removes the bar once the tool has ended, even with a fraction left on the item", () => {
+      const ended = (isError: boolean): ToolItem => running({ running: false, isError, progress: 0.9, output: "done" });
+      const ok = render(<ToolCard item={ended(false)} />);
+      expect(cardRoot(ok.container).querySelector("progress")).toBeNull();
+      const failed = render(<ToolCard item={ended(true)} />);
+      expect(cardRoot(failed.container).querySelector("progress")).toBeNull();
+    });
+
+    it("shows the bar independently of a specialized presentation", () => {
+      // A running edit tool selects the diff presentation; the bar is still chrome.
+      const item = running({
+        toolName: "edit",
+        progress: 0.6,
+        args: { edits: [{ oldText: "old", newText: "new" }] },
+      });
+      const { container } = render(<ToolCard item={item} />);
+      expect(cardRoot(container).querySelector("progress")?.value).toBeCloseTo(0.6);
+    });
+  });
 });

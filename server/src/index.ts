@@ -76,7 +76,7 @@ import {
   validBaseUrl,
   validProviderId,
 } from "./credentials.ts";
-import { assistantToItem, contentText, customMessageToItem, historyToItems, structuredExchangeField, truncate } from "./convert.ts";
+import { assistantToItem, contentText, customMessageToItem, historyToItems, structuredExchangeField, toProgressFraction, truncate } from "./convert.ts";
 
 import { isStackExhaustion, noteCompaction, noteToolOutcome, noteTurnOutcome, recordTurnFailure } from "./turnFailureLog.ts";
 import {
@@ -1500,7 +1500,16 @@ function onRuntimeEvent(workspace: Workspace, event: RuntimeEvent): void {
     }
     case "tool_update": {
       const text = contentText(event.content as never);
-      if (text) broadcast(workspace, { type: "tool_update", toolCallId: event.toolCallId, text: truncate(text) });
+      const progress = toProgressFraction(event.progress);
+      // A progress-only update carries no text; still send it so the bar can move.
+      if (text || progress !== undefined) {
+        broadcast(workspace, {
+          type: "tool_update",
+          toolCallId: event.toolCallId,
+          text: truncate(text),
+          ...(progress !== undefined ? { progress } : {}),
+        });
+      }
       break;
     }
     case "tool_end": {

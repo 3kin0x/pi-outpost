@@ -181,7 +181,42 @@ function finishSuccessfulCommand(command, type, script, responseId) {
   for (const write of script?.writes ?? []) fs.writeFileSync(write.path, write.content);
   emitAll(script?.after);
   if (config.malformedAfter === type) emitRaw(`${config.malformedLine ?? "{not json"}\n`);
+  if (type === "prompt" && config.progressDemo) emitProgressDemo(config.progressDemo);
   if (config.exitAfter === type) process.exit(config.exitCode ?? 7);
+}
+
+/**
+ * A tool call that reports its completion fraction, for the running-app check.
+ *
+ * `{ steps: n, intervalMs: ms, toolName, error: bool }` — emits a start, `n`
+ * spaced `tool_execution_update` records whose `partialResult.details.progress`
+ * climbs from `1/n` to `1`, then an end. The real thing an extension tool does
+ * through `onUpdate`, without a model in the loop.
+ */
+function emitProgressDemo({ steps = 4, intervalMs = 400, toolName = "crawl", error = false } = {}) {
+  const toolCallId = `progress-demo-${Date.now()}`;
+  emit({ type: "agent_start" });
+  emit({ type: "tool_execution_start", toolCallId, toolName, args: {} });
+  for (let i = 1; i <= steps; i++) {
+    setTimeout(() => {
+      emit({
+        type: "tool_execution_update",
+        toolCallId,
+        partialResult: { content: [{ type: "text", text: `step ${i}/${steps}` }], details: { progress: i / steps } },
+      });
+    }, intervalMs * i);
+  }
+  setTimeout(() => {
+    emit({
+      type: "tool_execution_end",
+      toolCallId,
+      toolName,
+      result: { content: [{ type: "text", text: error ? "failed" : "done" }] },
+      isError: error,
+    });
+    emit({ type: "agent_end" });
+    state.isStreaming = false;
+  }, intervalMs * (steps + 1));
 }
 
 const decoder = new StringDecoder("utf8");

@@ -446,6 +446,23 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: notifyFakeConfig } },
   );
 
+  // A sixth server whose scripted RPC child, on every prompt, runs a tool that
+  // reports a rising completion fraction — the offline stand-in for an extension
+  // tool calling onUpdate(). The whole path from the runtime out is real.
+  const progressRoot = await makeWorkspace({ "readme.md": "# progress\n" });
+  const progressFakeConfig = path.join(progressRoot, "fake-rpc.json");
+  await writeFile(
+    progressFakeConfig,
+    JSON.stringify({ state: { sessionId: "progress-1" }, progressDemo: { steps: 5, intervalMs: 500, toolName: "crawl" } }),
+  );
+  const progress = await startServer(
+    progressRoot,
+    {
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")], startupTimeoutMs: 20_000 },
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: progressFakeConfig } },
+  );
 
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
@@ -460,6 +477,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_DIAGRAMS_URL = diagrams.base;
   process.env.PI_E2E_PLANS_URL = plans.base;
   process.env.PI_E2E_NOTIFY_URL = notifications.base;
+  process.env.PI_E2E_PROGRESS_URL = progress.base;
   process.env.PI_E2E_PLAN_SOURCE = sourceSession;
   process.env.PI_E2E_PLAN_FORK = forkSession;
   process.env.PI_E2E_EXTENSIONS_DIR = extensionsDir;
@@ -467,6 +485,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await progress.stop();
     await notifications.stop();
     await plans.stop();
     await diagrams.stop();

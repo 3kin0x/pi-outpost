@@ -190,6 +190,54 @@ test("a streaming turn reaches its own project's clients and no others", async (
   );
 });
 
+test("a tool's progress reaches its own project's clients, clamped, and no others", async (t) => {
+  const beta = await secondProject();
+  const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
+  const server = await startScriptedServer(root, [beta], {
+    state: { sessionId: "scripted", isStreaming: false },
+    commands_: {
+      prompt: {
+        after: [
+          { type: "agent_start" },
+          { type: "tool_execution_start", toolCallId: "tp-1", toolName: "crawl", args: {} },
+          // a progress-only update: no text content, still must be delivered
+          { type: "tool_execution_update", toolCallId: "tp-1", partialResult: { details: { progress: 0.8 } } },
+          // a later, lower value passes through unchanged (no monotonic policing)
+          { type: "tool_execution_update", toolCallId: "tp-1", partialResult: { details: { progress: 0.3 } } },
+          // out of range is clamped, not dropped
+          { type: "tool_execution_update", toolCallId: "tp-1", partialResult: { details: { progress: 1.7 } } },
+        ],
+      },
+    },
+  });
+  t.after(() => server.stop());
+
+  const watcher = connect(server.wsUrl());
+  const mover = connect(server.wsUrl());
+  t.after(() => {
+    watcher.close();
+    mover.close();
+  });
+  await watcher.waitFor((m) => m.type === "hello");
+  await mover.waitFor((m) => m.type === "hello");
+
+  mover.send({ type: "switch_workspace", root: beta });
+  await mover.waitFor((m) => m.type === "workspace_switched");
+  mover.send({ type: "prompt", text: "go" });
+
+  await mover.waitFor((m) => m.type === "tool_update" && m.toolCallId === "tp-1" && m.progress === 1);
+  const progresses = mover.received
+    .filter((m) => m.type === "tool_update" && m.toolCallId === "tp-1")
+    .map((m) => m.progress);
+  assert.deepEqual(progresses, [0.8, 0.3, 1], "delivered in order, lower value kept, over-range clamped");
+
+  assert.equal(
+    watcher.received.filter((m) => m.type === "tool_update").length,
+    0,
+    "no tool progress crossed into the other project",
+  );
+});
+
 test("a connection cannot read a file belonging to another project", async (t) => {
   const beta = await realpath(await makeWorkspace({ "secret.md": "beta's own\n" }));
   const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
