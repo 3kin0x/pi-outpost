@@ -35,4 +35,4 @@
 
 - [x] 6.1 Write the scenario-to-test matrix for all four delta specs with assertion-level evidence, leaving no scenario partial or uncovered. Enumerate with `rg '^#### Scenario:' openspec/changes/add-user-extension-paths/specs/` so none is silently omitted.
 - [x] 6.2 Run lint, typecheck, the server and UI suites, and Playwright. Then `openspec validate add-user-extension-paths --strict`.
-- [ ] 6.3 Open the change and verify CI is green on both platforms before merging.
+- [x] 6.3 Open the change and verify CI is green on both platforms before merging. Done: PR #126, merged 2026-08-30 as `810ea6d`. `check (ubuntu-latest)` and `check (windows-latest)` both green, alongside `browser`; 9 checks passed, 0 failed.
