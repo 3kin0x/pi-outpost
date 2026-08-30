@@ -103,7 +103,10 @@ export type RuntimeEvent =
   | { type: "assistant_end"; message: unknown }
   | { type: "custom_message"; message: unknown }
   | { type: "tool_start"; toolCallId: string; toolName: string; args: unknown }
-  | { type: "tool_update"; toolCallId: string; content: unknown }
+  // `progress` is whatever the tool put in `partialResult.details.progress` — a
+  // completion fraction, in principle `0..1`. Carried raw and sanitised once, at
+  // the broadcast boundary in index.ts, so both runtimes stay pass-through.
+  | { type: "tool_update"; toolCallId: string; content: unknown; progress?: unknown }
   | { type: "tool_end"; toolCallId: string; toolName: string; content: unknown; details: unknown; isError: boolean }
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "thinking_changed"; level: ThinkingLevel }
@@ -117,6 +120,20 @@ export type RuntimeEvent =
   | { type: "error"; message: string }
   /** Fail-closed: the runtime is unusable from here on. Reported once. */
   | { type: "runtime_failed"; message: string };
+
+/**
+ * Build a `tool_update` event from a tool's partial result, the same way for
+ * both runtimes — the RPC record and the SDK event differ around it but not in
+ * this shape. Everything is read defensively: a partial with no `details`, or no
+ * partial at all, yields an event with no `progress` rather than a throw. The
+ * fraction is carried raw and sanitised once, at the broadcast boundary.
+ */
+export function toolUpdateEvent(
+  toolCallId: string,
+  partial: { content?: unknown; details?: { progress?: unknown } } | undefined,
+): Extract<RuntimeEvent, { type: "tool_update" }> {
+  return { type: "tool_update", toolCallId, content: partial?.content, progress: partial?.details?.progress };
+}
 
 export interface PromptOptions {
   images?: WireImage[];

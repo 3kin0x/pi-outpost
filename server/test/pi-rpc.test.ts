@@ -391,6 +391,48 @@ describe("strict RPC records and core interaction", () => {
     assert.deepEqual(prompt?.images, [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }]);
   });
 
+  test("forwards a tool's completion fraction, and omits it when the tool sends none", async () => {
+    const { runtime } = await startFake({
+      state: { isStreaming: true },
+      commands_: {
+        prompt: {
+          after: [
+            { type: "tool_execution_start", toolCallId: "tool-1", toolName: "crawl", args: {} },
+            {
+              type: "tool_execution_update",
+              toolCallId: "tool-1",
+              partialResult: { content: [{ type: "text", text: "step 2" }], details: { progress: 0.4 } },
+            },
+            {
+              type: "tool_execution_update",
+              toolCallId: "tool-1",
+              partialResult: { content: [{ type: "text", text: "step 3" }] },
+            },
+            {
+              type: "tool_execution_end",
+              toolCallId: "tool-1",
+              toolName: "crawl",
+              result: { content: [{ type: "text", text: "done" }] },
+              isError: false,
+            },
+          ],
+        },
+      },
+    });
+    const updates: RuntimeEvent[] = [];
+    const unsubscribe = runtime.subscribe((event) => {
+      if (event.type === "tool_update") updates.push(event);
+    });
+    const ended = waitForEvent(runtime, (event) => event.type === "tool_end");
+    await runtime.prompt("go");
+    await ended;
+    unsubscribe();
+
+    assert.equal(updates.length, 2);
+    assert.equal((updates[0] as { progress?: unknown }).progress, 0.4);
+    assert.equal((updates[1] as { progress?: unknown }).progress, undefined);
+  });
+
   test("round-trips an extension dialog answer with the original id", async () => {
     const { runtime, commandLog } = await startFake({
       dialogBlocksCommand: "prompt",

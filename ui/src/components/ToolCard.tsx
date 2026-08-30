@@ -64,6 +64,16 @@ export function ToolCard({ item, dispatch = noopDispatch }: { item: ToolItem; di
         )}
         <span className="ml-auto text-xs text-zinc-400 dark:text-zinc-600">{open ? "▾" : "▸"}</span>
       </button>
+      {item.running && item.progress != null && (
+        <div className="border-t border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
+          <progress
+            value={item.progress}
+            max={1}
+            aria-label={`${item.toolName} progress`}
+            className="h-1.5 w-full appearance-none overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800 [&::-moz-progress-bar]:bg-emerald-500 [&::-webkit-progress-bar]:bg-transparent [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-emerald-500"
+          />
+        </div>
+      )}
       {showCollapsed && Collapsed !== undefined && (
         <div className="border-t border-zinc-200 px-3 py-2 dark:border-zinc-800">
           <Collapsed item={item} dispatch={dispatch} />

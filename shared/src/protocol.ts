@@ -40,6 +40,12 @@ export type ChatItem =
       output: string;
       isError?: boolean;
       running?: boolean;
+      /**
+       * Completion fraction in `0..1` the running tool last reported, or absent
+       * when it reported none. Shown as a determinate bar only while `running`;
+       * never rebuilt from history, so a replayed tool call has none.
+       */
+      progress?: number;
       /** HTML from pi's renderResult (re-invoked server-side). */
       outputHtml?: string;
       /** Collapsed preview when it differs from outputHtml. */
@@ -521,7 +527,12 @@ export type ServerMessage =
   | { type: "assistant_end"; item: ChatItem }
   | { type: "custom_message"; item: ChatItem }
   | { type: "tool_start"; toolCallId: string; toolName: string; args: unknown; callHtml?: string }
-  | { type: "tool_update"; toolCallId: string; text: string }
+  /**
+   * `progress` is a completion fraction in `0..1` the running tool volunteered on
+   * this update; absent when it reported none. It is a hint, shown only while the
+   * tool runs, and is never persisted to session history.
+   */
+  | { type: "tool_update"; toolCallId: string; text: string; progress?: number }
   | {
       type: "tool_end";
       toolCallId: string;

@@ -31,6 +31,7 @@ import type {
   RuntimeSnapshot,
   RuntimeTreeNode,
 } from "./agentRuntime.ts";
+import { toolUpdateEvent } from "./agentRuntime.ts";
 import type { AgentRuntimeConfig } from "./config.ts";
 import { PiRpcProcess, probeAgentLabel, type RpcIncoming } from "./piRpcProcess.ts";
 import { explainRejectedFlags } from "./rpcResourceArgs.ts";
@@ -361,11 +362,12 @@ class RpcRuntime implements AgentRuntime {
         });
         break;
       case "tool_execution_update":
-        this.emit({
-          type: "tool_update",
-          toolCallId: String(record.toolCallId),
-          content: (record.partialResult as { content?: unknown } | undefined)?.content,
-        });
+        this.emit(
+          toolUpdateEvent(
+            String(record.toolCallId),
+            record.partialResult as { content?: unknown; details?: { progress?: unknown } } | undefined,
+          ),
+        );
         break;
       case "tool_execution_end": {
         const result = record.result as { content?: unknown; details?: unknown } | undefined;

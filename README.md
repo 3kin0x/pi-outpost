@@ -333,6 +333,22 @@ Extensions using pi's [Custom UI](https://github.com/earendil-works/pi/blob/main
 
 Custom messages (`pi.sendMessage()` with a `customType`, see [Message and Entry Rendering](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#message-and-entry-rendering)) show up too, but without the extension's `MessageRenderer` — that returns a terminal `Component`, which has no browser equivalent. Instead it falls back to pi's own default look (violet card, markdown-rendered content), with any `details` payload collapsed behind a toggle (never verbose JSON by default). Messages sent with `display: false` stay hidden, same as in the TUI.
 
+### Reporting progress from a tool
+
+A long-running tool can report how far along it is. From `execute`, call the `onUpdate` callback with a `progress` fraction between `0` and `1` in `details` — the same call you already make to stream partial output:
+
+```ts
+async execute(toolCallId, params, signal, onUpdate) {
+  for (let i = 1; i <= steps; i++) {
+    await doOneStep();
+    onUpdate?.({ content: [{ type: "text", text: `step ${i}/${steps}` }], isPartial: true, details: { progress: i / steps } });
+  }
+  return { content: [{ type: "text", text: "done" }] };
+}
+```
+
+The web UI shows a determinate progress bar on the tool card while the call runs. It is a hint: no label is needed (the streamed text is already shown), a value outside `0..1` is clamped, the bar only appears once the first fraction has arrived, and it disappears when the tool finishes. A tool that reports nothing looks exactly as it does today.
+
 ## Work Plans
 
 The Work Plan belongs to the agent. For non-trivial work it is the agent's explicit working-state representation: a persistent hierarchy used to decompose objectives, track execution and dependencies, record resources and blockers, and reconcile verification before declaring the work complete. It is not a second activity log or a ceremonial progress report; trivial interactions need no plan.

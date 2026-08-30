@@ -1355,6 +1355,28 @@ describe("assembling a turn", () => {
     expect(result.current.state.items[0]).toMatchObject({ kind: "tool", toolName: "bash", output: "a.txt\nb.txt", running: false });
   });
 
+  it("carries a tool's completion fraction, and keeps the last one when an update omits it", async () => {
+    const result = await connected();
+    act(() => mockWs!.receive({ type: "tool_start", toolCallId: "t1", toolName: "crawl", args: {} }));
+    act(() => mockWs!.receive({ type: "tool_update", toolCallId: "t1", text: "step 1", progress: 0.25 }));
+    await waitFor(() => expect(result.current.state.items[0]).toMatchObject({ progress: 0.25, running: true }));
+
+    // a text-only update must not clear the fraction
+    act(() => mockWs!.receive({ type: "tool_update", toolCallId: "t1", text: "step 2" }));
+    expect(result.current.state.items[0]).toMatchObject({ output: "step 2", progress: 0.25 });
+
+    // ending the tool stops it running — the bar's gate closes regardless of the value left behind
+    act(() => mockWs!.receive({ type: "tool_end", toolCallId: "t1", text: "done", isError: false }));
+    expect(result.current.state.items[0]).toMatchObject({ running: false });
+  });
+
+  it("does not set progress from a text-only tool_update", async () => {
+    const result = await connected();
+    act(() => mockWs!.receive({ type: "tool_start", toolCallId: "t1", toolName: "crawl", args: {} }));
+    act(() => mockWs!.receive({ type: "tool_update", toolCallId: "t1", text: "working" }));
+    expect(result.current.state.items[0].progress).toBeUndefined();
+  });
+
   it("keeps two concurrent tool calls apart", async () => {
     const result = await connected();
     act(() => mockWs!.receive({ type: "tool_start", toolCallId: "t1", toolName: "read", args: {} }));

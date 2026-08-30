@@ -752,7 +752,12 @@ function reduce(state: AgentState, action: Action): AgentState {
     case "tool_update":
       return {
         ...state,
-        items: upsertTool(state.items, message.toolCallId, "tool", { output: message.text }),
+        items: upsertTool(state.items, message.toolCallId, "tool", {
+          output: message.text,
+          // Only when this update carried one — a text-only update leaves the
+          // last reported fraction in place.
+          ...(typeof message.progress === "number" ? { progress: message.progress } : {}),
+        }),
       };
     case "tool_end":
       return {

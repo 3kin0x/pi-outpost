@@ -121,6 +121,19 @@ export function truncate(text: string, max = MAX_TOOL_OUTPUT): string {
   return `${text.slice(0, max)}\n… [truncated, ${text.length} chars total]`;
 }
 
+/**
+ * A completion fraction a running tool volunteered, sanitised for the wire.
+ *
+ * Only a finite number survives — a non-number, `NaN` or an infinity yields
+ * `undefined`, which the client reads as "no change". A value outside `0..1` is
+ * clamped rather than dropped. The trajectory is not policed: a fraction lower
+ * than one seen before is a legitimate report and passes through unchanged.
+ */
+export function toProgressFraction(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value < 0 ? 0 : value > 1 ? 1 : value;
+}
+
 function assistantBlocks(content: string | AnyContent[]): AssistantBlock[] {
   const blocks: AssistantBlock[] = [];
   if (!Array.isArray(content)) return blocks;
