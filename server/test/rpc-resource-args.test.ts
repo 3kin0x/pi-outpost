@@ -17,6 +17,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     noExtensions: false,
     extensionPaths: [],
+    userExtensionPaths: [],
     extensionScripts: [],
     noSkills: false,
     skillPaths: [],
@@ -43,10 +44,21 @@ describe("rpcResourceArgs", () => {
 
   test("passes every extension path and script as its own --extension", () => {
     const args = rpcResourceArgs(
-      config({ extensionPaths: ["/ext/a.ts"], extensionScripts: ["/ext/b.mjs"] }),
+      config({
+        extensionPaths: ["/ext/deployment.ts"],
+        userExtensionPaths: ["/ext/mine.ts"],
+        extensionScripts: ["/ext/script.mjs"],
+      }),
       noExtras,
     );
-    assert.deepEqual(args, ["--extension", "/ext/a.ts", "--extension", "/ext/b.mjs"]);
+    assert.deepEqual(args, [
+      "--extension",
+      "/ext/deployment.ts",
+      "--extension",
+      "/ext/mine.ts",
+      "--extension",
+      "/ext/script.mjs",
+    ]);
   });
 
   test("keeps explicit paths alongside the discovery switches they survive", () => {

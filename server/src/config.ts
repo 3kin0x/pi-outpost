@@ -314,6 +314,16 @@ export interface AppConfig {
    */
   workspaceLock?: boolean;
   /**
+   * Forbid adding or removing extension paths from the interface. Follows the
+   * `sandboxLocks` convention: the deployment decides, and the interface offers no
+   * affordance for what it forbids.
+   *
+   * Its own setting rather than a sandbox lock, because an extension path is not a
+   * field of the sandbox — and because loading code is a different act from pointing
+   * the agent at more text to read. Skill paths stay editable under it.
+   */
+  extensionLock?: boolean;
+  /**
    * How long an unused project stays alive before its session is released, in
    * milliseconds. 0 disables retirement entirely.
    *
@@ -329,6 +339,17 @@ export interface AppConfig {
   noExtensions: boolean;
   /** Explicit extension paths to load (in addition to defaults). */
   extensionPaths: string[];
+  /**
+   * Extension paths added through Settings — the editable list, held apart from
+   * `extensionPaths` exactly as `userSkillPaths` is held apart from `skillPaths`:
+   * the deployment's are theirs, and an apply must never be able to drop one.
+   *
+   * A path here may be a directory. The SDK discovers what is inside it — a
+   * `package.json` with a `pi.extensions` field, else `index.ts`/`index.js`, else
+   * the loose `.ts`/`.js` files one level down — which is why the interface needs
+   * no way to name an individual file.
+   */
+  userExtensionPaths: string[];
   /**
    * Extension script paths loaded at runtime via import(). Works in both dev
    * mode and bundled builds (esbuild preserves dynamic import()). Files must
@@ -630,6 +651,7 @@ export function loadConfig(
     },
     noExtensions: false,
     extensionPaths: [],
+    userExtensionPaths: [],
     extensionScripts: [],
     noSkills: false,
     skillPaths: [],
@@ -716,6 +738,7 @@ export function loadConfig(
         ...(optionalStringArray(raw, "userSkillPaths") ?? []).map(resolve),
         ...(optionalStringArray(raw, "promptPaths") ?? []).map(resolve),
         ...(optionalStringArray(raw, "extensionPaths") ?? []).map(resolve),
+        ...(optionalStringArray(raw, "userExtensionPaths") ?? []).map(resolve),
         ...(optionalStringArray(raw, "extensionScripts") ?? []).map(resolve),
       ],
     };
@@ -807,6 +830,8 @@ export function loadConfig(
   config.tools = optionalStringArray(raw, "tools");
   config.noExtensions = optionalBoolean(raw, "noExtensions", false);
   config.extensionPaths = (optionalStringArray(raw, "extensionPaths") ?? []).map(resolve);
+  config.userExtensionPaths = (optionalStringArray(raw, "userExtensionPaths") ?? []).map(resolve);
+  if (raw.extensionLock !== undefined) config.extensionLock = optionalBoolean(raw, "extensionLock", false);
   config.extensionScripts = (optionalStringArray(raw, "extensionScripts") ?? []).map(resolve);
   config.noSkills = optionalBoolean(raw, "noSkills", false);
   config.skillPaths = (optionalStringArray(raw, "skillPaths") ?? []).map(resolve);
@@ -1088,6 +1113,11 @@ export interface EditableSettings {
    * The operator's `skillPaths` are never written here and never removed.
    */
   userSkillPaths?: string[];
+  /**
+   * Extension paths the interface manages (absolute). Absent leaves them untouched.
+   * The operator's `extensionPaths` are never written here and never removed.
+   */
+  userExtensionPaths?: string[];
   /** Projects held open (absolute, resolved). Absent leaves them untouched. */
   openProjects?: string[];
 }
@@ -1100,6 +1130,14 @@ export interface EditableSettings {
  */
 export function allSkillPaths(config: AppConfig): string[] {
   return [...config.skillPaths, ...config.userSkillPaths];
+}
+
+/**
+ * Every explicit extension path the session should load: the deployment's, then
+ * the ones added from Settings. Same order and same reason as `allSkillPaths`.
+ */
+export function allExtensionPaths(config: AppConfig): string[] {
+  return [...config.extensionPaths, ...config.userExtensionPaths];
 }
 
 /** A settings write that never happened — the loaded configuration file is unchanged. */
@@ -1172,6 +1210,12 @@ export function persistEditableSettings(
   // Written under its own key: `skillPaths` belongs to whoever wrote the file, and
   // an apply must never be able to drop one of theirs.
   if (update.userSkillPaths) raw.userSkillPaths = update.userSkillPaths.map((p) => path.resolve(p));
+  // Same reasoning one kind over: `extensionPaths` and `extensionLock` belong to
+  // whoever wrote the file, and neither is read or rewritten here. Only the keys
+  // named in this function are touched; everything else survives the write as it was.
+  if (update.userExtensionPaths) {
+    raw.userExtensionPaths = update.userExtensionPaths.map((p) => path.resolve(p));
+  }
   // The last project cannot be closed, so an empty array never reaches here — but
   // it is written rather than deleted if it does, since "no projects open" and "this
   // key was never set" mean the same thing to the loader.

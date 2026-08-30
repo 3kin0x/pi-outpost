@@ -17,7 +17,7 @@
  */
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { allSkillPaths, type AppConfig } from "./config.ts";
+import { allExtensionPaths, allSkillPaths, type AppConfig } from "./config.ts";
 
 export interface RpcResourceContext {
   /** Skills shipped with pi-outpost, already filtered by `noSkills` upstream. */
@@ -36,7 +36,7 @@ export interface RpcResourceContext {
  * not the flag. This table turns one into the other in the startup error.
  */
 const FLAG_ORIGIN = new Map<string, string>([
-  ["--extension", "extensionPaths/extensionScripts"],
+  ["--extension", "extensionPaths/userExtensionPaths/extensionScripts"],
   ["--no-extensions", "noExtensions"],
   ["--skill", "skillPaths (and the bundled skills)"],
   ["--no-skills", "noSkills"],
@@ -102,7 +102,7 @@ export function rpcResourceArgs(config: AppConfig, context: RpcResourceContext):
   // keeps `-e`/`--skill` paths under `--no-extensions`/`--no-skills`, which is the
   // same rule the embedded loader applies to additionalSkillPaths.
   if (config.noExtensions) args.push("--no-extensions");
-  each("--extension", [...config.extensionPaths, ...config.extensionScripts]);
+  each("--extension", [...allExtensionPaths(config), ...config.extensionScripts]);
 
   if (config.noSkills) args.push("--no-skills");
   // The operator's paths come first for the same reason as in the embedded

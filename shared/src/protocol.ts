@@ -399,8 +399,34 @@ export interface SessionSnapshot {
   gitAvailable?: boolean;
   /** Which providers are usable, and whether the agent can answer at all. Never carries a key. */
   credentials?: CredentialStatus;
-  /** Absolute paths of loaded extension files. */
+  /**
+   * Absolute paths of loaded extension files — an inventory of what the runtime
+   * actually loaded, not what was configured.
+   *
+   * Absent means the runtime cannot report one, which is not the same as loading
+   * none: an RPC child builds its own extensions and this server never sees them.
+   * A reader must show those two cases differently, or it states as fact something
+   * it was never told.
+   */
   extensionPaths?: string[];
+  /**
+   * Extension paths from the server's configuration file. Shown by the settings
+   * menu, never editable there — the same arrangement as `skillPaths`.
+   */
+  configuredExtensionPaths?: string[];
+  /**
+   * Extension paths added through Settings — the editable list.
+   *
+   * A path here may be a directory: the agent runtime discovers the extensions
+   * inside it, which is why the interface offers no way to name a single file.
+   */
+  userExtensionPaths?: string[];
+  /**
+   * Whether the deployment forbids changing extension paths from the interface.
+   * When true a client offers no control for them — and the server refuses the
+   * change anyway, because a client is not a trust boundary.
+   */
+  extensionLock?: boolean;
   /**
    * Skill paths from the server's configuration file. Shown by the settings menu,
    * never editable there: they belong to the deployment, and an apply must not be
@@ -731,6 +757,12 @@ export type ClientMessage =
        * from here — they cannot be rewritten or removed by a client.
        */
       userSkillPaths?: string[];
+      /**
+       * The Settings-managed extension paths, replacing that list. Absent leaves
+       * it untouched, and an empty array is a removal. Refused outright when the
+       * deployment sets `extensionLock`.
+       */
+      userExtensionPaths?: string[];
     }
   | ExtensionUIResponse;
 

@@ -193,7 +193,6 @@ describe("RpcRuntimeStarts", () => {
       commands: [{ name: "review", description: "Review it", source: "skill" }],
       contextUsage: { tokens: 10, contextWindow: 1000, percent: 1 },
       providers: [],
-      extensionPaths: [],
     });
     assert.deepEqual(runtime.tree(), { roots: [{ entry, children: [] }], leafId: "entry-1" });
     assert.deepEqual(runtime.contextEntries(), [entry]);

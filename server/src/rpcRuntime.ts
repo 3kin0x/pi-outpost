@@ -532,8 +532,9 @@ class RpcRuntime implements AgentRuntime {
       // Pi RPC exposes no provider or credential inventory, so onboarding cannot be
       // driven from here. `usableModel` still answers correctly off the model list.
       providers: [],
-      // Nor the loaded extension paths.
-      extensionPaths: [],
+      // Nor the loaded extension paths. Omitted rather than empty: the child may well
+      // have loaded several, and reporting none would state as fact something this
+      // server was never told.
     };
   }
 

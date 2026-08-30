@@ -170,6 +170,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     ".pi/prompts/greet.md": "---\ndescription: say hello\n---\n\nSay hello.\n",
   });
   const secondRoot = await realpath(await makeWorkspace({ "second.md": "# second workspace\n" }));
+  // An extension directory the settings menu can be pointed at. Outside the server's
+  // workspace on purpose: the path picker browses the server's own filesystem, which
+  // is what an operator pointing a setting at a mounted share actually does.
+  const extensionsDir = await realpath(
+    await makeWorkspace({
+      "index.ts":
+        'export default (pi) => {\n  pi.registerCommand("e2e-added", { description: "Added through Settings", handler: async () => {} });\n};\n',
+    }),
+  );
   const server = await startServer(
     root,
     {
@@ -225,6 +234,21 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       branding: { title: "locked projects mode" },
       embed: { workspaceControls: "projects" },
       workspaceLock: true,
+    },
+    { env: onlyOneFakeProvider() },
+  );
+
+  // A server that forbids changing extension paths, so the browser can see what a
+  // deployment that keeps code-loading to itself actually presents. The lock is
+  // loaded configuration, not a mount option: only a server configured that way
+  // shows it.
+  const extensionsLocked = await startServer(
+    await makeWorkspace({ "readme.md": "# locked extensions\n" }),
+    {
+      server: { allowedOrigins: [host.url] },
+      branding: { title: "locked extensions" },
+      extensionPaths: [extensionsDir],
+      extensionLock: true,
     },
     { env: onlyOneFakeProvider() },
   );
@@ -438,6 +462,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_NOTIFY_URL = notifications.base;
   process.env.PI_E2E_PLAN_SOURCE = sourceSession;
   process.env.PI_E2E_PLAN_FORK = forkSession;
+  process.env.PI_E2E_EXTENSIONS_DIR = extensionsDir;
+  process.env.PI_E2E_EXTENSIONS_LOCKED_URL = extensionsLocked.base;
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
@@ -445,6 +471,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await plans.stop();
     await diagrams.stop();
     await guarded.stop();
+    await extensionsLocked.stop();
     await embedLockedProjects.stop();
     await embedProjectsMode.stop();
     await embedRootMode.stop();

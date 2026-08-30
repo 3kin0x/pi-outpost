@@ -255,7 +255,18 @@ export interface AgentState {
   created: string | null;
   /** Latest tree lifecycle request, so controls close only on a real acknowledgement and retain errors. */
   fileOperation: FileOperationState | null;
-  extensionPaths: string[];
+  /**
+   * Extension files the runtime reported loading, or null when it cannot report an
+   * inventory at all. Null is not the empty list: an RPC child builds its own
+   * extensions, and drawing "none loaded" there states a fact nobody supplied.
+   */
+  extensionPaths: string[] | null;
+  /** Extension paths from the configuration file — shown, never editable here. */
+  configuredExtensionPaths: string[];
+  /** Extension paths added through Settings — the list the user may edit. */
+  userExtensionPaths: string[];
+  /** Whether the deployment forbids editing extension paths from the interface. */
+  extensionLock: boolean;
   tools: { name: string; active: boolean }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
   /**
@@ -320,7 +331,10 @@ const initialState: AgentState = {
   createError: null,
   created: null,
   fileOperation: null,
-  extensionPaths: [],
+  extensionPaths: null,
+  configuredExtensionPaths: [],
+  userExtensionPaths: [],
+  extensionLock: false,
   tools: [],
   sandbox: null,
   userSkillPaths: [],
@@ -458,7 +472,10 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     writableRoot: message.writableRoot,
     gitAvailable: message.gitAvailable === true,
     credentials: message.credentials ?? null,
-    extensionPaths: message.extensionPaths ?? [],
+    extensionPaths: message.extensionPaths ?? null,
+    configuredExtensionPaths: message.configuredExtensionPaths ?? [],
+    userExtensionPaths: message.userExtensionPaths ?? [],
+    extensionLock: message.extensionLock === true,
     tools: message.tools ?? [],
     sandbox: message.sandbox ?? null,
     userSkillPaths: message.userSkillPaths ?? [],
@@ -1517,6 +1534,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     updateConfig: (update: {
       sandbox?: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string };
       userSkillPaths?: string[];
+      userExtensionPaths?: string[];
     }) => {
       dispatch({ type: "settings_apply_started" });
       sendMessage({ type: "update_config", ...update });
