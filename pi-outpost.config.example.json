@@ -1,33 +1,62 @@
 {
   "cwd": "./workspace",
   "agentDir": "./.pi-outpost-agent",
+  "agentRuntime": { "mode": "embedded" },
   "sandbox": {
     "root": "./workspace",
     "allowWrite": true,
     "writableRoot": "./workspace/scratch",
     "allowBash": false
   },
+  "sandboxLocks": {
+    "root": false,
+    "writableRoot": false,
+    "allowWrite": false,
+    "allowBash": true
+  },
+  "workspaceLock": false,
+  "workspaceIdleTimeoutMs": 1800000,
   "files": {
     "watch": true
   },
   "pdf": {
     "maxBytes": 26214400
   },
+  "docx": {
+    "maxBytes": 26214400
+  },
+  "xlsx": {
+    "maxBytes": 26214400
+  },
+  "pptx": {
+    "maxBytes": 26214400
+  },
+  "structuredExchange": {
+    "maxBytes": 4000000
+  },
   "noExtensions": true,
   "extensionPaths": [],
   "extensionScripts": [],
+  "extensionLock": false,
   "noSkills": true,
   "skillPaths": [],
   "noPromptTemplates": true,
   "promptPaths": ["./my-prompts"],
   "webContext": true,
+  "offline": false,
+  "updateCheck": true,
   "allowedModels": [{ "provider": "anthropic", "id": "claude-sonnet-5" }],
   "appendSystemPrompt": ["Only discuss topics related to this project."],
+  "openBrowser": true,
+  "openIn": "window",
   "server": {
     "port": 3141,
     "host": "127.0.0.1",
     "allowedOrigins": ["https://app.example.com"],
     "token": "replace-with-long-random-secret-or-use-PI_OUTPOST_TOKEN"
+  },
+  "embed": {
+    "workspaceControls": "settings"
   },
   "branding": {
     "title": "My Assistant",
