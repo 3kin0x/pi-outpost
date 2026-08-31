@@ -1117,6 +1117,10 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
   useEffect(() => {
     writableRootRef.current = state.writableRoot;
   }, [state.writableRoot]);
+  // Set once the browser root has been asked for at all (the sidebar's first
+  // open, or a manual refresh). From then on the connection-driven effect below
+  // keeps the root listed across reconnects and snapshots — see its comment.
+  const rootListingRequestedRef = useRef(false);
 
   const sendMessage = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
@@ -1127,6 +1131,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
 
   const requestDirectory = useCallback(
     (path: string, preserveEntries = false) => {
+      if (path === "") rootListingRequestedRef.current = true;
       const requestId = `dir:${crypto.randomUUID()}`;
       dispatch({ type: "dir_list_started", path, requestId, preserveEntries });
       sendMessage({ type: "list_directory", path, requestId });
@@ -1185,10 +1190,43 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
    * conditional on it: `fs.watch` is best-effort by contract, and a filesystem
    * that emits no events — a network mount, a spent inotify budget, watching
    * turned off — is indistinguishable from a workspace that did not change.
+   *
+   * The browser root is re-listed unconditionally, not through `relistDirectory`:
+   * a tree that came up empty — a reconnect delivered a fresh `hello`, which
+   * clears `fileTree`, before the sidebar could re-request the root — holds no
+   * keys to iterate, and this button is exactly where someone reaches for a way
+   * out of an empty tree. Everything else still goes through `relistDirectory`,
+   * which skips directories nothing is showing.
    */
   const refreshFileTree = useCallback(() => {
-    for (const path of Object.keys(fileTreeRef.current)) relistDirectory(path);
-  }, [relistDirectory]);
+    requestDirectory("", true);
+    for (const path of Object.keys(fileTreeRef.current)) {
+      if (path !== "") relistDirectory(path);
+    }
+  }, [relistDirectory, requestDirectory]);
+
+  /**
+   * Keep the file-browser root listed for as long as a connection needs it.
+   *
+   * The root used to be requested once, from the sidebar's mount effect. But
+   * every WebSocket (re)connect answers with a `hello`, and `applySnapshot`
+   * clears `fileTree` — so a drop while the sidebar was open left the tree
+   * permanently empty, and the refresh button (which only re-lists what the tree
+   * already holds) could not bring it back. A browser reload was the only way
+   * out.
+   *
+   * Once the root has been asked for even once (`rootListingRequestedRef`), this
+   * re-requests it on every (re)connect that comes back without it — first
+   * connect, reconnect, `hello`, `workspace_switched`, `update_config_ack`, all
+   * in one place. Kept lazy: a session whose Files panel is never opened still
+   * lists nothing. `dir_list_started` then sets the entry to `"loading"`, so this
+   * fires at most once per gap.
+   */
+  useEffect(() => {
+    if (!state.connected || !rootListingRequestedRef.current) return;
+    if (fileTreeRef.current[""] !== undefined) return;
+    requestDirectory("");
+  }, [state.connected, state.fileTree, requestDirectory]);
 
   // Branding is pure config (no session dependency) and served as soon as the process
   // starts — fetch it directly instead of waiting on the WS "hello", which only arrives
