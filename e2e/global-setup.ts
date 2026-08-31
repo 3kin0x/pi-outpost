@@ -464,6 +464,26 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: progressFakeConfig } },
   );
 
+  // A seventh server whose model accepts a proper subset of the thinking levels —
+  // no `high` — so the model-aware slider can be read back.
+  const thinkingRoot = await makeWorkspace({ "readme.md": "# thinking\n" });
+  const thinkingFakeConfig = path.join(thinkingRoot, "fake-rpc.json");
+  await writeFile(
+    thinkingFakeConfig,
+    JSON.stringify({
+      state: { sessionId: "thinking-1", model: { provider: "local", id: "qwen3.8", name: "Qwen3.8", reasoning: true } },
+      commands_: { get_available_thinking_levels: { data: { levels: ["low", "medium", "xhigh"] } } },
+    }),
+  );
+  const thinking = await startServer(
+    thinkingRoot,
+    {
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")], startupTimeoutMs: 20_000 },
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: thinkingFakeConfig } },
+  );
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_PRIMARY_PROJECT = await realpath(root);
@@ -478,6 +498,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_PLANS_URL = plans.base;
   process.env.PI_E2E_NOTIFY_URL = notifications.base;
   process.env.PI_E2E_PROGRESS_URL = progress.base;
+  process.env.PI_E2E_THINKING_URL = thinking.base;
   process.env.PI_E2E_PLAN_SOURCE = sourceSession;
   process.env.PI_E2E_PLAN_FORK = forkSession;
   process.env.PI_E2E_EXTENSIONS_DIR = extensionsDir;
@@ -485,6 +506,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await thinking.stop();
     await progress.stop();
     await notifications.stop();
     await plans.stop();

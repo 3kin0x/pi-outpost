@@ -113,6 +113,23 @@ export const MIN_SESSION_QUERY_LENGTH = 2;
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
+/**
+ * The thinking levels a model accepts, as a runtime reports them, sanitised for
+ * the wire: only names this build knows, in the canonical `THINKING_LEVELS`
+ * order, with `off` always a stop — thinking can be turned off whatever the
+ * model's effort tiers are. An input that names nothing recognisable (an empty
+ * list, or a runtime that could not answer) yields `undefined`, which a client
+ * reads as "offer the full set".
+ */
+export function normalizeThinkingLevels(levels: unknown): ThinkingLevel[] | undefined {
+  if (!Array.isArray(levels)) return undefined;
+  const known = new Set(
+    levels.filter((l): l is ThinkingLevel => typeof l === "string" && (THINKING_LEVELS as readonly string[]).includes(l)),
+  );
+  if (known.size === 0) return undefined;
+  return THINKING_LEVELS.filter((l) => l === "off" || known.has(l));
+}
+
 /** Slash command available in the composer (extension command, prompt template or skill). */
 export interface CommandInfo {
   /** Invocation name without the leading slash (e.g. "commit", "skill:review"). */
@@ -388,6 +405,12 @@ export interface SessionSnapshot {
   sessionId: string;
   model: string;
   thinkingLevel: string;
+  /**
+   * The ordered thinking levels the current model accepts. Absent when the
+   * runtime cannot report them (an RPC dialect with no command for it); a client
+   * then offers the full `THINKING_LEVELS` set.
+   */
+  thinkingLevels?: ThinkingLevel[];
   isStreaming: boolean;
   items: ChatItem[];
   models: ModelChoice[];
@@ -495,7 +518,8 @@ export type ServerMessage =
   | { type: "sessions"; sessions: SessionSummary[] }
   /** Answer to search_sessions — sent only to the client that asked. */
   | { type: "session_search_results"; requestId: string; query: string; sessions: SessionSummary[] }
-  | { type: "model_changed"; model: string; reasoning: boolean }
+  /** `thinkingLevels` is the new model's accepted set; absent means "offer the full set". */
+  | { type: "model_changed"; model: string; reasoning: boolean; thinkingLevels?: ThinkingLevel[] }
   /**
    * A credential was stored or a provider declared: the model list and the credential
    * status changed, nothing else did. Deliberately *not* a session snapshot — the

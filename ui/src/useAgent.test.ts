@@ -1282,6 +1282,72 @@ describe("credentials_changed", () => {
     expect(result.current.state.modelSupportsReasoning).toBe(true);
     expect(result.current.state.errors).toHaveLength(1);
   });
+
+  it("drops a stale accepted-levels list when credentials change the model", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    await waitFor(() => expect(result.current.state.connected).toBe(true));
+    act(() =>
+      mockWs!.receive({
+        type: "hello",
+        sessionId: "s",
+        branding: {},
+        model: "local/a",
+        thinkingLevel: "off",
+        thinkingLevels: ["off", "low", "medium"],
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        contextUsage: null,
+        gitAvailable: false,
+      }),
+    );
+    await waitFor(() => expect(result.current.state.thinkingLevels).toEqual(["off", "low", "medium"]));
+    act(() =>
+      mockWs!.receive({
+        type: "credentials_changed",
+        model: "local/b",
+        models: [{ provider: "local", id: "b", reasoning: true }],
+        credentials: { usableModel: true, hasProvider: true, hasKey: true, providers: [] },
+      }),
+    );
+    expect(result.current.state.thinkingLevels).toBeUndefined();
+  });
+});
+
+describe("thinking levels", () => {
+  it("stores the accepted-levels list from the snapshot", async () => {
+    const { result } = renderHook(() => useAgent());
+    act(() => mockWs!.open());
+    await waitFor(() => expect(result.current.state.connected).toBe(true));
+    act(() =>
+      mockWs!.receive({
+        type: "hello",
+        sessionId: "s",
+        branding: {},
+        model: "local/qwen",
+        thinkingLevel: "medium",
+        thinkingLevels: ["off", "low", "medium", "xhigh"],
+        models: [],
+        commands: [],
+        isStreaming: false,
+        items: [],
+        contextUsage: null,
+        gitAvailable: false,
+      }),
+    );
+    await waitFor(() => expect(result.current.state.thinkingLevels).toEqual(["off", "low", "medium", "xhigh"]));
+  });
+
+  it("replaces the list on model_changed, and clears it when the message omits one", async () => {
+    const result = await connected();
+    act(() => mockWs!.receive({ type: "model_changed", model: "local/a", reasoning: true, thinkingLevels: ["off", "high"] }));
+    await waitFor(() => expect(result.current.state.thinkingLevels).toEqual(["off", "high"]));
+
+    act(() => mockWs!.receive({ type: "model_changed", model: "local/b", reasoning: true }));
+    expect(result.current.state.thinkingLevels).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

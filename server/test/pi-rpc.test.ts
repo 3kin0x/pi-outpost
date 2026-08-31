@@ -205,7 +205,16 @@ describe("RpcRuntimeStarts", () => {
     assert.deepEqual(launch.argv, ["--session-dir", path.join(root, "sessions"), "--mode", "rpc"]);
     assert.deepEqual(
       (await commands(commandLog)).map((command) => command.type),
-      ["get_state", "get_available_models", "get_commands", "get_messages", "get_tree", "get_entries", "get_session_stats"],
+      [
+        "get_state",
+        "get_available_models",
+        "get_commands",
+        "get_available_thinking_levels",
+        "get_messages",
+        "get_tree",
+        "get_entries",
+        "get_session_stats",
+      ],
     );
   });
 
@@ -259,6 +268,23 @@ describe("RpcRuntimeStarts", () => {
       omitResponseIdsFor: ["get_commands", "get_available_commands"],
     });
     assert.deepEqual(runtime.snapshot().commands, []);
+    assert.equal(runtime.ok, true);
+  });
+
+  test("carries the model's accepted thinking levels when the child reports them", async () => {
+    const { runtime } = await startFake({
+      commands_: { get_available_thinking_levels: { data: { levels: ["low", "medium", "xhigh", "bogus"] } } },
+    });
+    // sanitised: unknown name dropped, canonical order, `off` ensured
+    assert.deepEqual(runtime.snapshot().thinkingLevels, ["off", "low", "medium", "xhigh"]);
+  });
+
+  test("omits the accepted levels when the child has no command for them", async () => {
+    const { runtime } = await startFake({
+      failures: { get_available_thinking_levels: "Unknown command: get_available_thinking_levels" },
+      omitResponseIdsFor: ["get_available_thinking_levels"],
+    });
+    assert.equal(runtime.snapshot().thinkingLevels, undefined);
     assert.equal(runtime.ok, true);
   });
 

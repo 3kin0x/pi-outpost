@@ -72,6 +72,12 @@ export interface RuntimeSnapshot {
   sessionFile?: string;
   model?: RuntimeModel;
   thinkingLevel: ThinkingLevel;
+  /**
+   * The ordered levels the current model actually accepts — a subset of
+   * `THINKING_LEVELS`. Absent when the runtime cannot say (an RPC dialect with no
+   * command for it), and a client then offers the full set.
+   */
+  thinkingLevels?: ThinkingLevel[];
   isStreaming: boolean;
   /** Conversation history on the active branch, oldest first. */
   messages: unknown[];

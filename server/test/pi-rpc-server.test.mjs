@@ -153,3 +153,51 @@ test("RPC server fails readiness closed and refuses a later prompt after child e
     await server.stop();
   }
 });
+
+test("the snapshot carries the model's accepted thinking levels, and they follow a model change", async () => {
+  const root = await makeWorkspace();
+  const fakeConfig = path.join(root, "fake-rpc.json");
+  await writeFile(
+    fakeConfig,
+    JSON.stringify({
+      state: { sessionId: "levels-1", model: { provider: "local", id: "qwen3.8", name: "Qwen3.8", reasoning: true } },
+      commands_: {
+        // first answer at bootstrap, second after set_model
+        get_available_thinking_levels: [
+          { data: { levels: ["low", "medium", "xhigh"] } },
+          { data: { levels: ["off", "high"] } },
+        ],
+        get_available_models: {
+          data: {
+            models: [
+              { provider: "local", id: "qwen3.8", name: "Qwen3.8", reasoning: true },
+              { provider: "local", id: "other", name: "Other", reasoning: true },
+            ],
+          },
+        },
+      },
+    }),
+  );
+
+  const server = await startServer(
+    root,
+    {
+      sandbox: undefined,
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [FAKE], startupTimeoutMs: 5_000 },
+    },
+    { env: { FAKE_PI_RPC_CONFIG: fakeConfig } },
+  );
+  const client = connect(server.wsUrl());
+  try {
+    const hello = await client.waitFor("hello");
+    assert.deepEqual(hello.thinkingLevels, ["off", "low", "medium", "xhigh"], "sanitised: off ensured, canonical order");
+
+    client.send({ type: "set_model", provider: "local", id: "other" });
+    const changed = await client.waitFor("model_changed");
+    assert.equal(changed.model, "local/other");
+    assert.deepEqual(changed.thinkingLevels, ["off", "high"], "the new model's set, not the old one");
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});

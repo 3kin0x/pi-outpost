@@ -1099,6 +1099,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
                 model={state.model}
                 models={state.models}
                 thinkingLevel={state.thinkingLevel}
+                thinkingLevels={state.thinkingLevels}
                 modelSupportsReasoning={state.modelSupportsReasoning}
                 isStreaming={state.isStreaming}
                 contextUsage={state.contextUsage}

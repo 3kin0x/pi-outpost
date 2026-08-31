@@ -8,6 +8,8 @@ interface ModelBarProps {
   model: string;
   models: ModelChoice[];
   thinkingLevel: string;
+  /** The levels the current model accepts, in order; absent means offer the full set. */
+  thinkingLevels?: ThinkingLevel[];
   modelSupportsReasoning: boolean;
   isStreaming: boolean;
   contextUsage: ContextUsage | null;
@@ -139,18 +141,24 @@ function ContextRing({ usage }: { usage: ContextUsage | null }) {
 }
 
 /**
- * 🧠 button showing the current level; clicking opens a popover with a slider
- * scale (off → xhigh). Replaces the old "think: level" dropdown.
+ * 🧠 button showing the current level; clicking opens a popover with a slider.
+ * The slider's stops are the levels the current model accepts — every stop is a
+ * level `onSetThinking` will keep, so a selection never snaps back. A model whose
+ * accepted set has a gap (`low, medium, xhigh`, no `high`) is presented as three
+ * ordered stops, not a range with a dead position. Absent a list, it offers the
+ * full set, which is what it did before it was model-aware.
  */
 function ThinkingControl({
   thinkingLevel,
+  thinkingLevels,
   isStreaming,
   onSetThinking,
-}: Pick<ModelBarProps, "thinkingLevel" | "isStreaming" | "onSetThinking">) {
+}: Pick<ModelBarProps, "thinkingLevel" | "thinkingLevels" | "isStreaming" | "onSetThinking">) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const active = thinkingLevel !== "off";
-  const index = Math.max(0, THINKING_LEVELS.indexOf(thinkingLevel as ThinkingLevel));
+  const levels = thinkingLevels && thinkingLevels.length > 0 ? thinkingLevels : THINKING_LEVELS;
+  const index = Math.max(0, levels.indexOf(thinkingLevel as ThinkingLevel));
 
   useEffect(() => {
     if (!open) return;
@@ -195,17 +203,17 @@ function ThinkingControl({
           <input
             type="range"
             min={0}
-            max={THINKING_LEVELS.length - 1}
+            max={levels.length - 1}
             step={1}
             value={index}
-            onChange={(e) => onSetThinking(THINKING_LEVELS[Number(e.target.value)])}
+            onChange={(e) => onSetThinking(levels[Number(e.target.value)])}
             aria-label="Thinking level"
             aria-valuetext={thinkingLevel}
             className="w-full accent-amber-500"
           />
           <div className="mt-0.5 flex justify-between font-mono text-[9px] text-zinc-400 dark:text-zinc-600">
-            <span>{THINKING_LEVELS[0]}</span>
-            <span>{THINKING_LEVELS[THINKING_LEVELS.length - 1]}</span>
+            <span>{levels[0]}</span>
+            <span>{levels[levels.length - 1]}</span>
           </div>
         </div>
       )}
@@ -239,6 +247,7 @@ export function ModelBar(props: ModelBarProps) {
       {modelSupportsReasoning && (
         <ThinkingControl
           thinkingLevel={thinkingLevel}
+          thinkingLevels={props.thinkingLevels}
           isStreaming={isStreaming}
           onSetThinking={props.onSetThinking}
         />

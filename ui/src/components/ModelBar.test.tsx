@@ -148,6 +148,29 @@ describe("ModelBar controls", () => {
     expect(props.onSetThinking).toHaveBeenCalledWith(THINKING_LEVELS[2]);
   });
 
+  it("offers only the levels the model accepts, gap and all", () => {
+    const props = renderFull({ thinkingLevel: "medium", thinkingLevels: ["off", "low", "medium", "xhigh"] });
+    fireEvent.click(screen.getByTitle("thinking level"));
+    const slider = screen.getByLabelText("Thinking level") as HTMLInputElement;
+    expect(slider.max).toBe("3"); // four stops: off, low, medium, xhigh — no high
+    expect(slider.value).toBe("2"); // current "medium" sits at index 2 of the supplied list
+    fireEvent.change(slider, { target: { value: "3" } });
+    expect(props.onSetThinking).toHaveBeenCalledWith("xhigh"); // the last stop, reached without passing "high"
+  });
+
+  it("renders at the first stop when the current level is not one the model accepts", () => {
+    renderFull({ thinkingLevel: "high", thinkingLevels: ["off", "low", "medium", "xhigh"] });
+    fireEvent.click(screen.getByTitle("thinking level"));
+    expect((screen.getByLabelText("Thinking level") as HTMLInputElement).value).toBe("0");
+  });
+
+  it("falls back to the full set when no accepted-levels list is supplied", () => {
+    renderFull({ thinkingLevel: "off" });
+    fireEvent.click(screen.getByTitle("thinking level"));
+    const slider = screen.getByLabelText("Thinking level") as HTMLInputElement;
+    expect(slider.max).toBe(String(THINKING_LEVELS.length - 1));
+  });
+
   it("closes the thinking popover on Escape", () => {
     renderFull();
     fireEvent.click(screen.getByTitle("thinking level"));
