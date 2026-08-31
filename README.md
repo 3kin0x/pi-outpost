@@ -5,9 +5,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-brightgreen)](https://nodejs.org)
 
-**A web chat UI for the [pi coding agent](https://github.com/earendil-works/pi)** — run it as a standalone app, or embed it as a Shadow-DOM-isolated widget inside any web app. Built directly on pi's [SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md).
+**A web interface for the [pi coding agent](https://github.com/earendil-works/pi)** — run it
+as a standalone app on your own machine or server, install it as a desktop app, or embed it
+as a Shadow-DOM-isolated widget inside another web application.
 
-A Node server runs the agent — a pi `AgentSession` in its own process, or a supervised `pi --mode rpc` child — and bridges it to a React chat UI over WebSocket: streaming responses, collapsible thinking blocks, live tool-execution cards (bash, edit, …), steering while the agent runs, and abort.
+One Node process runs the agent and serves the interface: streaming answers, live tool
+cards, a file browser and editor, git, PDF and Office documents, several projects open at
+once — each with its own sandbox, history and agent — and a sandbox you decide the shape of.
 
 <p align="center">
   <img src="docs/screenshots/chat-light.png" alt="pi-outpost, light theme" width="49%">
@@ -16,130 +20,349 @@ A Node server runs the agent — a pi `AgentSession` in its own process, or a su
 
 ## Contents
 
-- [Features](#features)
+- [What you get](#what-you-get)
 - [Quick start](#quick-start)
-- [Production (single process)](#production-single-process)
 - [Model credentials](#model-credentials)
-- [Standalone configuration](#standalone-configuration)
+- [Projects](#projects)
+- [Settings from the browser](#settings-from-the-browser)
+- [Configuration file](#configuration-file)
+- [Command line](#command-line)
+- [Staying up to date](#staying-up-to-date)
+- [Running it as a service](#running-it-as-a-service)
+- [Installing it as an app](#installing-it-as-an-app)
 - [Embedding](#embedding)
 - [Work Plans](#work-plans)
-- [Architecture](#architecture)
+- [Development](#development)
 
-## Features
+## What you get
 
-- Streaming chat (markdown, thinking blocks, mermaid diagrams, inline images and workspace file links)
-- Tool execution cards with live output — hide them behind a toggle when they drown the conversation. Results are rendered by what they are, not by which tool produced them: a `git diff` becomes per-file diff blocks with `open` and `history` beside each path, a code search becomes hits grouped by file, an edit or write becomes the diff it applied — and anything unrecognized stays the raw output, one keystroke away under every specialized view
-- Steer / follow-up while streaming, abort
-- Model + thinking-level selectors
-- First-run setup in the browser: no credentials, no cryptic failure — paste an API key, or declare your own OpenAI-compatible endpoint (see [Model credentials](#model-credentials))
+### The conversation
+
+- Streaming answers in markdown, with collapsible thinking blocks, mermaid diagrams, math,
+  inline images and clickable workspace file links
+- Tool cards with live output and, for tools that report it, a progress bar. One toggle
+  hides them all when they drown the conversation, and the preference sticks
+- Results rendered by what they are, not by which tool produced them: a `git diff` becomes
+  per-file diffs with `open` and `history` beside each path, a search becomes hits grouped
+  by file, an edit becomes the diff it applied — the raw output always one keystroke away
+- Steer or follow up while the agent is streaming, and abort
+- Model and thinking-level selectors; tokens and price per turn, plus a session-analysis
+  panel — cost across turns, tool calls ranked by output size or failure, every row jumping
+  back to the message that produced it
 - Sessions: list, resume, rename, delete, and full-text search across saved transcripts
-- Conversation tree: edit a past message to re-ask it, and the old exchange stays reachable as a branch you can navigate back to
-- Persistent Work Plans: for non-trivial work the agent maintains an explicit hierarchy of objectives, dependencies, resources, and verification state beside the conversation. It is working state that guides the work—not merely a progress report—and the initial UI is deliberately read-only
-- File browser: lazy-loaded tree, full-size viewer (syntax-highlighted, Markdown rendered) and an editor with save inside the writable zone — all confined to the same root the agent's own tools can see. A file with a rendering — a structured-exchange document, or Markdown — can be shown **beside** it: the editor in one half and the rendering in the other, following what is typed rather than what was last saved. Text under revision does not parse for most of the keystrokes that produce it, so the last rendering that was good stays put, marked as no longer matching the editor and saying why, instead of the picture vanishing on every `{`. Entries outside `sandbox.writableRoot` render dimmed, and truncated entries reveal their complete name on hover. Create a file or folder from the tree itself: `+` on a writable directory opens an input where the file will land (a trailing `/` makes it a folder), and a new file opens straight into the editor. Files can also be opened with the operating system's associated application, renamed, or deleted after confirmation. Drag a writable file onto a writable directory to move it, or drag a read-only file there to copy it
-- PDF: select one in the tree and it renders in the viewer (pages, zoom, keyboard paging); the agent reads its text and tables through a `pdf_extract` tool — no shell, no external binary, no OCR
-- Office documents: `docx_extract`, `xlsx_extract` and `pptx_extract` give the agent Word text and tables, one markdown table per spreadsheet sheet (values rendered from their number format), and slide structure with speaker notes. Same rules as `pdf_extract` — available wherever `read` is, never behind `allowBash`, confined to the sandbox root, each with its own size ceiling. Every extractor also takes `output_path`: write the whole document to a workspace file and get a summary back, instead of paging through it and then writing it out, which spends the context twice
-- Structured results: a tool can hand back **data** — a graph, a sequence, a table — and the UI renders it natively instead of showing text that describes a picture nobody can check. When the document names a `target` it becomes an approval gate: someone is agreeing to a change an external authority will then apply. Versioned schema, a conformance suite, and a standalone validator a producer elsewhere can run against its own output; the agent gets a `present_structure` tool and a bundled skill
-- Structured documents as files: a file whose content declares the structured-exchange schema opens as the diagram it describes, not as the JSON it is written in — recognised by what it declares, never by its extension, so any other JSON keeps the display it had. Same rendering, same narrowing by kind, same export as in a conversation, with the document as written one click away. A file that declares the contract and fails it is reported as such, naming what failed — the reference validator's diagnosis, since the browser's own check is a verdict without reasons
-- Figures that leave: any diagram exports as a self-contained SVG — its own geometry, text and colour, no stylesheet, no script, no font file, nothing of this application's. Narrow it by kind first and the figure is narrowed with it and says so inside the picture, so one separated from its document is never mistaken for the whole. The agent gets the same act as a `write_structure_figure` tool: point it at a document, hide the kinds this view is not about, and it writes an `.svg` to reference from a report it is writing. One list of shapes is computed once and drawn twice — React in the browser, a serializer without one — so the figure in a report and the diagram it came from cannot drift
-- Agent runtime: embedded pi SDK by default, or a supervised `pi --mode rpc` child process (see [`agentRuntime`](#standalone-configuration)) — same browser protocol either way
-- In-browser sandbox settings: tweak root, writable root, write and bash permissions from the gear menu — no config file edit or server restart needed
-- Attachments: drop or paste images and text files into the composer; the file you are previewing attaches itself as an `@path` reference, so the agent reads it on demand instead of the prompt carrying its content. Dropping a PDF, `.docx`, `.xlsx` or `.pptx` uploads it into the workspace and attaches the **path** — which is what the extraction tools take, and why a document is no longer refused as oversized text or as an unsupported binary
-- Git: uncommitted-change badges in the tree, per-file diffs in the viewer, log and commit inspection, and a per-file history graph (renames followed) that diffs the file between any two revisions — the working tree included. Commit rows truncate to keep the graph dense; hovering one gives back the whole subject
-- Session cost: tokens and price per turn in the model bar, and a session-analysis panel behind it — tokens/cost charted across turns, tool calls ranked by output size or failure, requests ranked by what they cost, every row jumping back to the message that produced it
-- Slash commands with autocompletion (`/` in the composer: extension commands, prompt templates, skills)
-- File mentions with autocompletion (`@` in the composer: recursive name search over the browser root, inserts the relative path)
-- Extension "Custom UI" support: dialogs, notifications, status/widgets, editor prefill (see below)
-- Standalone mode: own config dir, file sandbox, branding (see below)
-- Embeddable widget (`@pi-outpost/embed`): mount into any web app, isolated via Shadow DOM (see below)
+- Conversation tree: edit a past message to re-ask it; the old exchange stays reachable as a
+  branch you can navigate back to
+- Slash commands (`/`) and file mentions (`@`) with autocompletion, and a button back to the
+  latest message when you have scrolled up
+- Attachments: drop or paste images and text files into the composer. A PDF, `.docx`,
+  `.xlsx` or `.pptx` is uploaded into the workspace and attached as a **path**, so the agent
+  reads it with its extraction tools instead of the prompt carrying its content
+
+### The workspace
+
+- [Several projects open at once](#projects), each with its own agent, sandbox, sessions and
+  history — switch between them while work continues in the ones you are not watching, and
+  get a browser notification when a background project needs an answer
+- File browser: lazy-loaded tree, syntax-highlighted viewer, Markdown rendering, and an
+  editor that saves inside the writable zone. Create, rename, move, copy, delete, or open a
+  file with the system's own application; anything outside the writable zone is dimmed
+- Split view: a Markdown or structured document renders beside the editor, following what
+  you type rather than what was last saved
+- Git: uncommitted-change badges in the tree, per-file diffs, log and commit inspection, and
+  a per-file history graph (renames followed) that diffs any two revisions, working tree
+  included
+- PDF in the viewer (pages, zoom, keyboard paging); the agent reads its text and tables
+  through `pdf_extract` — no shell, no external binary, no OCR
+- Office documents: `docx_extract`, `xlsx_extract` and `pptx_extract` give the agent Word
+  text and tables, one markdown table per spreadsheet sheet, and slide structure with
+  speaker notes. Each takes an `output_path`, to write the whole document to a file instead
+  of spending the context on it twice
+- Structured results: a tool can hand back **data** — a graph, a sequence, a table — and the
+  interface draws it, with an approval gate when the document names a `target`. Files that
+  declare the schema open as the diagram they describe, and any diagram exports as a
+  self-contained SVG. See [`docs/structured-exchange.md`](docs/structured-exchange.md)
+- [Work Plans](#work-plans): for non-trivial work the agent keeps an explicit hierarchy of
+  objectives, dependencies and verification state beside the conversation
+
+### Setting it up and shipping it
+
+- First run in the browser asks for credentials instead of failing cryptically: paste an API
+  key, or declare your own OpenAI-compatible endpoint
+- [Settings from the browser](#settings-from-the-browser): sandbox permissions and roots,
+  skill and extension directories — persisted to your configuration file, no restart
+- A sandbox that decides what the agent can read, write and run, per project
+- [Installable as an app](#installing-it-as-an-app), and downloadable as a single executable
+  with no Node.js needed
+- [Embeddable widget](#embedding) (`@pi-outpost/embed`) with its own workspace policy
+- Extension "Custom UI" support: dialogs, notifications, status badges, widgets, editor
+  prefill
+- Two agent runtimes behind the same interface: the bundled pi SDK, or a supervised
+  `pi --mode rpc` child process
 
 ## Quick start
 
-Requirements: Node ≥ 24 (what the pi SDK itself requires), and **model credentials**. You do *not* need [pi](https://github.com/earendil-works/pi) installed — its SDK is bundled here.
-
-### Run it
+Requirements: Node ≥ 24 (what the pi SDK itself requires), and **model credentials**. You do
+*not* need [pi](https://github.com/earendil-works/pi) installed — its SDK is bundled here.
 
 ```bash
 npx pi-outpost init   # writes a starter pi-outpost.config.json here
-npx pi-outpost        # serves the UI on http://127.0.0.1:3141/
+npx pi-outpost        # serves the interface on http://127.0.0.1:3141/
 ```
 
-The server opens the interface in your browser once it is listening. `--no-open`, or
-`"openBrowser": false`, if you would rather it did not.
+Once it is listening, the interface opens in a window of its own — no tabs, no address bar.
+`--open-in browser` puts it in a normal browser tab instead, and `--no-open` (or
+`"openBrowser": false`) leaves it closed.
 
-**Or download a single file with nothing installed at all** — no Node, no npm.
-Each release carries an executable per platform under
-[Releases](https://github.com/laurentftech/pi-outpost/releases): the server and the
-web UI are inside it. Unsigned, so macOS and Windows warn on first launch; see
-[docs/sea-packaging.md](docs/sea-packaging.md), which also covers building one
-yourself with `npx pi-outpost build-exe`.
+Open it with no credentials and it asks for them: pick a provider and paste an API key, or
+declare an OpenAI-compatible endpoint of your own (see [Model
+credentials](#model-credentials)). Nothing to restart — the chat works as soon as you save.
 
-Open the UI with no credentials and it asks for them: pick a provider and paste an API key, or declare an OpenAI-compatible endpoint of your own (see [Model credentials](#model-credentials)). Nothing to restart — the chat is usable as soon as you save.
+**No Node, no npm?** Each release carries a single executable per platform under
+[Releases](https://github.com/laurentftech/pi-outpost/releases), server and interface
+inside. They are unsigned, so macOS and Windows warn on first launch; see
+[docs/sea-packaging.md](docs/sea-packaging.md), which also covers building one yourself with
+`npx pi-outpost build-exe`.
 
-pi-outpost never starts without a configuration file: the agent's working directory, its tools and its sandbox are decided there, and guessing them from whatever directory you happen to be standing in is not a decision anyone wants made for them. `init` writes the safe version of that file (read-only, no bash) for you to open up as needed.
+### Why it insists on a configuration file
 
-### Develop against the repository
+pi-outpost never starts without one: the agent's working directory, its tools and its
+sandbox are decided there, and guessing them from whatever directory you happen to be
+standing in is not a decision anyone wants made for them. `init` writes the safe version of
+that file — read-only, no bash — for you to open up as needed:
+
+```json
+{
+  "cwd": ".",
+  "agentRuntime": { "mode": "embedded" },
+  "sandbox": { "root": ".", "allowWrite": false, "allowBash": false },
+  "server": { "port": 3141, "host": "127.0.0.1" },
+  "branding": { "title": "π" }
+}
+```
+
+Not sure which file is in force, or why a setting has the value it has? **`pi-outpost
+config`** prints the resolved configuration and the file it came from, without starting
+anything.
+
+> **Security note.** The server binds to `127.0.0.1` and validates the WebSocket `Origin`
+> header. The agent can be given bash, edit and write tools — never expose this server on a
+> network without a sandbox **and** an auth token: set `server.token` (or the
+> `PI_OUTPOST_TOKEN` environment variable, which wins) to a long random secret, e.g.
+> `openssl rand -hex 32`. Binding off loopback without one is **refused**, not merely
+> discouraged. Clients authenticate by opening `http://host:3141/?token=<secret>` once
+> (stored locally, stripped from the URL) or via the embed widget's `token` option. Use a
+> reverse proxy or Tailscale for transport encryption.
+
+## Model credentials
+
+Credentials come from either **provider environment variables** (`ANTHROPIC_API_KEY`, …) or
+an **`auth.json` in the agent directory** — `<agentDir>/auth.json`, which is
+`~/.pi/agent/auth.json` unless your configuration names its own `agentDir`.
+
+| | |
+|---|---|
+| **The interface** | With no usable model, pi-outpost shows a setup screen instead of a chat that could only fail. Paste a key, or declare your own endpoint. It writes `<agentDir>/auth.json` and starts working immediately — no restart |
+| **`pi-outpost login`** | For headless servers, where no browser will ever open the interface:<br>`pi-outpost login --provider anthropic` (prompts, not echoed)<br>`echo "$KEY" \| pi-outpost login --provider anthropic` (scripted)<br>The key has no flag on purpose — argv is readable by anyone who can list processes |
+| **Environment** | `export ANTHROPIC_API_KEY=…` before starting. Nothing is written to disk |
+
+### An OpenAI-compatible endpoint of your own
+
+A corporate gateway, vLLM, SGLang, Ollama, LM Studio — anything speaking the OpenAI API.
+Declare it from the setup screen (name, base URL, key, model id) and it is written to
+`<agentDir>/models.json` in pi's own format, so it survives restarts and any pi process
+sharing that directory sees it.
+
+The two **compatibility** checkboxes on that form are not a detail to skip. Many
+OpenAI-compatible servers reject the `developer` role and the `reasoning_effort` field that
+pi sends to reasoning-capable models — and when they do, *every* turn fails, with an error
+that never names the cause. Unchecking them makes pi send a plain `system` message and drop
+`reasoning_effort`.
+
+### Behind a TLS-inspecting proxy
+
+A corporate proxy that re-signs certificates with an internal CA makes Node reject the
+chain, which surfaces as a bare `fetch failed`. Trust the CA and everything verifies:
 
 ```bash
-npm install
-npm run dev
+export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem
 ```
 
-- Web UI: http://localhost:5173 (Vite dev server, proxies `/ws`, `/branding`, `/health` to the agent server)
-- Agent server: ws://127.0.0.1:3141/ws
+pi-outpost detects that failure and names this variable rather than leaving you to guess.
+There is deliberately **no configuration key that disables TLS verification**: it would
+disable it for every outbound connection — including the one carrying your API key — and a
+flag in a file gets copied between machines and outlives the reason it was added.
 
-`npm run dev` passes the repository's committed [`pi-outpost.config.dev.json`](pi-outpost.config.dev.json) — the same code path, the same rule, no special case for developers.
+## Projects
 
-### Tests
+One server can hold several projects at once. Each has its own agent session, its own
+sandbox, its own file tree and its own session history; the agent keeps working in the
+projects you are not looking at.
 
-```bash
-npm run test --workspace server        # integration tests: no model auth needed, no tokens spent
-npm run test --workspace ui            # component unit tests (vitest, jsdom, testing-library)
-npm run test:live --workspace server   # drives real agent turns (needs model auth, costs tokens)
-npm run test:linux                     # the ubuntu CI leg — suite then coverage — on Linux, non-root
-```
+- **Open one** from the project control in the header: browse the server's filesystem and
+  pick a directory. It is usable straight away, and it is still there after a restart
+- **Switch** without a reload. A turn running in the project you leave runs to completion,
+  and its result is waiting when you come back. Unsent composer text is kept per project
+- **See what is happening elsewhere**: every project reports whether it is stopped, starting,
+  idle, working, or waiting for you. A project that needs an answer — a permission prompt, an
+  extension question — raises a badge in the selector, and a browser notification naming that
+  project when the window is in the background. Nothing ever interrupts the project you are
+  looking at
+- **Close one** to release its resources; the sessions on disk stay, so reopening the same
+  directory finds them again. Closing is refused while its agent is running a turn, and the
+  last remaining project cannot be closed
+- Projects that nobody is using are retired after `workspaceIdleTimeoutMs` (30 minutes by
+  default, `0` disables it) and rebuilt transparently on next use. A project running a turn
+  is never retired
 
-`test:linux` needs Docker and exists for one class of bug that a macOS or Windows
-checkout cannot see, because it does not fail there — it *passes* there. A test asserting
-"this path cannot be written" by naming `/proc/...` succeeds instantly where there is no
-`/proc`, and on Linux the write never returns; the runner then reports every test as
-passing and prints no summary, because a test file that never exits never reports. Run it
-before pushing anything that touches paths, permissions, signals, or file watching.
+A configuration where no project has ever been opened behaves exactly as a single-project
+server: `cwd` alone. `"workspaceLock": true` pins the server to one project and removes the
+open/switch/close controls entirely.
 
-It runs both server steps of the ubuntu leg — `npm test` and then `npm run test:coverage` —
-because each has gone red on its own while the other was green, and coverage runs on no
-other platform. That step failed on `main` with 1250 tests passing and none failing: npm
-children spawned by the code under test inherited `NODE_V8_COVERAGE`, were killed at their
-timeout mid-write, and the parent's reporter died parsing the truncated file. Nothing short
-of running the real step would have shown it.
+## Settings from the browser
 
-It runs as a non-root user on purpose: as root, every "refuses an unwritable path"
-assertion in this repository passes for the wrong reason. Dependencies are cached in a
-Docker volume and reinstalled only when `package-lock.json` changes, so a second run costs
-about what a local one does. `--fresh` ignores that cache; `--shell` drops you into the
-same container; any other arguments replace the command, which is how you run one step at a
-time while iterating (`npm run test:linux -- npm test --workspace server`).
+The gear menu changes what the agent may do, without editing a file or restarting the
+server. Accepted changes are written to the configuration file that is loaded and applied to
+a fresh agent session immediately.
 
-Server integration tests boot a real server against a throwaway workspace (isolated `agentDir` — your
-sessions and extensions are never touched) and talk to it over HTTP/WebSocket. See `server/test/README.md`.
+| What | Notes |
+|---|---|
+| Sandbox root and writable root | Browse the server's directories and pick one — no need to know the host's paths by heart |
+| Write and bash permissions | The same switches as `sandbox.allowWrite` / `sandbox.allowBash` |
+| Skill directories | Added under `userSkillPaths` |
+| Extension directories | Added under `userExtensionPaths`; a directory is enough, its extensions are discovered |
 
-UI component tests run under vitest with jsdom and `@testing-library/react`, covering components in
-`ui/src/components/` and utilities in `ui/src/util/`. They need no model auth and cost no tokens.
+Two lists, deliberately: what the **configuration file** declares (`skillPaths`,
+`extensionPaths`) belongs to the deployment, and the interface can neither rewrite nor
+remove it. What is added from Settings lives under its own key, and is the only thing the
+interface offers to remove.
 
-> **Security note:** the server binds to `127.0.0.1` and validates the WebSocket `Origin` header. The agent has bash/edit/write tools — never expose this server on a network without the sandbox config below **and** an auth token: set `server.token` (or the `PI_OUTPOST_TOKEN` env variable, which wins) to a long random secret, e.g. `openssl rand -hex 32`. Binding off loopback without one is now **refused**, not merely discouraged: the WebSocket accepts connections with no `Origin` header (a local process already has shell access, so the check would be theatre), and with no token every request is valid — so `--host 0.0.0.0` alone would hand the agent to anything that can route to the host. Clients authenticate by opening `http://host:3141/?token=<secret>` once (stored locally, stripped from the URL) or via the embed widget's `token` option. Use a reverse proxy or Tailscale for transport encryption.
+A deployment can forbid any of it: `sandboxLocks` locks individual sandbox fields,
+`extensionLock` forbids extension-path changes (skill paths stay editable — loading code is
+not the same act as pointing the agent at more text to read). What is locked is refused by
+the server, not merely hidden by the interface.
 
-## Production (single process)
+If the file cannot be written, nothing is applied and the session in front of you is left
+exactly as it was.
 
-```bash
-npm run start
-```
+## Configuration file
 
-Builds the web UI once (`web/dist`) and starts **one** Node process that serves the UI, `/ws`, `/branding`, and `/health` together on `server.port` (default `3141`) — nothing else to run or keep track of. Point a process manager (systemd, pm2, Docker `CMD`, …) at this one command; there's no separate dev server to start or stop.
+The server reads the **first** of these that exists, and only that one — configurations are
+never merged, so the file you are reading is the configuration that is running:
 
-Unlike `npm run dev`, this reads *your* configuration (`./pi-outpost.config.json`, or any of the locations below) — not the repository's dev config. With none, it refuses to start and says so.
+1. `--config <path>`
+2. `--profile <name>` → `<user config dir>/profiles/<name>.json`
+3. `$PI_OUTPOST_CONFIG`
+4. `$PI_OUTPOST_PROFILE` → `<user config dir>/profiles/<name>.json`
+5. `./pi-outpost.config.json` (the directory you launch from)
+6. `<user config dir>/config.json`
 
-Rebuild (`npm run build --workspace web`) and restart after any UI change — this mode has no hot reload, unlike `npm run dev` above.
+`<user config dir>` is `$XDG_CONFIG_HOME/pi-outpost`, or `~/.config/pi-outpost`. A file you
+name explicitly must exist; the two implicit locations are simply skipped. Found nothing? The
+server refuses to start and tells you to run `pi-outpost init`.
 
-Need to distribute a version that doesn't require Node.js installed at all (e.g. a Windows `.exe` for non-technical users)? See [`docs/sea-packaging.md`](docs/sea-packaging.md).
+**Profiles.** `--profile work` (or `$PI_OUTPOST_PROFILE`) reads
+`<user config dir>/profiles/work.json`. A profile is an ordinary configuration file — same
+keys, same rules — so `pi-outpost --profile work` from anywhere gives you the setup you
+configured once.
+
+**Precedence.** For any setting that appears in more than one place: **flag > environment
+variable > file > default** — except the fields you can change from Settings, where what you
+applied wins and persists. Environment variables: `PI_OUTPOST_PORT` (falling back to `PORT`,
+which platforms inject), `PI_OUTPOST_HOST`, `PI_OUTPOST_CWD`, `PI_OUTPOST_AGENT_DIR`,
+`PI_OUTPOST_TOKEN`, `PI_OFFLINE`.
+
+One exception, and it is deliberate: **a sandbox that grants write or bash but names no
+`sandbox.root` refuses a `--cwd`/`PI_OUTPOST_CWD` override.** Such a sandbox falls back to
+`cwd`, so an inherited variable (a shell profile, a CI job, a compose file) could otherwise
+turn "write inside my project" into "write inside `/`" without touching the file that
+granted it. Name the root, and the grant says what it covers.
+
+Relative paths are resolved against the configuration file's directory. A full example lives
+in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
+
+### Workspace and sandbox
+
+| Key | Effect |
+|-----|--------|
+| `cwd` | Agent working directory, and the default project |
+| `agentDir` | Own config dir (auth, models, settings, sessions) — fully separate from `~/.pi/agent`. It starts with **no credentials**: see [Model credentials](#model-credentials) |
+| `sandbox.root` | Read-only zone: read/ls/grep/find are confined to this directory, symlinks resolved. Defaults to `cwd` |
+| `sandbox.allowWrite` | Adds edit/write, confined to `sandbox.writableRoot` (default `false`) |
+| `sandbox.writableRoot` | Read-write zone: a subdirectory of `root` that edit/write are further confined to. Defaults to `root` itself |
+| `sandbox.allowBash` | Adds bash — **not path-confined**, explicit opt-in (default `false`) |
+| `sandboxLocks` | Which sandbox fields Settings may **not** change: `root`, `writableRoot`, `allowWrite`, `allowBash` |
+| `workspaceLock` | Pin the server to one project: opening, closing and switching are refused, and no control is offered |
+| `workspaceIdleTimeoutMs` | How long an unused project stays alive before it is retired (default `1800000` — 30 min; `0` never retires). A project running a turn is never retired |
+| `openProjects` | The set of open projects. **Written by the server** when you open or close one — not hand-authored |
+| `files.watch` | Watch the directories the file browser has listed, so the tree follows the workspace whoever changed it (default `true`). Set `false` where a watch is a liability — a network mount that emits no events, a spent inotify budget. The tree's ↻ control re-lists by hand either way |
+
+### Agent resources
+
+| Key | Effect |
+|-----|--------|
+| `agentRuntime` | `{ "mode": "embedded" }` (default) keeps the pi SDK session in this process; `{ "mode": "rpc", "executable": "pi", "args": [] }` supervises a `pi --mode rpc` child. See [Agent runtimes](#agent-runtimes) |
+| `tools` | Tool allowlist when no sandbox is configured, e.g. `["read","grep","find","ls"]` |
+| `noExtensions` / `extensionPaths` / `extensionScripts` | Disable extension discovery, or name extension files and directories the deployment loads |
+| `userExtensionPaths` | Extension directories added from Settings. Written by the server; `extensionPaths` stays yours |
+| `extensionLock` | Forbid adding or removing extension paths from Settings |
+| `noSkills` / `skillPaths` | Disable skill discovery, or name skill files and directories. `skillPaths` loads even under `noSkills`. Disabling matters for real isolation: skills otherwise also load from `~/.agents/skills` and from `.agents/skills` walked up from `cwd`, neither of which `agentDir` scopes |
+| `userSkillPaths` | Skill directories added from Settings, loaded after `skillPaths` |
+| `noPromptTemplates` / `promptPaths` | Same for prompt templates (`agentDir` and the project's `cwd/.pi/prompts`) |
+| `allowedModels` | Restrict the model switcher to these `{ "provider", "id" }` pairs. Without it, every built-in model whose provider has auth is listed — often more variants than a deployment actually serves |
+| `systemPrompt` / `systemPromptFile` | Replace pi's built-in system prompt entirely (mutually exclusive). Project context files, skills and `appendSystemPrompt` still layer on top |
+| `appendSystemPrompt` | Extra paragraphs appended after the system prompt |
+| `webContext` | Tell the agent its replies render in this interface — markdown, inline images, file links (default `true`) |
+| `offline` | Never fetch remote model catalogs. On a host that cannot reach them, that request hangs and stalls every credential change by 20 s. Built-in and `models.json` providers are unaffected. `--offline` and `PI_OFFLINE` also turn it on |
+
+### Documents
+
+| Key | Effect |
+|-----|--------|
+| `pdf.maxBytes` | Largest PDF the viewer may load and `pdf_extract` may read (default `26214400` — 25 MB). Every other file keeps the 1 MB limit |
+| `docx.maxBytes` / `xlsx.maxBytes` / `pptx.maxBytes` | The same ceiling, per format, for the Office extractors |
+| `structuredExchange.maxBytes` | Largest structured-exchange document the viewer may open (default `4000000`, the contract's own ceiling for schema version 1). Recognition is by the document's declared `schema`, never by its extension, so other JSON keeps the 1 MB preview limit. A larger value is clamped to the contract's |
+
+### Server and interface
+
+| Key | Effect |
+|-----|--------|
+| `server.port` | Port to listen on (default `3141`). `--port` and `PI_OUTPOST_PORT`/`PORT` override it |
+| `server.host` | Address to bind (default `127.0.0.1` — only change this if you have read the security note above) |
+| `server.allowedOrigins` | Extra exact Origins accepted on the WebSocket, and given CORS headers on the HTTP endpoints |
+| `server.token` | Shared secret required on the WebSocket and `/branding` (`PI_OUTPOST_TOKEN` overrides). Mandatory in practice off loopback |
+| `openBrowser` | Whether starting the server opens the interface (default: wherever a desktop session exists) |
+| `openIn` | `"window"` (its own window, the default) or `"browser"` (a tab). `openBrowser` still decides *whether* |
+| `branding` | `title` (default `"π"`), `welcome` message, `accentColor` |
+| `branding.defaultTheme` | `"light"` \| `"dark"` \| `"system"` (default), used when the client has no stored preference |
+| `branding.allowThemeToggle` | Show the theme toggle (default `true`). Set `false` when a host app drives the theme |
+| `embed.workspaceControls` | What a mounted widget offers: `"settings"` (default, one project), `"root"` (a compact root chooser), `"projects"` (open/switch/close) |
+| `updateCheck` / `updateRegistry` | See [Staying up to date](#staying-up-to-date) |
+
+### Theming
+
+Light and dark themes ship with the interface. Precedence: a local pick from the toggle
+(persisted in `localStorage`) or an explicit override (the embed widget's `theme` option or
+`setTheme()`, or a host page's `postMessage`) beats `branding.defaultTheme`, which falls
+back to the OS preference.
+
+### Agent runtimes
+
+`agentRuntime.mode` decides what actually runs the agent. `embedded` (the default) keeps a
+pi SDK session inside this process. `rpc` supervises a `pi --mode rpc` child — to match an
+existing pi installation, or to isolate a crash.
+
+pi-outpost appends `--mode rpc` and derives `--session-dir` itself, so `args` may contain
+neither, nor `--tools`/`--system-prompt` (those come from `tools`/`systemPrompt`), nor any
+flag that would make the child print something and exit. The rest of the configuration
+travels to the child, and pi-outpost's own tools go with it, so the same file describes the
+same agent either way.
+
+Two things to know before switching: **`sandbox` cannot be combined with `rpc`** and the
+pair is refused at load — the sandbox is a replacement toolset this server builds, and a
+child builds its own; isolate it with a container or a dedicated user instead. And a few
+features have no RPC equivalent and say so rather than failing quietly: storing credentials,
+declaring a provider, changing the sandbox from Settings, tree navigation, and editing a
+past message. Sessions are not auto-titled there either.
 
 ## Command line
 
@@ -154,33 +377,40 @@ pi-outpost build-exe [options]
 pi-outpost update [--check]   move to the newest published version, or just look
 ```
 
-> **Upgrading from a pre-`0.1.0` clone?** Three behaviours changed. The server now **refuses to start without a configuration file** (it used to fall back to a plain local pi: your launch directory as workspace, full toolset, bash enabled) — run `pi-outpost init`. `PI_OUTPOST_PORT`/`PORT` now **override** `server.port` instead of being overridden by it, in line with `PI_OUTPOST_TOKEN`, which always won. And `PI_CWD` is now `PI_OUTPOST_CWD`.
-
 | Flag | Effect |
 |------|--------|
 | `--config <path>` | Configuration file to use |
 | `--profile <name>` | Use `<user config dir>/profiles/<name>.json` |
 | `--cwd <dir>` | Directory the agent works in |
 | `--agent-dir <dir>` | pi config/session store (default `~/.pi/agent`) |
-| `login --provider <name>` | Store a key for that provider (prompted, or read from stdin — never a flag) |
 | `--port <n>` / `--host <addr>` | Where to listen (default `127.0.0.1:3141`) |
+| `--offline` | Never fetch remote model catalogs |
+| `--open` / `--no-open` | Open the interface once listening (default: wherever a desktop session exists) |
+| `--open-in <shape>` | `window` (its own window, the default) or `browser` (a tab) |
 | `-h, --help` / `-v, --version` | |
+| `login --provider <name>` | Store a key for that provider (prompted, or read from stdin — never a flag) |
 | `init --global` | Write to the user config directory instead of `./` |
 | `init --force` | Overwrite an existing file |
-| `--open` / `--no-open` | Open the interface in your browser once listening (default: wherever a desktop session exists) |
 | `build-exe --out <path>` | Where to write the executable (default `./pi-outpost`, `.exe` on Windows) |
 | `build-exe --force` | Replace an existing file at that path |
-| `update` | Move this installation to the newest published version |
 | `update --check` | Report what is available and install nothing |
 
-### Staying up to date
+There is deliberately **no `--token` flag**: a secret on the command line is readable by
+anyone who can list processes. Use `PI_OUTPOST_TOKEN` or the file's `server.token`.
 
-The server checks once a day whether a newer version has been published, and says so
-in one line if there is. **It never installs anything on its own** — `pi-outpost
-update` is the only thing that installs, and only when you run it without `--check`.
+When the server cannot start — a port already taken, an unreadable directory, a bad
+configuration — it says which of those it was in a sentence, not a stack trace. A window
+launched from a file manager, which would otherwise close with the process and take the
+message with it, waits for a keypress first.
 
-What `update` does depends on how this copy was installed, which it works out rather
-than asking:
+## Staying up to date
+
+The server checks once a day whether a newer version has been published, and says so in one
+line if there is. **It never installs anything on its own** — `pi-outpost update` is the
+only thing that installs, and only when you run it without `--check`.
+
+What `update` does depends on how this copy was installed, which it works out rather than
+asking:
 
 | How you run it | What `update` does |
 |------|------|
@@ -189,139 +419,88 @@ than asking:
 | `npx pi-outpost` | Explains that your next `npx` already fetches the newest version |
 | Standalone executable | Refuses to overwrite itself, and points at the [releases](https://github.com/laurentftech/pi-outpost/releases) |
 
-A check that fails is never reported as "up to date": `update --check` says it could
-not check, and why, and exits non-zero.
-
-Two settings control it, and they are separate from `offline` on purpose:
+A check that fails is never reported as "up to date": `update --check` says it could not
+check, and why, and exits non-zero.
 
 | Key | Effect |
 |------|------|
 | `updateCheck` | `false` disables checking entirely. `true` enables it **even under `offline`**. Unset, `offline` decides |
 | `updateRegistry` | The registry to query, when npm's own configuration does not name the right one |
 
-`offline` means "remote model catalogs are unreachable", which is not the same network
-as a package registry — a host air-gapped from the former can still reach an internal
-npm proxy, and that is exactly the deployment where knowing a release exists matters.
-So `offline` is a default for update checking, not a veto.
+`offline` means "remote model catalogs are unreachable", which is not the same network as a
+package registry — a host air-gapped from the former can still reach an internal npm proxy,
+and that is exactly the deployment where knowing a release exists matters. So `offline` is a
+default for update checking, not a veto.
 
-There is deliberately **no `--token` flag**: a secret on the command line is readable by anyone who can list processes. Use `PI_OUTPOST_TOKEN` or the file's `server.token`.
-
-## Model credentials
-
-Credentials come from either **provider environment variables** (`ANTHROPIC_API_KEY`, …) or an **`auth.json` in the agent directory** — `<agentDir>/auth.json`, which is `~/.pi/agent/auth.json` unless your config names its own `agentDir`. Point that key at an isolated directory (as the sandbox advice below suggests) and it starts empty: that is the case this section exists for.
-
-Three ways to fill it:
-
-| | |
-|---|---|
-| **The UI** | With no usable model, pi-outpost shows a setup screen instead of a chat that could only fail. Paste a key, or declare your own endpoint. It writes `<agentDir>/auth.json` and starts working immediately — no restart. |
-| **`pi-outpost login`** | For headless servers, where no browser will ever open the UI:<br>`pi-outpost login --provider anthropic` (prompts, not echoed)<br>`echo "$KEY" \| pi-outpost login --provider anthropic` (scripted)<br>The key has no flag on purpose — argv is readable by anyone who can list processes, the same reason there is no `--token`. |
-| **Environment** | `export ANTHROPIC_API_KEY=…` before starting. Nothing is written to disk. |
-
-### An OpenAI-compatible endpoint of your own
-
-A corporate gateway, vLLM, SGLang, Ollama, LM Studio — anything speaking the OpenAI API. Declare it from the UI's setup screen (name, base URL, key, model id) and it is written to `<agentDir>/models.json` in pi's own format, so it survives restarts and any pi process sharing that directory sees it.
-
-The two **compatibility** checkboxes on that form are not a detail to skip. Many OpenAI-compatible servers reject the `developer` role and the `reasoning_effort` field that pi sends to reasoning-capable models — and when they do, *every* turn fails, with an error that never names the cause. Unchecking them makes pi send a plain `system` message and drop `reasoning_effort`.
-
-### Behind a TLS-inspecting proxy
-
-A corporate proxy that re-signs certificates with an internal CA makes Node reject the chain, which surfaces as a bare `fetch failed`. Trust the CA, and everything verifies normally:
+## Running it as a service
 
 ```bash
-export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem
+npm run start
 ```
 
-pi-outpost detects that failure and names this variable rather than leaving you to guess. There is deliberately **no configuration key that disables TLS verification**: it would disable it for every outbound connection — including the one carrying your API key — and a flag in a file gets copied between machines and outlives the reason it was added. `NODE_TLS_REJECT_UNAUTHORIZED=0` remains available to whoever sets it knowingly, at launch, for as long as that shell lives.
+Builds the interface once and starts **one** Node process serving the app, `/ws`,
+`/branding` and `/health` together on `server.port` — nothing else to run or keep track of.
+Point a process manager (systemd, pm2, Docker `CMD`, …) at that one command.
 
-## Standalone configuration
+It reads *your* configuration (`./pi-outpost.config.json`, or any of the locations above);
+with none, it refuses to start and says so. There is no hot reload here: rebuild
+(`npm run build --workspace web`) and restart after a UI change.
 
-The server reads the **first** of these that exists, and only that one — configurations are never merged, so the file you are reading is the configuration that is running:
+To distribute a version that needs no Node.js at all — a Windows `.exe` for non-technical
+users, say — see [`docs/sea-packaging.md`](docs/sea-packaging.md).
 
-1. `--config <path>`
-2. `--profile <name>` → `<user config dir>/profiles/<name>.json`
-3. `$PI_OUTPOST_CONFIG`
-4. `$PI_OUTPOST_PROFILE` → `<user config dir>/profiles/<name>.json`
-5. `./pi-outpost.config.json` (the directory you launch from)
-6. `<user config dir>/config.json`
+## Installing it as an app
 
-`<user config dir>` is `$XDG_CONFIG_HOME/pi-outpost`, or `~/.config/pi-outpost`. A file you name explicitly must exist; the two implicit locations are simply skipped. Found nothing? The server refuses to start and tells you to run `pi-outpost init`.
+The standalone interface declares itself to the browser, so it can be installed from the
+address bar and opened from the desktop or taskbar: its own window, its own name and icon,
+no tabs.
 
-Not sure which file won, or why a setting has the value it has? **`pi-outpost config`** prints the resolved configuration and the file it came from, without starting anything. Every start also logs the file it loaded and the sandbox it is actually enforcing.
+It is the same interface, on the same server, with the same sessions — installation changes
+where it runs, never what it is. It also caches nothing of itself: with the server down, an
+installed app says it cannot reach it rather than showing a stale copy of a previous build.
 
-**Profiles.** `--profile work` (or `$PI_OUTPOST_PROFILE`) reads `<user config dir>/profiles/work.json`. A profile is an ordinary config file — same keys, same rules — so `pi-outpost --profile work` from anywhere gives you the setup you configured once.
-
-**Precedence.** For any setting that appears in more than one place: **flag > environment variable > config file > default**. Environment variables: `PI_OUTPOST_PORT` (falling back to `PORT`, which platforms inject), `PI_OUTPOST_HOST`, `PI_OUTPOST_CWD`, `PI_OUTPOST_AGENT_DIR`, `PI_OUTPOST_TOKEN`, `PI_OFFLINE` (the pi SDK's own variable, honoured here so one spelling covers both layers).
-
-One exception, and it is deliberate: **a sandbox that grants write or bash, but names no `sandbox.root`, refuses a `--cwd`/`PI_OUTPOST_CWD` override.** Such a sandbox falls back to `cwd`, so an inherited variable (a shell profile, a CI job, a compose file) could otherwise turn "write inside my project" into "write inside `/`" without touching the file that granted it. Name the root, and the grant says what it covers. A read-only sandbox has no such hazard and simply follows the workspace.
-
-See [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
-
-| Key | Effect |
-|-----|--------|
-| `cwd` | Agent working directory |
-| `agentDir` | Own config dir (auth, models, settings, sessions) — fully separate from `~/.pi/agent`. It starts with **no credentials**: see [Model credentials](#model-credentials) |
-| `sandbox.root` | Read-only zone: read/ls/grep/find are confined to this directory, symlinks resolved. Defaults to `cwd` if omitted |
-| `sandbox.allowWrite` | Adds edit/write, confined to `sandbox.writableRoot` (or the whole root if unset) (default `false`) |
-| `sandbox.writableRoot` | Read-write zone: subdirectory of `root` that edit/write are further confined to. Must be inside `root`. Defaults to `root` itself |
-| `sandbox.allowBash` | Adds bash — **not path-confined**, explicit opt-in (default `false`) |
-| `agentRuntime` | Which runtime serves the browser: `{ "mode": "embedded" }` (default) keeps the pi SDK session in this process; `{ "mode": "rpc", "executable": "pi", "args": [] }` supervises a `pi --mode rpc` child. pi-outpost appends `--mode rpc` and derives `--session-dir` itself, so `args` may not contain either, nor `--tools`/`--system-prompt` (those come from `tools`/`systemPrompt`), nor any flag that would make the child print something and exit. A failed executable stops startup — there is no silent fallback to embedded. **`sandbox` cannot be combined with `rpc`** and the pair is refused at load: the sandbox is a replacement toolset this server builds, and a child builds its own |
-| `files.watch` | Whether the server watches the directories the file browser has listed, so the tree follows the workspace whoever changed it — the agent through bash, another editor, a file moved in Finder or Explorer (default `true`). Only listed directories are watched, so the cost is bounded by what was actually expanded rather than by workspace size. Set `false` on hosts where a watch is a liability — a network mount that emits no events, or a spent inotify budget. The tree's ↻ control re-lists by hand either way |
-| `pdf.maxBytes` | Largest PDF the viewer may load, in bytes (default `26214400` — 25 MB). Every other file keeps the 1 MB limit. The `pdf_extract` tool refuses a PDF above the same ceiling |
-| `docx.maxBytes` / `xlsx.maxBytes` / `pptx.maxBytes` | Same ceiling, per format, for `docx_extract` / `xlsx_extract` / `pptx_extract` |
-| `structuredExchange.maxBytes` | Largest structured-exchange document the viewer may open as a file, in bytes (default `4000000` — the contract's own byte ceiling for schema version 1). Recognition is by the document's declared `schema`, never by its extension, so this ceiling applies to the documents and not to JSON in general: any other JSON file keeps the 1 MB preview limit. A value above the contract ceiling is clamped to it — a deployment may only be more careful than the published contract, never less |
-| `tools` | Tool allowlist in non-sandbox mode, e.g. `["read","grep","find","ls"]` |
-| `noExtensions` | Disable extension discovery entirely |
-| `extensionPaths` | Explicit extension `.ts`/`.mjs` files to load (resolved relative to the config file's directory). Loaded via the pi SDK's jiti-based loader — works in dev mode and the npm-published bundle |
-| `extensionScripts` | Extension `.mjs` files loaded at runtime via `import()` — works in dev mode and the npm-published bundle. Each file must default-export an `ExtensionFactory`. Paths are resolved relative to the config file's directory |
-| `noSkills` | Disable skill discovery entirely. Needed for real isolation: even with a custom `agentDir`, skills also auto-load from `~/.agents/skills` (hardcoded to the real home directory) and from `.agents/skills` walked up from `cwd` to the git root — neither is scoped by `agentDir` |
-| `skillPaths` | Explicit skill files or directories to load, in addition to discovery. Loaded even under `noSkills` — naming a skill and being given nothing is the worse surprise. Paths are resolved relative to the config file's directory |
-| `userSkillPaths` | Skill directories added from the Settings menu, loaded after `skillPaths`. Written by the server when settings are applied — `skillPaths` stays yours: the interface can neither rewrite nor remove what you declared there |
-| `noPromptTemplates` | Disable prompt template auto-discovery entirely (both `agentDir` and the project's `cwd/.pi/prompts`). Relevant when `cwd` points at a real project: it doubles as a resource-discovery root, so that project's own prompt templates load too unless disabled |
-| `promptPaths` | Explicit prompt template directories to load (in addition to auto-discovered ones). Paths are resolved relative to the config file's directory |
-| `allowedModels` | Restrict the model switcher to these `{ "provider", "id" }` pairs. Without it, every built-in model whose provider has configured auth is listed — often more variants than a given deployment (e.g. an air-gapped internal endpoint) actually serves |
-| `systemPrompt` / `systemPromptFile` | Replace pi's built-in system prompt entirely (mutually exclusive; `systemPromptFile` is a path to a text file). Project context files, skills, and `appendSystemPrompt` are still layered on top |
-| `appendSystemPrompt` | Array of extra paragraphs appended after the (built-in or custom) system prompt |
-| `webContext` | Inject a short web-UI context block into the system prompt so the agent knows its replies render in this UI (markdown, inline images, file links). Default `true`; set `false` for tightly curated prompts |
-| `offline` | Never fetch remote model catalogs. On a host that cannot reach them — air-gapped, or behind a proxy that does not route them — that request hangs and stalls every credential change by 20 s. Built-in and `models.json` providers are unaffected: the catalog only adds metadata for models the SDK already knows. Default `false`; `--offline` and `PI_OFFLINE` also turn it on |
-| `server.port` | Port to listen on (default `3141`). `--port` and `PI_OUTPOST_PORT`/`PORT` override it |
-| `server.host` | Host to bind to (default `127.0.0.1` — only change this if you understand the security note above) |
-| `server.allowedOrigins` | Extra exact Origins accepted on the WebSocket (embed the UI as a tab in another app) |
-| `server.token` | Shared secret required on the WebSocket and `/branding` when set (`PI_OUTPOST_TOKEN` env overrides). Mandatory in practice when `server.host` is not loopback |
-| `branding` | `title` (default `"π"`), `welcome` message, `accentColor` — applied by the web UI |
-| `branding.defaultTheme` | `"light"` \| `"dark"` \| `"system"` (default) — used when the client has no stored preference |
-| `branding.allowThemeToggle` | Show the theme toggle button (default `true`). Set `false` when embedding in a host app that drives the theme itself — see below |
-
-### Theming
-
-The UI ships with light and dark themes. Precedence: a local pick from the toggle button (persisted in `localStorage`) or an explicit override (the embed widget's `theme` option / `setTheme()`, or a host page's `postMessage`) beats `branding.defaultTheme`, which falls back to the OS preference (`"system"`).
-
-Relative paths are resolved against the config file's directory.
+A mounted widget claims nothing on its host page: no manifest, no icon, no change to whether
+the host page itself is installable.
 
 ## Embedding
 
-`embed/` publishes `@pi-outpost/embed`, mounting pi-outpost into any element inside a **Shadow DOM** — fully isolated from the host app's CSS in both directions, React supplied as a peer dependency (not bundled), everything else (Tailwind, markdown/mermaid/highlight.js, the shared protocol types) compiled into the package.
+`embed/` publishes `@pi-outpost/embed`, mounting pi-outpost into any element inside a
+**Shadow DOM** — fully isolated from the host app's CSS in both directions, React supplied as
+a peer dependency, everything else compiled into the package.
 
 ```js
 import { mount } from "@pi-outpost/embed";
 
 const widget = mount(document.getElementById("assistant"), {
   serverUrl: "https://your-pi-outpost-server", // omit for same-origin
-  theme: "dark", // optional; falls back to branding.defaultTheme, then "system"
+  theme: "dark",          // optional; falls back to branding.defaultTheme, then "system"
+  token: "…",             // optional; a host that already authenticates its user sees no token screen
+  workspace: "/srv/projects/acme", // optional; which project this widget shows
 });
 
 widget.setTheme("light"); // change the theme at runtime
-widget.unmount(); // tear down the React tree
+widget.unmount();         // tear down the React tree
 ```
 
-Build it with `npm run build --workspace @pi-outpost/embed` (outputs ESM + CJS to `embed/dist/`, plus a rolled-up `.d.ts`), then publish `embed/` to your own registry.
+Which project a widget shows is the **host's** decision: `workspace` names it by its
+resolved root, and a root that is not open falls back to the default rather than failing.
+What the widget offers *around* it is the server's decision, via
+`embed.workspaceControls`: `settings` (the default — one project, sandbox root editable
+through Settings only), `root` (a compact root chooser in the header) or `projects` (the
+open/switch/close controls the standalone app has). A `workspaceLock` on the server
+suppresses project controls whatever the policy says.
 
-Two things to configure on the server side regardless of deployment topology:
+Two things to configure server-side, whatever the topology:
 
-- **`server.allowedOrigins`**: the widget's WebSocket connection carries the *host page's* origin (e.g. `https://your-app.example.com`), not pi-outpost's own — add it explicitly, even same-domain deployments need this (only `localhost`/`127.0.0.1` are trusted automatically).
-- **CORS**: an origin listed in `server.allowedOrigins` now receives CORS headers on the HTTP endpoints too (`/branding`, `/health`, `/files/raw`, the static app), with cache variants preserved — so a genuinely cross-origin widget works without a proxy in front. The allowlist is the whole of it: no origin outside it is answered.
+- **`server.allowedOrigins`**: the widget's WebSocket carries the *host page's* origin, not
+  pi-outpost's — add it explicitly. Even same-domain deployments need this; only
+  `localhost`/`127.0.0.1` are trusted automatically
+- **CORS**: an origin listed there also receives CORS headers on the HTTP endpoints
+  (`/branding`, `/health`, `/files/raw`, the static app), so a genuinely cross-origin widget
+  works without a proxy in front. The allowlist is the whole of it
 
-A raw iframe (`<iframe src="https://your-pi-outpost-server">`) still works too, and still honors `branding.allowThemeToggle: false` plus the host-driven theme channel:
+A raw iframe (`<iframe src="https://your-pi-outpost-server">`) still works too, and honours
+`branding.allowThemeToggle: false` plus the host-driven theme channel:
 
 ```js
 iframeWindow.postMessage({ type: "pi-outpost:set-theme", theme: "light" }, "https://your-pi-outpost-origin")
@@ -329,13 +508,25 @@ iframeWindow.postMessage({ type: "pi-outpost:set-theme", theme: "light" }, "http
 
 ### Extension Custom UI
 
-Extensions using pi's [Custom UI](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui) (`ctx.ui.select/confirm/input/editor/notify/setStatus/setWidget/setTitle/setEditorText`) work in the web UI: dialogs render as a modal, `notify()` as a toast, `setStatus()` as a header badge, `setWidget()` above/below the composer. The bridge binds with `mode: "rpc"`, mirroring pi's own RPC-mode protocol — so `ctx.hasUI` is `true` and dialogs get real answers, but TUI-only features (`custom()`, custom footers/headers/editors, terminal input, themes) have no web equivalent and are no-ops, same as RPC mode.
+Extensions using pi's [Custom
+UI](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#custom-ui)
+(`ctx.ui.select/confirm/input/editor/notify/setStatus/setWidget/setTitle/setEditorText`) work
+in the web interface: dialogs render as a modal, `notify()` as a toast, `setStatus()` as a
+header badge, `setWidget()` above or below the composer. The bridge binds with `mode: "rpc"`,
+mirroring pi's own RPC-mode protocol — so `ctx.hasUI` is `true` and dialogs get real answers,
+while TUI-only features (`custom()`, custom footers/headers/editors, terminal input, themes)
+are no-ops, same as in RPC mode.
 
-Custom messages (`pi.sendMessage()` with a `customType`, see [Message and Entry Rendering](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#message-and-entry-rendering)) show up too, but without the extension's `MessageRenderer` — that returns a terminal `Component`, which has no browser equivalent. Instead it falls back to pi's own default look (violet card, markdown-rendered content), with any `details` payload collapsed behind a toggle (never verbose JSON by default). Messages sent with `display: false` stay hidden, same as in the TUI.
+Custom messages (`pi.sendMessage()` with a `customType`) show up too, without the extension's
+terminal `MessageRenderer`: they fall back to pi's own default look, with any `details`
+payload collapsed behind a toggle. Messages sent with `display: false` stay hidden, as in the
+TUI.
 
 ### Reporting progress from a tool
 
-A long-running tool can report how far along it is. From `execute`, call the `onUpdate` callback with a `progress` fraction between `0` and `1` in `details` — the same call you already make to stream partial output:
+A long-running tool can report how far along it is. From `execute`, call `onUpdate` with a
+`progress` fraction between `0` and `1` in `details` — the same call you already make to
+stream partial output:
 
 ```ts
 async execute(toolCallId, params, signal, onUpdate) {
@@ -347,17 +538,31 @@ async execute(toolCallId, params, signal, onUpdate) {
 }
 ```
 
-The web UI shows a determinate progress bar on the tool card while the call runs. It is a hint: no label is needed (the streamed text is already shown), a value outside `0..1` is clamped, the bar only appears once the first fraction has arrived, and it disappears when the tool finishes. A tool that reports nothing looks exactly as it does today.
+The interface then shows a determinate bar on the tool card while the call runs. It is a
+hint: a value outside `0..1` is clamped, the bar appears once the first fraction arrives and
+disappears when the tool finishes, and a tool that reports nothing looks exactly as it did.
 
 ## Work Plans
 
-The Work Plan belongs to the agent. For non-trivial work it is the agent's explicit working-state representation: a persistent hierarchy used to decompose objectives, track execution and dependencies, record resources and blockers, and reconcile verification before declaring the work complete. It is not a second activity log or a ceremonial progress report; trivial interactions need no plan.
+The Work Plan belongs to the agent. For non-trivial work it is its explicit working state: a
+persistent hierarchy used to decompose objectives, track execution and dependencies, record
+resources and blockers, and reconcile verification before declaring the work complete. It is
+not a second activity log, and trivial exchanges need no plan.
 
-Tasks use five states: `todo`, `in_progress`, `blocked`, `needs_review`, and `done`. A blocked or review state can carry a reason, and tasks can link to generic resources; workspace resources open directly in the file viewer. The companion panel is read-only in the initial release, so the conversation remains the user's control surface while the agent owns plan mutation through the atomic `work_plan` tool.
+Tasks use five states: `todo`, `in_progress`, `blocked`, `needs_review` and `done`. A blocked
+or review state can carry a reason, and tasks can link to resources; workspace resources open
+directly in the file viewer. The panel is read-only for now, so the conversation stays your
+control surface while the agent owns the plan through its `work_plan` tool.
 
-Each plan is stored beside its session file. It is restored on reconnect and session resume, replaced when the active session changes, copied when a conversation is forked, and independent thereafter. Conversation compaction only summarizes conversational context: it does not remove, summarize, alter, or invalidate the sidecar, and the agent can still read the complete current plan directly without reconstructing it from the compacted summary. Sessions created before Work Plans remain valid and simply open without a panel.
+Each plan is stored beside its session file. It is restored on reconnect and session resume,
+replaced when the active session changes, copied when a conversation is forked, and
+independent thereafter. Compaction summarizes conversational context only: it never alters
+the plan. Sessions created before Work Plans open without a panel.
 
-## Architecture
+## Development
+
+Working *on* pi-outpost — layout, dev server, test suites and why the Linux leg exists — is
+covered in [`docs/development.md`](docs/development.md).
 
 ```
 shared/  (protocol types — events, ChatItem, DialogRequest)
@@ -366,23 +571,27 @@ shared/  (protocol types — events, ChatItem, DialogRequest)
 
 ui/  (React components & hooks)       server/  (Fastify + ws)
 ┌──────────────────────────┐          ┌──────────────────────────┐
-│ @pi-outpost/ui exports  │          │ agent runtime boundary   │
-│ CopyButton, DiffBlocks, │  /ws     │  ├ embedded AgentSession │
-│ ToolCard, useAgent, …   │ ◄───────► │  └ pi --mode rpc child   │
-│                          │  JSON    │ events → lean wire       │
-└────────┬─────────────────┘          └──────────────────────────┘
-         │ import
-         ▼
+│ @pi-outpost/ui exports   │          │ workspace registry       │
+│ CopyButton, DiffBlocks,  │  /ws     │  └ per project: session, │
+│ ToolCard, useAgent, …    │ ◄──────► │    sandbox, files, git   │
+│                          │  JSON    │ agent runtime boundary   │
+└────────┬─────────────────┘          │  ├ embedded AgentSession │
+         │ import                     │  └ pi --mode rpc child   │
+         ▼                            └──────────────────────────┘
 web/  (React + Vite + Tailwind)     embed/  (Shadow-DOM widget)
 ┌──────────────────────┐            ┌──────────────────────────┐
-│ Standalone app       │            │ @pi-outpost/embed         │
-│ (mounts UI from ui/) │            │ (mounts UI from ui/)      │
+│ Standalone app       │            │ @pi-outpost/embed        │
+│ (mounts UI from ui/) │            │ (mounts UI from ui/)     │
 └──────────────────────┘            └──────────────────────────┘
 ```
 
-Sessions persist in `<agentDir>/sessions/` — reconnecting clients receive the full history (`hello` message).
+Sessions persist in `<agentDir>/sessions/`, per project — reconnecting clients receive the
+full history of the project they are bound to.
 
-**Single-tenant by design.** One agent runtime, one `clients` set, and `broadcast()` sends every event to every socket: two people connected to the same server share one conversation, and the sandbox roots are resolved once at startup. That is deliberate for a personal deployment, and the thing to fix before a shared one — see [#4, multi-user support](https://github.com/laurentftech/pi-outpost/issues/4).
+**Single-tenant by design.** Everyone connected to a server shares the same projects and the
+same conversations: there is one identity, not one per person. That is deliberate for a
+personal deployment, and the thing to fix before a shared one — see [#4, multi-user
+support](https://github.com/laurentftech/pi-outpost/issues/4).
 
 ## License
 
