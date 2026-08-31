@@ -1963,13 +1963,128 @@ describe("directory_changed", () => {
     }
   });
 
-  it("asks for nothing on refresh when the tree holds nothing", async () => {
+  it("still asks for the root on refresh when the tree came up empty", async () => {
+    // The reconnect bug: a fresh `hello` clears `fileTree` while the sidebar is
+    // open, so the old refresh — which only re-listed directories the tree was
+    // already holding — had nothing to iterate and did nothing at all. A browser
+    // reload was the only way back. The root is now always re-requested.
     const result = await connected();
     const before = mockWs!.sent.length;
 
     act(() => result.current.refreshFileTree());
 
+    expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "list_directory", path: "" }));
+    // ...and nothing else: there are no held directories to re-list.
+    expect(sentSince(before).filter((frame) => frame.type === "list_directory")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keeping the file-browser root alive across reconnects and session snapshots.
+//
+// The rare-but-painful bug: the sidebar requested the root once, from its mount
+// effect. Every WebSocket (re)connect answers with a `hello`, and applySnapshot
+// clears `fileTree` — so a drop while the sidebar was open left the tree empty,
+// the refresh button (held-directories only) unable to recover it, and a browser
+// page reload the only way back.
+// ---------------------------------------------------------------------------
+describe("file-browser root across snapshots", () => {
+  const helloFrame = (overrides: Record<string, unknown> = {}) => ({
+    type: "hello",
+    sessionId: "sess_2",
+    branding: {},
+    model: "",
+    thinkingLevel: "off",
+    models: [],
+    commands: [],
+    isStreaming: false,
+    items: [],
+    contextUsage: null,
+    gitAvailable: false,
+    ...overrides,
+  });
+  const sentSince = (from: number) => mockWs!.sent.slice(from).map((raw) => JSON.parse(raw) as Record<string, unknown>);
+  const answerRootListing = () =>
+    act(() =>
+      mockWs!.receive({
+        type: "directory_listing",
+        requestId: lastRequestId(),
+        path: "",
+        entries: [{ name: "readme.md", type: "file" }],
+      }),
+    );
+
+  it("re-requests the root on its own when a reconnect snapshot clears the tree", async () => {
+    const result = await connected();
+
+    // The sidebar's first open asks for the root; the server answers it.
+    act(() => result.current.listDirectory(""));
+    answerRootListing();
+    await waitFor(() => expect(result.current.state.fileTree[""]).toHaveLength(1));
+
+    // A reconnect delivers a fresh hello and applySnapshot wipes the tree — but
+    // the hook re-asks for the root on its own, so it lands straight on "loading"
+    // rather than staying blank until someone touches the refresh button.
+    const before = mockWs!.sent.length;
+    act(() => mockWs!.receive(helloFrame()));
+    expect(result.current.state.fileTree[""]).toBe("loading");
+    expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "list_directory", path: "" }));
+
+    // ...and the tree fills back in once the answer lands.
+    answerRootListing();
+    await waitFor(() => expect(result.current.state.fileTree[""]).toHaveLength(1));
+  });
+
+  it("recovers the root after a workspace switch clears the tree with the sidebar open", async () => {
+    const result = await connected();
+    act(() => result.current.listDirectory(""));
+    answerRootListing();
+    await waitFor(() => expect(result.current.state.fileTree[""]).toHaveLength(1));
+
+    const before = mockWs!.sent.length;
+    act(() =>
+      mockWs!.receive(
+        helloFrame({
+          type: "workspace_switched",
+          sessionId: "session-beta",
+          workspace: { root: "/srv/beta", name: "beta", activity: "idle", needsAttention: false },
+        }),
+      ),
+    );
+
+    // The switched-to project's root is requested on its own — only session_replaced
+    // used to do this, so an open sidebar went blank until a manual refresh.
+    expect(result.current.state.fileTree[""]).toBe("loading");
+    expect(sentSince(before)).toContainEqual(expect.objectContaining({ type: "list_directory", path: "" }));
+  });
+
+  it("stays lazy: never asks for the root when the sidebar was never opened", async () => {
+    const result = await connected();
+    const before = mockWs!.sent.length;
+
+    // Two more snapshots, as reconnects and a config reload would deliver them.
+    act(() => mockWs!.receive(helloFrame()));
+    act(() => mockWs!.receive(helloFrame({ sessionId: "sess_3" })));
+    await waitFor(() => expect(result.current.state.sessionId).toBe("sess_3"));
+
     expect(sentSince(before)).not.toContainEqual(expect.objectContaining({ type: "list_directory" }));
+  });
+
+  it("fires once per gap, not in a loop", async () => {
+    const result = await connected();
+    act(() => result.current.listDirectory(""));
+    answerRootListing();
+    await waitFor(() => expect(result.current.state.fileTree[""]).toHaveLength(1));
+
+    const before = mockWs!.sent.length;
+    act(() => mockWs!.receive(helloFrame()));
+    await waitFor(() =>
+      expect(sentSince(before).filter((frame) => frame.type === "list_directory")).toHaveLength(1),
+    );
+    // `dir_list_started` marks the entry "loading"; the effect must not re-fire
+    // on that state change.
+    await waitFor(() => expect(result.current.state.fileTree[""]).toBe("loading"));
+    expect(sentSince(before).filter((frame) => frame.type === "list_directory")).toHaveLength(1);
   });
 });
 

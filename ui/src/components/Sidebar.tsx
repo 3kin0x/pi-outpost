@@ -60,6 +60,10 @@ export function Sidebar({
 }: SidebarProps) {
   const resize = useResizablePanelWidth(FILES_SIDEBAR_WIDTH);
 
+  // First open arms the browser root. Keeping it listed afterwards — across
+  // reconnects and session snapshots, which clear the tree — is useAgent's job
+  // (see its "keep the file-browser root listed" effect); this only has to fire
+  // the initial request.
   useEffect(() => {
     if (tree[""] === undefined) onExpand("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
