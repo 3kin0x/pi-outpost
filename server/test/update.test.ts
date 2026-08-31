@@ -16,6 +16,7 @@ import {
   cachePath,
   currentEvidence,
   detectChannel,
+  extractSingleVersion,
   fetchLatestVersion,
   isFresh,
   isNewer,
@@ -243,6 +244,23 @@ describe("fetchLatestVersion", () => {
     const result = await fetchLatestVersion("0.8.0", { lookupImpl: never, timeoutMs: 50 });
     assert.equal(result.status, "failed");
     assert.ok(Date.now() - started < 2_000, "the request must not outlive its timeout");
+  });
+});
+
+// openlore: {"domain":"update","requirement":"UpdateChecksUseTheConfiguredRegistry","scenario":"UsesThePackageManagerRegistry","specFile":"openspec/specs/update/spec.md"}
+describe("extractSingleVersion", () => {
+  test("accepts the bare string older npm answers with", () => {
+    assert.equal(extractSingleVersion("9.9.9"), "9.9.9");
+  });
+
+  test("accepts the one-element array npm 12 answers with", () => {
+    assert.equal(extractSingleVersion(["9.9.9"]), "9.9.9");
+  });
+
+  test("refuses anything that is not one version string", () => {
+    for (const answer of [["9.9.9", "9.9.8"], [], { version: "9.9.9" }, 9.9, ""]) {
+      assert.throws(() => extractSingleVersion(answer), /without a version/);
+    }
   });
 });
 

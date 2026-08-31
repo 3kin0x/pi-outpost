@@ -334,7 +334,8 @@ const npmViewLatestVersion: VersionLookup = async (options) => {
           return;
         }
         try {
-          resolve(JSON.parse(stdout.trim()) as unknown);
+          const parsed: unknown = JSON.parse(stdout.trim());
+          resolve(extractSingleVersion(parsed));
         } catch {
           reject(new Error("npm answered without a JSON version"));
         }
@@ -350,6 +351,22 @@ const npmViewLatestVersion: VersionLookup = async (options) => {
     }
   });
 };
+
+/**
+ * Normalise npm's `view <pkg>@latest version --json` answer into one version string.
+ *
+ * npm has returned this field as a bare JSON string (`"9.9.9"`) and, since npm 12, as a
+ * one-element JSON array (`["9.9.9"]`). Both describe the same dist-tag; collapsing them
+ * here keeps the version check immune to which npm is on the PATH. Anything else — an
+ * object, an empty array, a multi-element array — is not "a version", and is refused so
+ * the caller reports a failed check rather than comparing against a guess.
+ */
+export function extractSingleVersion(parsed: unknown): string {
+  const versions = Array.isArray(parsed) ? parsed : [parsed];
+  const strings = versions.filter((value): value is string => typeof value === "string" && value !== "");
+  if (strings.length === 1) return strings[0];
+  throw new Error("npm answered without a version");
+}
 
 /**
  * Preserve update checks for a self-contained executable on a host without npm.
