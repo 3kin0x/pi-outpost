@@ -134,14 +134,14 @@ A source checkout SHALL NOT be compared against the registry at startup, because
 
 ### Requirement: UpdateChecksUseTheConfiguredRegistry
 
-The system SHALL query the package registry the host is configured to use, rather than a fixed public address. It SHALL take the registry from the package manager's own configuration when one is set, SHALL accept an explicit override in pi-outpost's configuration, and SHALL fall back to the public registry when neither names one.
+The system SHALL query the package registry the host is configured to use, rather than a fixed public address. Where the package manager is available, the check SHALL ask it for the newest version instead of merely reading its registry URL and making a separate request. This preserves the package manager's complete transport configuration, including authentication, CA certificates and proxies from `.npmrc`. It SHALL accept an explicit override in pi-outpost's configuration and pass that override to the package manager. Only when the package manager executable is absent SHALL it fall back to a direct registry request.
 
 An installation performed by the command SHALL go through the package manager. Where the registry came from the package manager's own configuration, the command SHALL NOT restate it. Where pi-outpost's configuration overrode it, the command SHALL name that registry to the installer, so that the registry an update is announced from is the one it is installed from.
 
 #### Scenario: UsesThePackageManagerRegistry
-- **GIVEN** the package manager is configured with an internal registry proxy
+- **GIVEN** the package manager is configured through `.npmrc` with an internal registry proxy and any transport settings it needs
 - **WHEN** an update check runs
-- **THEN** the request goes to that registry, not to the public one
+- **THEN** the version lookup is performed by the package manager, so the request goes to that registry with its authentication, CA and proxy configuration rather than through a separate public-registry request
 
 #### Scenario: ConfiguredOverrideWins
 - **GIVEN** pi-outpost's configuration names a registry

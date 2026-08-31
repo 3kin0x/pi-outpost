@@ -21,15 +21,16 @@ import {
   isNewer,
   npmCommand,
   npmExecutable,
+  npmInstallInvocation,
+  npmViewInvocation,
   readCache,
-  resolveRegistry,
   runStartupUpdateNotice,
   runUpdateCommand,
   shouldCheckAtStartup,
   writeCache,
   type ChannelEvidence,
   type InstallChannel,
-  type RegistryFetch,
+  type VersionLookup,
 } from "../src/update.ts";
 
 const roots: string[] = [];
@@ -195,115 +196,53 @@ describe("isNewer", () => {
 });
 
 describe("fetchLatestVersion", () => {
-  const respond = (body: unknown, ok = true, status = 200): RegistryFetch =>
-    async () => ({ ok, status, json: async () => body });
+  const respond = (version: unknown): VersionLookup => async () => version;
 
   test("reports a newer version with both numbers", async () => {
-    const result = await fetchLatestVersion("0.8.0", { fetchImpl: respond({ version: "0.9.0" }) });
+    const result = await fetchLatestVersion("0.8.0", { lookupImpl: respond("0.9.0") });
     assert.deepEqual(result, { status: "newer", running: "0.8.0", latest: "0.9.0" });
   });
 
   test("reports current when the registry has nothing later", async () => {
-    const result = await fetchLatestVersion("0.9.0", { fetchImpl: respond({ version: "0.9.0" }) });
+    const result = await fetchLatestVersion("0.9.0", { lookupImpl: respond("0.9.0") });
     assert.equal(result.status, "current");
   });
 
-  test("asks for exactly one package's latest, and reads only its version", async () => {
-    let asked = "";
-    const spy: RegistryFetch = async (url) => {
-      asked = String(url);
-      // Everything else in a registry document is ignored on purpose.
-      return { ok: true, status: 200, json: async () => ({ version: "0.9.0", scripts: { postinstall: "rm -rf /" } }) };
+  test("passes an explicit registry override to npm's lookup", async () => {
+    let asked: string | undefined;
+    const spy: VersionLookup = async (options) => {
+      asked = options.registry;
+      return "0.9.0";
     };
-    const result = await fetchLatestVersion("0.8.0", { fetchImpl: spy, registry: "https://registry.example" });
-    assert.equal(asked, "https://registry.example/pi-outpost/latest");
+    const result = await fetchLatestVersion("0.8.0", { lookupImpl: spy, registry: "https://registry.example" });
+    assert.equal(asked, "https://registry.example");
     assert.equal(result.status, "newer");
   });
 
   /** The whole point of the third state: a failed check is not "you are current". */
   test("a transport error is a failure, not a verdict", async () => {
-    const boom: RegistryFetch = async () => {
+    const boom: VersionLookup = async () => {
       throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
     };
-    const result = await fetchLatestVersion("0.8.0", { fetchImpl: boom });
+    const result = await fetchLatestVersion("0.8.0", { lookupImpl: boom });
     assert.equal(result.status, "failed");
     assert.match(result.status === "failed" ? result.reason : "", /ENOTFOUND/);
   });
 
-  test("a non-OK response is a failure naming the status", async () => {
-    const result = await fetchLatestVersion("0.8.0", { fetchImpl: respond({}, false, 503) });
-    assert.equal(result.status, "failed");
-    assert.match(result.status === "failed" ? result.reason : "", /503/);
-  });
-
   test("an answer without a version is a failure, not a comparison against undefined", async () => {
-    const result = await fetchLatestVersion("0.8.0", { fetchImpl: respond({ name: "pi-outpost" }) });
+    const result = await fetchLatestVersion("0.8.0", { lookupImpl: respond({ name: "pi-outpost" }) });
     assert.equal(result.status, "failed");
   });
 
   test("a registry that never answers is bounded", async () => {
-    const never = ((_url: string, init?: { signal?: AbortSignal }) =>
+    const never: VersionLookup = (options) =>
       new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-      })) as unknown as typeof fetch;
+        options.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
     const started = Date.now();
-    const result = await fetchLatestVersion("0.8.0", { fetchImpl: never, timeoutMs: 50 });
+    const result = await fetchLatestVersion("0.8.0", { lookupImpl: never, timeoutMs: 50 });
     assert.equal(result.status, "failed");
     assert.ok(Date.now() - started < 2_000, "the request must not outlive its timeout");
-  });
-});
-
-/**
- * The deployment that needs update checking most is air-gapped from the public
- * internet and reaches npm through an internal proxy. Hardcoding
- * registry.npmjs.org would make the feature useless exactly there.
- */
-describe("resolveRegistry", () => {
-  const withEnv = async (value: string | undefined, body: () => void | Promise<void>) => {
-    const had = Object.hasOwn(process.env, "npm_config_registry");
-    const previous = process.env.npm_config_registry;
-    if (value === undefined) delete process.env.npm_config_registry;
-    else process.env.npm_config_registry = value;
-    try {
-      await body();
-    } finally {
-      if (had) process.env.npm_config_registry = previous;
-      else delete process.env.npm_config_registry;
-    }
-  };
-
-  test("pi-outpost's own setting wins over everything", async () => {
-    await withEnv("https://from-env.example", () => {
-      assert.equal(resolveRegistry("https://nexus.internal/repository/npm"), "https://nexus.internal/repository/npm");
-    });
-  });
-
-  test("npm's exported variable is used when nothing is configured", async () => {
-    await withEnv("https://nexus.internal/repository/npm/", () => {
-      assert.equal(resolveRegistry(), "https://nexus.internal/repository/npm");
-    });
-  });
-
-  test("a trailing slash is trimmed, so the path join cannot double it", async () => {
-    await withEnv(undefined, () => {
-      assert.equal(resolveRegistry("https://nexus.internal/npm///"), "https://nexus.internal/npm");
-    });
-  });
-
-  test("blank settings do not count as an answer", async () => {
-    await withEnv("   ", () => {
-      // Falls through to npm's stored config or the public default — either is a
-      // real registry, which "" is not.
-      assert.notEqual(resolveRegistry("  "), "");
-      assert.match(resolveRegistry("  "), /^https?:\/\//);
-    });
-  });
-
-  test("the public registry is the last resort, not the first choice", async () => {
-    // Whatever this host's npm says, the answer is a usable absolute URL.
-    await withEnv(undefined, () => {
-      assert.match(resolveRegistry(), /^https?:\/\//);
-    });
   });
 });
 
@@ -376,11 +315,11 @@ describe("the remembered answer", () => {
  * are injected, and the install spy is what proves "--check installs nothing" rather
  * than a comment claiming it.
  */
-function stubRegistry(latest: string): RegistryFetch {
-  return async () => ({ ok: true, status: 200, json: async () => ({ version: latest }) });
+function stubLookup(latest: string): VersionLookup {
+  return async () => latest;
 }
 
-const unreachable: RegistryFetch = async () => {
+const unreachable: VersionLookup = async () => {
   throw new Error("getaddrinfo ENOTFOUND registry.example");
 };
 
@@ -397,7 +336,7 @@ async function runUpdate(
     checkOnly?: boolean;
     channel?: InstallChannel;
     latest?: string;
-    fetchImpl?: RegistryFetch;
+    lookupImpl?: VersionLookup;
     installExit?: number;
     checkingDisabled?: boolean;
     disabledReason?: string;
@@ -415,10 +354,7 @@ async function runUpdate(
     // is tested directly, next door.
     channel: over.channel ?? "global",
     ...(over.checkingDisabled ? { checkingDisabled: true, disabledReason: over.disabledReason } : {}),
-    fetchImpl: over.fetchImpl ?? stubRegistry(over.latest ?? "0.9.0"),
-    // Named explicitly so resolveRegistry never shells out to `npm config get
-    // registry`: that costs a child process per run, and makes the result depend on
-    // whatever registry the developer's npm happens to point at.
+    lookupImpl: over.lookupImpl ?? stubLookup(over.latest ?? "0.9.0"),
     ...(over.registry === null ? {} : { registry: over.registry ?? "https://registry.example" }),
     install: async (command, args) => {
       installs.push({ command, args });
@@ -448,6 +384,48 @@ describe("npmCommand", () => {
       assert.deepEqual(npmCommand(platform, "/npm/bin/npm-cli.js"), [process.execPath, ["/npm/bin/npm-cli.js"]]);
     }
   });
+
+  test("runs npm.cmd through cmd.exe on Windows without putting the registry in shell input", () => {
+    const registry = "https://nexus.internal/npm?one=1&two=2";
+    const invocation = npmViewInvocation(registry, "win32", "");
+    assert.match(invocation.command.toLowerCase(), /cmd(?:\.exe)?$/);
+    assert.deepEqual(invocation.args, [
+      "/d",
+      "/s",
+      "/c",
+      "npm.cmd view pi-outpost@latest version --json",
+    ]);
+    assert.equal(invocation.env.npm_config_registry, registry);
+    assert.ok(!invocation.args.some((arg) => arg.includes(registry)));
+  });
+
+  test("removes case-insensitive registry collisions before applying a Windows override", () => {
+    const previousUpper = process.env.NPM_CONFIG_REGISTRY;
+    const previousLower = process.env.npm_config_registry;
+    process.env.NPM_CONFIG_REGISTRY = "https://wrong.example";
+    process.env.npm_config_registry = "https://also-wrong.example";
+    try {
+      const invocation = npmViewInvocation("https://nexus.internal/npm", "win32", "");
+      const registryKeys = Object.keys(invocation.env)
+        .filter((key) => key.toLowerCase() === "npm_config_registry");
+      assert.deepEqual(registryKeys, ["npm_config_registry"]);
+      assert.equal(invocation.env.npm_config_registry, "https://nexus.internal/npm");
+    } finally {
+      if (previousUpper === undefined) delete process.env.NPM_CONFIG_REGISTRY;
+      else process.env.NPM_CONFIG_REGISTRY = previousUpper;
+      if (previousLower === undefined) delete process.env.npm_config_registry;
+      else process.env.npm_config_registry = previousLower;
+    }
+  });
+
+  test("runs a Windows install through cmd.exe with a fixed shell command", () => {
+    const registry = "https://nexus.internal/npm?one=1&two=2";
+    const invocation = npmInstallInvocation(registry, "win32");
+    assert.match(invocation.command.toLowerCase(), /cmd(?:\.exe)?$/);
+    assert.deepEqual(invocation.args, ["/d", "/s", "/c", "npm.cmd install -g pi-outpost@latest"]);
+    assert.equal(invocation.env.npm_config_registry, registry);
+    assert.ok(!invocation.args.some((arg) => arg.includes(registry)));
+  });
 });
 
 describe("update --check", () => {
@@ -466,7 +444,7 @@ describe("update --check", () => {
   });
 
   test("a registry it cannot reach is a failure, never a claim of currency", async () => {
-    const run = await runUpdate({ checkOnly: true, channel: "global", fetchImpl: unreachable });
+    const run = await runUpdate({ checkOnly: true, channel: "global", lookupImpl: unreachable });
     assert.equal(run.code, 1, "a failed check must not exit zero");
     assert.ok(run.said(/could not check for updates/));
     assert.ok(!run.said(/newest published version/), "a failed check must not read as up to date");
@@ -491,15 +469,15 @@ describe("update --check", () => {
 
   test("configuration that disabled checking is named, and no request is made", async () => {
     let asked = false;
-    const spy: RegistryFetch = async () => {
+    const spy: VersionLookup = async () => {
       asked = true;
-      return { ok: true, status: 200, json: async () => ({}) };
+      return "9.9.9";
     };
     const run = await runUpdate({
       checkOnly: true,
       checkingDisabled: true,
       disabledReason: '"updateCheck" is false',
-      fetchImpl: spy,
+      lookupImpl: spy,
     });
     assert.equal(run.code, 1);
     assert.ok(run.said(/update checking is disabled: "updateCheck" is false/));
@@ -513,12 +491,12 @@ describe("update, by channel", () => {
     assert.equal(run.code, 0);
     // `npmExecutable()` rather than the literal "npm": on Windows it is npm.cmd,
     // and pinning the name here would assert the very bug this file now guards.
-    const npm = npmExecutable();
-    assert.deepEqual(run.installs, [{ command: npm, args: ["install", "-g", "pi-outpost@latest"] }]);
+    const invocation = npmInstallInvocation();
+    assert.deepEqual(run.installs, [{ command: invocation.command, args: invocation.args }]);
     // The printed command and the executed one must be the same thing: printing it
     // is what makes the action auditable, and a mismatch makes that worse than useless.
     const printed = run.lines.find((line) => line.startsWith("[pi] running:"));
-    assert.equal(printed, `[pi] running: ${npm} install -g pi-outpost@latest`);
+    assert.equal(printed, `[pi] running: ${invocation.displayCommand} ${invocation.displayArgs.join(" ")}`);
   });
 
   test("the installer runs the npm this platform can actually execute", async () => {
@@ -530,8 +508,9 @@ describe("update, by channel", () => {
     // `registry: null` for the bare form: an override would add --registry and
     // say nothing about the command, which is what this test is about.
     const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: null });
-    assert.equal(run.installs[0]?.command, process.platform === "win32" ? "npm.cmd" : "npm");
-    assert.deepEqual(run.installs[0]?.args, ["install", "-g", "pi-outpost@latest"], "the argv vector is untouched");
+    const invocation = npmInstallInvocation();
+    assert.equal(run.installs[0]?.command, invocation.command);
+    assert.deepEqual(run.installs[0]?.args, invocation.args);
     assert.ok(run.said(/running: npm(\.cmd)? install -g/), `announced: ${run.lines.join(" | ")}`);
   });
 
@@ -539,7 +518,7 @@ describe("update, by channel", () => {
     // @latest, not the fetched string: the registry says what is newest, and does
     // not get to say what gets installed.
     const run = await runUpdate({ channel: "global", latest: "9.9.9", registry: null });
-    assert.deepEqual(run.installs[0]?.args, ["install", "-g", "pi-outpost@latest"]);
+    assert.deepEqual(run.installs[0]?.args, npmInstallInvocation().args);
     assert.ok(!JSON.stringify(run.installs).includes("9.9.9"));
   });
 
@@ -550,18 +529,13 @@ describe("update, by channel", () => {
     assert.deepEqual(run.installs, []);
   });
 
+  // openlore: {"domain":"update","requirement":"UpdateChecksUseTheConfiguredRegistry","scenario":"TheInstallUsesTheRegistryTheCheckUsed","specFile":"openspec/specs/update/spec.md"}
   test("a configured registry is passed to the installer, so check and install agree", async () => {
     // Without this the check queries the internal proxy and the install fetches from
     // the public one: an update announced from one registry and performed from
     // another, in exactly the deployment the setting exists for.
     const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: "https://nexus.internal/npm" });
-    assert.deepEqual(run.installs[0]?.args, [
-      "install",
-      "-g",
-      "--registry",
-      "https://nexus.internal/npm",
-      "pi-outpost@latest",
-    ]);
+    assert.deepEqual(run.installs[0]?.args, npmInstallInvocation("https://nexus.internal/npm").args);
     // And what was printed is still what was run.
     assert.equal(
       run.lines.find((line) => line.startsWith("[pi] running:")),
@@ -571,7 +545,7 @@ describe("update, by channel", () => {
 
   test("no override leaves the command bare, so npm reads its own configuration", async () => {
     const run = await runUpdate({ channel: "global", latest: "0.9.0", registry: null });
-    assert.deepEqual(run.installs[0]?.args, ["install", "-g", "pi-outpost@latest"]);
+    assert.deepEqual(run.installs[0]?.args, npmInstallInvocation().args);
   });
 
   test("an installer that fails surfaces its code and claims nothing", async () => {
@@ -671,13 +645,13 @@ describe("whether to check at startup", () => {
 
 describe("the startup notice", () => {
   /** Counts requests, so "made no request" is asserted rather than assumed. */
-  function countingRegistry(latest: string): { fetchImpl: RegistryFetch; calls: () => number } {
+  function countingLookup(latest: string): { lookupImpl: VersionLookup; calls: () => number } {
     let calls = 0;
-    const fetchImpl: RegistryFetch = async () => {
+    const lookupImpl: VersionLookup = async () => {
       calls += 1;
-      return { ok: true, status: 200, json: async () => ({ version: latest }) };
+      return latest;
     };
-    return { fetchImpl, calls: () => calls };
+    return { lookupImpl, calls: () => calls };
   }
 
   async function notice(over: {
@@ -685,7 +659,7 @@ describe("the startup notice", () => {
     settings?: { updateCheck?: boolean; offline?: boolean };
     channel?: InstallChannel;
     latest?: string;
-    fetchImpl?: RegistryFetch;
+    lookupImpl?: VersionLookup;
     now?: number;
     agentDir?: string;
   }): Promise<{ lines: string[]; agentDir: string }> {
@@ -697,7 +671,7 @@ describe("the startup notice", () => {
       settings: over.settings ?? {},
       channel: over.channel ?? "global",
       registry: "https://registry.example",
-      ...(over.fetchImpl ? { fetchImpl: over.fetchImpl } : {}),
+      ...(over.lookupImpl ? { lookupImpl: over.lookupImpl } : {}),
       ...(over.now !== undefined ? { now: over.now } : {}),
       log: (line) => lines.push(line),
     });
@@ -705,24 +679,24 @@ describe("the startup notice", () => {
   }
 
   test("says a newer version exists, and names the command that acts on it", async () => {
-    const { fetchImpl } = countingRegistry("0.9.0");
-    const { lines } = await notice({ fetchImpl });
+    const { lookupImpl } = countingLookup("0.9.0");
+    const { lines } = await notice({ lookupImpl });
     assert.equal(lines.length, 1);
     assert.match(lines[0]!, /0\.9\.0 is available \(running 0\.8\.0\)/);
     assert.match(lines[0]!, /pi-outpost update/);
   });
 
   test("is silent when the running version is current", async () => {
-    const { fetchImpl } = countingRegistry("0.8.0");
-    const { lines } = await notice({ fetchImpl });
+    const { lookupImpl } = countingLookup("0.8.0");
+    const { lines } = await notice({ lookupImpl });
     assert.deepEqual(lines, []);
   });
 
   test("is silent when the check fails, and remembers nothing", async () => {
-    const boom: RegistryFetch = async () => {
+    const boom: VersionLookup = async () => {
       throw new Error("ENOTFOUND");
     };
-    const { lines, agentDir } = await notice({ fetchImpl: boom });
+    const { lines, agentDir } = await notice({ lookupImpl: boom });
     assert.deepEqual(lines, []);
     // A failure must not become a remembered answer that suppresses the next real one.
     assert.equal(await readCache(agentDir), undefined);
@@ -732,8 +706,8 @@ describe("the startup notice", () => {
     const agentDir = await workspace();
     const now = Date.now();
     await writeCache(agentDir, { latest: "0.9.0", checkedAt: now });
-    const { fetchImpl, calls } = countingRegistry("0.9.0");
-    const { lines } = await notice({ agentDir, fetchImpl, now: now + 1000 });
+    const { lookupImpl, calls } = countingLookup("0.9.0");
+    const { lines } = await notice({ agentDir, lookupImpl, now: now + 1000 });
     assert.equal(calls(), 0, "a fresh cache must not be re-queried");
     assert.match(lines[0] ?? "", /0\.9\.0 is available/);
   });
@@ -742,8 +716,8 @@ describe("the startup notice", () => {
     const agentDir = await workspace();
     const now = Date.now();
     await writeCache(agentDir, { latest: "0.8.5", checkedAt: now - CHECK_INTERVAL_MS - 1 });
-    const { fetchImpl, calls } = countingRegistry("0.9.0");
-    await notice({ agentDir, fetchImpl, now });
+    const { lookupImpl, calls } = countingLookup("0.9.0");
+    await notice({ agentDir, lookupImpl, now });
     assert.equal(calls(), 1);
     assert.deepEqual(await readCache(agentDir), { latest: "0.9.0", checkedAt: now });
   });
@@ -755,8 +729,8 @@ describe("the startup notice", () => {
       ["the key off under offline", { settings: { updateCheck: false, offline: true } }],
       ["a source checkout", { settings: {}, channel: "checkout" as InstallChannel, version: "dev" }],
     ] as const) {
-      const { fetchImpl, calls } = countingRegistry("9.9.9");
-      const { lines } = await notice({ ...over, fetchImpl });
+      const { lookupImpl, calls } = countingLookup("9.9.9");
+      const { lines } = await notice({ ...over, lookupImpl });
       assert.equal(calls(), 0, `${label} still queried the registry`);
       assert.deepEqual(lines, [], `${label} still printed something`);
     }
@@ -767,10 +741,10 @@ describe("the startup notice", () => {
     // for a version to be installed is the update command run without --check. This
     // pins the full set of effects, so an installer appearing here would show up as
     // an effect this test does not allow.
-    const { fetchImpl } = countingRegistry("0.9.0");
+    const { lookupImpl } = countingLookup("0.9.0");
     const agentDir = await workspace();
     const before = await readdir(agentDir);
-    const { lines } = await notice({ agentDir, fetchImpl });
+    const { lines } = await notice({ agentDir, lookupImpl });
 
     assert.equal(lines.length, 1, "the notice is one line, not a transcript of an install");
     assert.match(lines[0]!, /is available/);
@@ -785,8 +759,8 @@ describe("the startup notice", () => {
   });
 
   test("explicitly enabled still checks under offline", async () => {
-    const { fetchImpl, calls } = countingRegistry("0.9.0");
-    const { lines } = await notice({ settings: { offline: true, updateCheck: true }, fetchImpl });
+    const { lookupImpl, calls } = countingLookup("0.9.0");
+    const { lines } = await notice({ settings: { offline: true, updateCheck: true }, lookupImpl });
     assert.equal(calls(), 1, "an explicit yes must survive offline");
     assert.match(lines[0] ?? "", /0\.9\.0 is available/);
   });

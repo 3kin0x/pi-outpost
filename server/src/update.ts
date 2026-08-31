@@ -127,42 +127,9 @@ export const PACKAGE_NAME = "pi-outpost";
  */
 export const RELEASES_URL = "https://github.com/laurentftech/pi-outpost/releases";
 
-/** Where packages come from when nothing on the host says otherwise. */
+/** Used only when npm is not installed (not when npm reports a registry error). */
 export const PUBLIC_REGISTRY = "https://registry.npmjs.org";
 
-/**
- * Which registry to ask.
- *
- * Hardcoding the public one breaks the deployment that needs update checking
- * most: air-gapped from the wider internet, reaching npm through an internal
- * proxy. npm already knows that address, so it is asked before anything is
- * assumed. Order: pi-outpost's own setting, the variable npm exports to scripts
- * it runs, npm's stored configuration, then the public default.
- *
- * `npm config get registry` is last because it costs a child process, and this
- * runs on a path that must not delay startup — it is consulted only when the
- * environment did not already answer.
- *
- * The install path needs none of this: `npm install` reads the same
- * configuration itself, and telling it a registry we resolved would be one more
- * way to disagree with npm.
- */
-export function resolveRegistry(configured?: string): string {
-  const fromConfig = configured?.trim();
-  if (fromConfig) return trimSlash(fromConfig);
-
-  const fromEnv = process.env.npm_config_registry?.trim();
-  if (fromEnv) return trimSlash(fromEnv);
-
-  const fromNpm = npmConfiguredRegistry();
-  if (fromNpm) return trimSlash(fromNpm);
-
-  return PUBLIC_REGISTRY;
-}
-
-const trimSlash = (url: string): string => url.replace(/\/+$/, "");
-
-/** npm's stored registry, or nothing if npm is absent or slow to answer. */
 /**
  * The environment for a short-lived npm child, without the parent's coverage sink.
  *
@@ -191,9 +158,8 @@ function envForNpm(): NodeJS.ProcessEnv {
  * proxy whose address lives only in the operator's `.npmrc`, which npm alone can
  * read. Reported from such a site, on Windows, where this had never worked.
  *
- * `shell: true` would also run the batch file, by handing a command *string* to
- * `cmd.exe` to parse. Naming the file is enough, and keeps every argument a
- * vector element that nothing re-splits.
+ * The Windows lookup and installer builders below therefore invoke `cmd.exe`
+ * with fixed command text and keep configuration values in npm's environment.
  *
  * `npm_execpath` still wins where npm exported it: that is npm telling us which
  * npm is running, and it is a `.js` file run by this node, on every platform.
@@ -203,7 +169,7 @@ export function npmExecutable(platform: NodeJS.Platform = process.platform): str
 }
 
 /**
- * The probes additionally prefer the npm that started this process, when there
+ * Registry lookups additionally prefer the npm that started this process, when there
  * is one. The installer deliberately does not: it must run the npm the operator
  * would run by hand, reading their own configuration, rather than whichever npm
  * happened to launch the server.
@@ -216,48 +182,87 @@ export function npmCommand(
   return [npmExecutable(platform), []];
 }
 
-let npmRegistryMemo: { value: string | undefined; failure?: string } | undefined;
-
-/**
- * Why asking npm for the registry did not work, when it did not.
- *
- * The probe cannot print anything itself — it runs on the startup path, before
- * anyone has decided whether this is a background check or a command. But
- * swallowing the reason turns "npm could not be asked" into "npm said nothing",
- * which is indistinguishable from "npm says the public registry" at the point
- * where it matters: an operator behind an internal proxy, being told about a
- * version that came from the wrong place. The caller prints this when it falls
- * back to the public default.
- */
-export function npmRegistryProbeFailure(): string | undefined {
-  return npmRegistryMemo?.failure;
+export interface NpmViewInvocation {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
 }
 
-function npmConfiguredRegistry(): string | undefined {
-  // At most once per process. Each call is a child process with a five-second
-  // ceiling, and nothing about npm's configuration changes while this runs.
-  if (npmRegistryMemo !== undefined) return npmRegistryMemo.value;
-  npmRegistryMemo = { value: undefined };
-  try {
-    // `getBuiltinModule` rather than `require`, which does not exist in an ES
-    // module, and rather than a dynamic import, which cannot be awaited here.
-    const { execFileSync } = process.getBuiltinModule("node:child_process");
-    const [command, argv] = npmCommand();
-    const out = execFileSync(command, [...argv, "config", "get", "registry"], {
-      encoding: "utf8",
-      timeout: 5_000,
-      stdio: ["ignore", "pipe", "ignore"],
-      shell: false,
-      env: envForNpm(),
-    }).trim();
-    // npm prints "undefined" rather than nothing when a key is unset.
-    npmRegistryMemo.value = out && out !== "undefined" && out !== "null" ? out : undefined;
-    if (npmRegistryMemo.value === undefined) npmRegistryMemo.failure = "npm has no registry configured";
-    return npmRegistryMemo.value;
-  } catch (error) {
-    npmRegistryMemo.failure = error instanceof Error ? error.message : String(error);
-    return undefined;
+function npmEnvironmentWithOverride(
+  registry: string | undefined,
+  base: NodeJS.ProcessEnv = envForNpm(),
+): NodeJS.ProcessEnv {
+  if (!registry) return { ...base };
+  const env = Object.fromEntries(
+    Object.entries(base).filter(([key]) => key.toLowerCase() !== "npm_config_registry"),
+  );
+  env.npm_config_registry = registry;
+  return env;
+}
+
+/**
+ * Build the npm-view process without asking a shell to parse configuration data.
+ *
+ * Windows cannot execute npm.cmd directly through execFile. When there is no
+ * npm_execpath to run with Node, cmd.exe receives a completely fixed command
+ * string; the optional registry travels through npm's environment instead. That
+ * keeps registry URLs (and their shell metacharacters) out of cmd.exe's input.
+ */
+export function npmViewInvocation(
+  registry?: string,
+  platform: NodeJS.Platform = process.platform,
+  npmExecPath = process.env.npm_execpath,
+): NpmViewInvocation {
+  const viewArgs = ["view", `${PACKAGE_NAME}@latest`, "version", "--json"];
+  if (platform === "win32" && !npmExecPath?.trim()) {
+    return {
+      command: process.env.ComSpec?.trim() || "cmd.exe",
+      args: ["/d", "/s", "/c", `npm.cmd ${viewArgs.join(" ")}`],
+      env: npmEnvironmentWithOverride(registry),
+    };
   }
+
+  const [command, prefix] = npmCommand(platform, npmExecPath);
+  return {
+    command,
+    args: [...prefix, ...viewArgs, ...(registry ? ["--registry", registry] : [])],
+    env: envForNpm(),
+  };
+}
+
+export interface NpmInstallInvocation extends NpmViewInvocation {
+  displayCommand: string;
+  displayArgs: string[];
+}
+
+/** Build a Windows-safe global install while keeping registry data out of cmd.exe. */
+export function npmInstallInvocation(
+  registry?: string,
+  platform: NodeJS.Platform = process.platform,
+): NpmInstallInvocation {
+  const displayCommand = npmExecutable(platform);
+  const displayArgs = [
+    "install",
+    "-g",
+    ...(registry ? ["--registry", registry] : []),
+    `${PACKAGE_NAME}@latest`,
+  ];
+  if (platform === "win32") {
+    return {
+      command: process.env.ComSpec?.trim() || "cmd.exe",
+      args: ["/d", "/s", "/c", `npm.cmd install -g ${PACKAGE_NAME}@latest`],
+      env: npmEnvironmentWithOverride(registry, process.env),
+      displayCommand,
+      displayArgs,
+    };
+  }
+  return {
+    command: displayCommand,
+    args: displayArgs,
+    env: { ...process.env },
+    displayCommand,
+    displayArgs,
+  };
 }
 
 /** Long enough for a slow link, short enough that `update --check` stays a command. */
@@ -282,99 +287,125 @@ export type VersionCheck =
   | { status: "incomparable"; running: string; latest: string }
   | { status: "failed"; running: string; reason: string };
 
-/**
- * What a registry answer has to look like, and the whole of what is asked of it.
- *
- * Narrower than `fetch` on purpose: this is the seam tests replace, and a seam the
- * shape of the standard API would invite the rest of that API to be relied on. It is
- * also what lets the real request be an `https.request` rather than a `fetch` — see
- * `registryRequest` for why it has to be.
- */
-export interface RegistryResponse {
-  ok: boolean;
-  status: number;
-  json: () => Promise<unknown>;
-}
-
-export type RegistryFetch = (
-  url: string,
+/** The narrow seam tests replace: ask the package manager for one dist-tag. */
+export type VersionLookup = (
   options: {
     signal: AbortSignal;
-    /**
-     * Whether the request may be the reason this process stays alive.
-     *
-     * False for a check somebody asked for — `update --check` has nothing else
-     * pending, so a request that cannot hold the loop open lets the process drain
-     * before the answer arrives: no output, and node exits 13 complaining about an
-     * unsettled top-level await. True only for the background notice, which nobody
-     * asked for and which must never delay a shutdown.
-     */
-    unref: boolean;
+    registry?: string;
+    /** True only when the lookup must not keep the process alive. */
+    background: boolean;
   },
-) => Promise<RegistryResponse>;
+) => Promise<unknown>;
 
 /**
- * One GET, with a socket that cannot hold the process open.
+ * Ask npm itself for the latest dist-tag.
  *
- * `fetch` would be the obvious way to write this and it cannot satisfy the contract:
- * it exposes no handle to `unref`, so a request still in flight keeps the event loop
- * alive until it settles. For a check nobody asked for, running in the background,
- * that turns "stop the server" into "wait out the registry timeout" — and it is
- * invisible against a registry that refuses fast, which is every registry until the
- * one that hangs.
- *
- * So the request is made through `node:https` and its socket can be unref'd. No new
- * dependency either way; what changes is that there is something to unref.
- *
- * Whether it *is* unref'd is the caller's to say. Unconditionally unref'ing was a bug
- * with no failing test: `update --check` awaits this at top level with nothing else
- * pending, so the loop emptied and the process exited 13 without printing a verdict.
- * Every test injected a fake, so the real request was never on the path being asserted.
+ * Resolving npm's registry URL and then issuing our own HTTP request was only a
+ * partial delegation: it bypassed the authentication, CA bundle, proxy and other
+ * transport settings in `.npmrc`. That made `npm view` work behind a corporate
+ * Nexus while `pi-outpost update` still tried (or failed) on a different path.
+ * Keeping the whole exchange inside npm makes its configuration the single source
+ * of truth. An explicit pi-outpost override is still passed as `--registry`.
  */
-const registryRequest: RegistryFetch = async (url, options) => {
-  const target = new URL(url);
+const npmViewLatestVersion: VersionLookup = async (options) => {
+  const { execFile } = process.getBuiltinModule("node:child_process");
+  const { command, args, env } = npmViewInvocation(options.registry);
+
+  return await new Promise<unknown>((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      {
+        encoding: "utf8",
+        env,
+        maxBuffer: 256 * 1024,
+        shell: false,
+        signal: options.signal,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            reject(error);
+            return;
+          }
+          const detail = stderr.trim();
+          reject(new Error(detail || error.message));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout.trim()) as unknown);
+        } catch {
+          reject(new Error("npm answered without a JSON version"));
+        }
+      },
+    );
+
+    // A startup check is a courtesy, never a reason the process must stay alive.
+    // The child and both pipe handles are ref'd independently by Node.
+    if (options.background) {
+      child.unref();
+      (child.stdout as { unref?: () => void } | null)?.unref?.();
+      (child.stderr as { unref?: () => void } | null)?.unref?.();
+    }
+  });
+};
+
+/**
+ * Preserve update checks for a self-contained executable on a host without npm.
+ * This is a fallback for an absent executable only: an npm registry/auth/CA error
+ * must be reported as-is, never retried through a request that bypasses `.npmrc`.
+ */
+const directRegistryLatestVersion: VersionLookup = async (options) => {
+  const configured = options.registry ?? process.env.npm_config_registry;
+  const base = configured?.trim() || PUBLIC_REGISTRY;
+  const target = new URL(`${base.replace(/\/+$/, "")}/${PACKAGE_NAME}/latest`);
   const transport = target.protocol === "http:"
     ? await import("node:http")
     : await import("node:https");
 
-  return await new Promise<RegistryResponse>((resolve, reject) => {
+  return await new Promise<unknown>((resolve, reject) => {
     const request = transport.request(
-      {
-        protocol: target.protocol,
-        hostname: target.hostname,
-        port: target.port,
-        path: `${target.pathname}${target.search}`,
-        method: "GET",
-        headers: { accept: "application/json" },
-      },
+      target,
+      { headers: { accept: "application/json" }, signal: options.signal },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.on("end", () => {
           const status = response.statusCode ?? 0;
-          resolve({
-            ok: status >= 200 && status < 300,
-            status,
-            json: async () => JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
-          });
+          if (status < 200 || status >= 300) {
+            reject(new Error(`the registry answered ${status}`));
+            return;
+          }
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { version?: unknown };
+            resolve(body.version);
+          } catch {
+            reject(new Error("the registry answered without JSON"));
+          }
         });
-        // The response body is a handle too, and it arrives after the socket one.
-        if (options.unref) response.socket?.unref();
+        if (options.background) response.socket?.unref();
       },
     );
-    // The reason this function exists. `socket` fires once the connection is assigned,
-    // which is the earliest point there is anything to unref.
-    if (options.unref) request.on("socket", (socket) => socket.unref());
+    if (options.background) request.on("socket", (socket) => socket.unref());
     request.on("error", reject);
-    options.signal.addEventListener("abort", () => request.destroy(new Error("aborted")), { once: true });
     request.end();
   });
+};
+
+const defaultLatestVersionLookup: VersionLookup = async (options) => {
+  try {
+    return await npmViewLatestVersion(options);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return await directRegistryLatestVersion(options);
+  }
 };
 
 /**
  * Ask the registry for the newest published version.
  *
- * Exactly one field is taken from the answer. Nothing from the response is
+ * Exactly one version string is taken from npm's answer. Nothing from it is
  * executed, interpolated into a command, or trusted beyond a string comparison —
  * the install path names `@latest` rather than anything fetched, so a hostile
  * answer cannot choose what gets installed.
@@ -382,41 +413,35 @@ const registryRequest: RegistryFetch = async (url, options) => {
 export async function fetchLatestVersion(
   running: string,
   options: {
-    fetchImpl?: RegistryFetch;
+    lookupImpl?: VersionLookup;
     timeoutMs?: number;
     registry?: string;
     /**
-     * Nobody asked for this check, so it may not hold the process open — the socket
-     * and the timeout are both unref'd. Defaults to false, which is the safe way
+     * Nobody asked for this check, so it may not hold the process open — the child,
+     * its pipes and the timeout are unref'd. Defaults to false, which is the safe way
      * round: an answer that arrives late costs a caller some seconds, where an
      * answer that never arrives costs it the answer.
      */
     background?: boolean;
   } = {},
 ): Promise<VersionCheck> {
-  const doFetch = options.fetchImpl ?? registryRequest;
-  const registry = resolveRegistry(options.registry);
-  // A public-registry check on a host that configured another one is a check of
-  // the wrong shelf; say so rather than reporting its answer as the truth.
-  const probeFailure = registry === PUBLIC_REGISTRY ? npmRegistryProbeFailure() : undefined;
+  const lookup = options.lookupImpl ?? defaultLatestVersionLookup;
   const background = options.background ?? false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? REGISTRY_TIMEOUT_MS);
-  // Unref'd for the same reason the socket is, and under the same condition: for a
+  // Unref'd for the same reason the npm child is, and under the same condition: for a
   // background check neither may be why a process that wants to exit does not. For a
   // command, this timer is what turns a registry that hangs into a reported failure
   // rather than a silent exit.
   if (background) timer.unref?.();
   try {
-    const response = await doFetch(`${registry}/${PACKAGE_NAME}/latest`, {
+    const latest: unknown = await lookup({
       signal: controller.signal,
-      unref: background,
+      background,
+      ...(options.registry ? { registry: options.registry } : {}),
     });
-    if (!response.ok) return { status: "failed", running, reason: `the registry answered ${response.status}` };
-    const body: unknown = await response.json();
-    const latest = (body as { version?: unknown } | null)?.version;
     if (typeof latest !== "string" || latest === "") {
-      return { status: "failed", running, reason: "the registry answered without a version" };
+      return { status: "failed", running, reason: "npm answered without a version" };
     }
     if (isNewer(latest, running)) return { status: "newer", running, latest };
     // "not newer" is three different facts, and only one of them is "up to date".
@@ -429,15 +454,7 @@ export async function fetchLatestVersion(
       : error instanceof Error
         ? error.message
         : String(error);
-    // On a host that configured its own registry, a failure against the public
-    // one is a failure to *find* the configured address, not a failure of the
-    // network. Without this the operator reads "ENOTFOUND registry.npmjs.org"
-    // and has no way to know their own proxy was never consulted.
-    return {
-      status: "failed",
-      running,
-      reason: probeFailure === undefined ? reason : `${reason} (asked the public registry: ${probeFailure})`,
-    };
+    return { status: "failed", running, reason };
   } finally {
     clearTimeout(timer);
   }
@@ -484,10 +501,10 @@ export interface UpdateCommandOptions {
   /** Which setting did that, so the refusal can be acted on. */
   disabledReason?: string;
   channel?: InstallChannel;
-  fetchImpl?: RegistryFetch;
+  lookupImpl?: VersionLookup;
   registry?: string;
   /** Runs the installer. Injected so a test never installs anything. */
-  install?: (command: string, args: string[]) => Promise<number>;
+  install?: (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<number>;
   log?: (line: string) => void;
 }
 
@@ -506,7 +523,7 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
   // process has left to do. Nothing here may be unref'd, or the loop empties before
   // the registry answers and the command prints nothing at all.
   const check = await fetchLatestVersion(options.version, {
-    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.lookupImpl ? { lookupImpl: options.lookupImpl } : {}),
     ...(options.registry ? { registry: options.registry } : {}),
   });
 
@@ -577,20 +594,10 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
       // the check would query the internal proxy and the install would then fetch
       // from the public one, announcing a private update and performing a different
       // one. Exactly the deployment the setting exists for.
-      const args = [
-        "install",
-        "-g",
-        ...(options.registry !== undefined ? ["--registry", options.registry] : []),
-        `${PACKAGE_NAME}@latest`,
-      ];
-      // The same argv vector the probes use, for the same Windows reason: a bare
-      // "npm" here reached `child.on("error")` and was reported as "the installer
-      // exited with 1", which reads as npm refusing the install rather than npm
-      // never having been started.
-      const npm = npmExecutable();
-      say(`[pi] running: ${npm} ${args.join(" ")}`);
+      const invocation = npmInstallInvocation(options.registry);
+      say(`[pi] running: ${invocation.displayCommand} ${invocation.displayArgs.join(" ")}`);
       const run = options.install ?? runInstaller;
-      const code = await run(npm, args);
+      const code = await run(invocation.command, invocation.args, invocation.env);
       if (code !== 0) {
         say(`[pi] the installer exited with ${code}; nothing was changed by pi-outpost itself`);
         return code;
@@ -602,10 +609,10 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
 }
 
 /** The installer as a child process: argv vector, no shell, output passed through. */
-async function runInstaller(command: string, args: string[]): Promise<number> {
+async function runInstaller(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<number> {
   const { spawn } = await import("node:child_process");
   return await new Promise<number>((resolve) => {
-    const child = spawn(command, args, { stdio: "inherit", shell: false });
+    const child = spawn(command, args, { stdio: "inherit", shell: false, env });
     child.on("error", () => resolve(1));
     child.on("exit", (code) => resolve(code ?? 1));
   });
@@ -840,7 +847,7 @@ export interface StartupNoticeOptions {
   settings: { updateCheck?: boolean; offline?: boolean };
   registry?: string;
   channel?: InstallChannel;
-  fetchImpl?: RegistryFetch;
+  lookupImpl?: VersionLookup;
   now?: number;
   log?: (line: string) => void;
 }
@@ -900,7 +907,7 @@ export async function runStartupUpdateNotice(options: StartupNoticeOptions): Pro
 
   const check = await fetchLatestVersion(options.version, {
     background: true,
-    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.lookupImpl ? { lookupImpl: options.lookupImpl } : {}),
     ...(options.registry ? { registry: options.registry } : {}),
   });
   // Silent on failure, and nothing cached: a failed check must not become a
