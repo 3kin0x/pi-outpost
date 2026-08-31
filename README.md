@@ -475,7 +475,11 @@ check, and why, and exits non-zero.
 | Key | Effect |
 |------|------|
 | `updateCheck` | `false` disables checking entirely. `true` enables it **even under `offline`**. Unset, `offline` decides |
-| `updateRegistry` | The registry to query, when npm's own configuration does not name the right one |
+| `updateRegistry` | Optional registry override, when npm's own configuration does not name the right one |
+
+Version checks normally run through `npm view`, so an existing `.npmrc` remains the source
+of truth for an internal registry, authentication, CA certificates and proxies. No duplicate
+pi-outpost setting is required for a Nexus setup that already works with npm.
 
 `offline` means "remote model catalogs are unreachable", which is not the same network as a
 package registry — a host air-gapped from the former can still reach an internal npm proxy,
