@@ -7,7 +7,10 @@ npx pi-outpost init   # writes a starter pi-outpost.config.json here
 npx pi-outpost        # http://127.0.0.1:3141/
 ```
 
-Requires Node ≥ 22.19 and [pi](https://github.com/earendil-works/pi) configured (`~/.pi/agent/auth.json`, or a provider variable like `ANTHROPIC_API_KEY`).
+Requires Node ≥ 24 and a model credential (`~/.pi/agent/auth.json`, a provider variable
+like `ANTHROPIC_API_KEY`, or the setup screen). The default embedded runtime already carries
+the [pi coding agent](https://github.com/earendil-works/pi); a separate `pi` executable is
+needed only when `agentRuntime.mode` is `"rpc"`.
 
 ## It will not start without a configuration file
 
@@ -37,8 +40,12 @@ The **first** of these that exists is read, and only that one — configurations
 | `--cwd <dir>` | Directory the agent works in |
 | `--agent-dir <dir>` | pi config/session store (default `~/.pi/agent`) |
 | `--port <n>` / `--host <addr>` | Where to listen (default `127.0.0.1:3141`) |
+| `--offline` | Never fetch remote model catalogs |
+| `--open` / `--no-open` | Whether to open the interface once listening |
+| `--open-in window\|browser` | Open in a standalone window (default) or a browser tab |
 
-Environment: `PI_OUTPOST_PORT` (falls back to `PORT`), `PI_OUTPOST_HOST`, `PI_OUTPOST_CWD`, `PI_OUTPOST_AGENT_DIR`, `PI_OUTPOST_TOKEN`.
+Environment: `PI_OUTPOST_PORT` (falls back to `PORT`), `PI_OUTPOST_HOST`,
+`PI_OUTPOST_CWD`, `PI_OUTPOST_AGENT_DIR`, `PI_OUTPOST_TOKEN`, `PI_OFFLINE`.
 
 ## Security
 

@@ -88,8 +88,9 @@ Two knobs, if the defaults do not suit:
 
 `workspaceIdleTimeoutMs` is how long an unused project stays alive before it is
 retired and rebuilt on next use (`0` never retires; a project running a turn is never
-retired). `workspaceLock: true` pins the server to one project and removes the
-controls entirely — that is what an embedding host uses.
+retired). `workspaceLock: true` pins the server to one project and removes the controls
+entirely. Use it for a deployment, embedded or standalone, whose project root must not
+change.
 
 ## Use a local or self-hosted model
 
@@ -137,19 +138,23 @@ Locally declared models are unaffected.
 
 ## Reach it from your phone or another machine
 
-Three things, and all three are needed:
+Three security decisions, and all three are needed. The example also spells out the default
+port because the same value appears in the allowed origin and browser URL:
 
 ```json
 {
   "server": {
     "host": "0.0.0.0",
+    "port": 3141,
     "token": "…",
     "allowedOrigins": ["http://192.168.1.10:3141"]
   }
 }
 ```
 
-1. **`host`** off `127.0.0.1`. The server refuses to bind off loopback without a
+1. **`host`** off `127.0.0.1`, and **`port`** names the port used below. `3141` is the
+   default, but spelling it out keeps the listen address and browser origin visibly aligned.
+   The server refuses to bind off loopback without a
    token, so this alone will not start.
 2. **`token`** — a long random secret, `openssl rand -hex 32`. Prefer the
    `PI_OUTPOST_TOKEN` environment variable, which overrides the file and keeps the
@@ -169,13 +174,63 @@ granted it that.
 
 ## Run it permanently on a Linux server
 
+Install the package, locate the installed binary, and create a dedicated identity and
+directories. The paths below are examples; use the home and binary paths chosen by your
+distribution and npm installation.
+
 ```bash
 npm install -g pi-outpost
-pi-outpost init --global          # writes ~/.config/pi-outpost/config.json
-pi-outpost login --provider anthropic   # prompts; no browser needed
+command -v pi-outpost             # use this exact path in ExecStart below
+sudo useradd --system --create-home --shell /usr/sbin/nologin pi-outpost
+sudo install -d -o pi-outpost -g pi-outpost /etc/pi-outpost
+sudo install -d -o pi-outpost -g pi-outpost /var/lib/pi-outpost/agent
+sudo install -d -o pi-outpost -g pi-outpost /srv/pi-outpost/workspace
 ```
 
-Then a unit file:
+Create `/etc/pi-outpost/config.json`, owned by `pi-outpost`, so the setup commands and the
+service deliberately use the same configuration and agent directory:
+
+```json
+{
+  "cwd": "/srv/pi-outpost/workspace",
+  "agentDir": "/var/lib/pi-outpost/agent",
+  "sandbox": {
+    "root": "/srv/pi-outpost/workspace",
+    "allowWrite": false,
+    "allowBash": false
+  },
+  "server": { "host": "127.0.0.1", "port": 3141 }
+}
+```
+
+Then apply the promised ownership and permissions:
+
+```bash
+sudo chown pi-outpost:pi-outpost /etc/pi-outpost/config.json
+sudo chmod 600 /etc/pi-outpost/config.json
+```
+
+Store the model credential as the service identity. Replace `/usr/local/bin/pi-outpost` with
+the path printed by `command -v`:
+
+```bash
+sudo -u pi-outpost env PI_OUTPOST_CONFIG=/etc/pi-outpost/config.json \
+  /usr/local/bin/pi-outpost login --provider anthropic
+```
+
+Generate a token with `openssl rand -hex 32`. Create `/etc/pi-outpost/environment`, put a
+single `PI_OUTPOST_TOKEN=<paste the generated hex value>` line in it, and make it readable
+only by root:
+
+```bash
+openssl rand -hex 32
+sudo touch /etc/pi-outpost/environment
+sudo chown root:root /etc/pi-outpost/environment
+sudo chmod 600 /etc/pi-outpost/environment
+sudoedit /etc/pi-outpost/environment
+```
+
+Then create `/etc/systemd/system/pi-outpost.service`:
 
 ```ini
 [Unit]
@@ -185,19 +240,24 @@ After=network-online.target
 [Service]
 User=pi-outpost
 Environment=PI_OUTPOST_CONFIG=/etc/pi-outpost/config.json
-Environment=PI_OUTPOST_TOKEN=replace-me
-ExecStart=/usr/bin/pi-outpost --no-open
+EnvironmentFile=/etc/pi-outpost/environment
+ExecStart=/usr/local/bin/pi-outpost --no-open
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-`ExecStart` needs the real path — `which pi-outpost` after the global install, or the
-executable's own path if you deployed one of those. A headless host opens no browser
-anyway — pi-outpost only opens one where a desktop
-session exists — but `--no-open` says so explicitly. Give the service its own user,
-and point `cwd`, `sandbox.root` and `agentDir` at directories that user owns.
+The system manager reads the environment file, so it can remain owned by root with mode
+`0600`; do not put the token directly in the world-readable unit. A headless host opens no
+browser anyway — pi-outpost only opens one where a desktop session exists — but `--no-open`
+says so explicitly.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-outpost
+sudo systemctl status pi-outpost
+```
 
 From a checkout rather than a package, `npm run start` is the equivalent single
 command: it builds the interface once and serves everything from one process.
@@ -371,7 +431,7 @@ past message, and automatic session titles.
 |---|---|
 | `no configuration file found` | pi-outpost never starts without one. `pi-outpost init`, or `init --global` |
 | `cannot start: … is already in use` | Something else holds the port. `--port <n>` |
-| The setup screen keeps coming back | No provider can answer. `pi-outpost config` shows which `agentDir` it reads, and credentials live in `<agentDir>/auth.json` |
+| The setup screen keeps coming back | No provider can answer. `pi-outpost config` shows which `agentDir` it reads. Built-in provider credentials live in `<agentDir>/auth.json`; custom provider declarations and keys live in `<agentDir>/models.json` |
 | A bare `fetch failed` | A TLS-inspecting proxy. `export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem` |
 | Every turn fails on your own endpoint | The compatibility flags. Untick both, or set `compat` in `models.json` |
 | Each credential change hangs ~20 s | Remote model catalogs are unreachable. `"offline": true` |
