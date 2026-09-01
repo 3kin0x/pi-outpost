@@ -88,6 +88,15 @@ export interface TerminalConfig {
    * Explicit opt-in only.
    */
   enabled: boolean;
+  /**
+   * Path to the shell executable to spawn (e.g. "/bin/zsh", "bash.exe", "powershell.exe").
+   * When unset, the platform default is automatically detected (Git Bash -> PowerShell -> cmd on Windows; $SHELL -> zsh -> bash on Unix).
+   */
+  shell?: string;
+  /**
+   * Arguments passed to the shell process (defaults to ["-l"] on Unix login shells).
+   */
+  shellArgs?: string[];
 }
 
 export interface DocxConfig {
@@ -1089,8 +1098,11 @@ export function loadConfig(
 
   if (raw.terminal !== undefined) {
     const terminal = asObject(raw.terminal, "terminal");
+    const shell = optionalString(terminal, "shell", "terminal.shell");
     config.terminal = {
       enabled: optionalBoolean(terminal, "enabled", false),
+      shell: shell !== undefined && (shell.includes("/") || shell.includes("\\")) ? resolve(shell) : shell,
+      shellArgs: optionalStringArray(terminal, "shellArgs"),
     };
   }
   if (flags.terminal !== undefined) {

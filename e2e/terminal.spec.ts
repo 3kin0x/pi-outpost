@@ -13,7 +13,7 @@ test.describe("Integrated Terminal (when disabled by default)", () => {
 
     // Pressing Ctrl+` should not open terminal panel
     await page.keyboard.press("Control+`");
-    await expect(page.getByText("bash 1")).toHaveCount(0);
+    await expect(page.getByText("terminal 1")).toHaveCount(0);
   });
 });
 
@@ -29,35 +29,35 @@ test.describe("Integrated Terminal (when enabled via config/flag)", () => {
 
     // Open terminal via header button
     await terminalButton.click();
-    await expect(page.getByText("bash 1")).toBeVisible();
+    await expect(page.getByText("terminal 1")).toBeVisible();
     await expect(page.getByTitle("New Terminal Tab")).toBeVisible();
 
     // Close / minimize terminal via header button
     await terminalButton.click();
-    await expect(page.getByText("bash 1")).not.toBeVisible();
+    await expect(page.getByText("terminal 1")).not.toBeVisible();
   });
 
   test("toggles terminal via Ctrl+` keyboard shortcut", async ({ page }) => {
     // Open via shortcut
     await page.keyboard.press("Control+`");
-    await expect(page.getByText("bash 1")).toBeVisible();
+    await expect(page.getByText("terminal 1")).toBeVisible();
 
     // Close via shortcut
     await page.keyboard.press("Control+`");
-    await expect(page.getByText("bash 1")).not.toBeVisible();
+    await expect(page.getByText("terminal 1")).not.toBeVisible();
   });
 
   test("supports adding and renaming terminal tabs", async ({ page }) => {
     await page.getByRole("button", { name: />_ terminal/i }).click();
-    await expect(page.getByText("bash 1")).toBeVisible();
+    await expect(page.getByText("terminal 1")).toBeVisible();
 
     // Add second tab
     await page.getByTitle("New Terminal Tab").click();
-    await expect(page.getByText("bash 2")).toBeVisible();
+    await expect(page.getByText("terminal 2")).toBeVisible();
 
     // Rename first tab on double click
-    await page.getByText("bash 1").dblclick();
-    const renameInput = page.locator('input[type="text"]');
+    await page.getByText("terminal 1").dblclick();
+    const renameInput = page.getByTestId("terminal-tab-rename-input");
     await expect(renameInput).toBeVisible();
     await renameInput.fill("Build Server");
     await renameInput.press("Enter");

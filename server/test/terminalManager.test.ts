@@ -11,8 +11,15 @@ describe("TerminalManager", () => {
     assert.ok(typeof shell === "string" && shell.length > 0);
     assert.ok(Array.isArray(args));
     if (process.platform !== "win32") {
-      assert.deepEqual(args, ["-i"]);
+      assert.deepEqual(args, ["-l"]);
     }
+  });
+
+  test("getDefaultShell respects explicit shell and shellArgs options", () => {
+    const manager = new TerminalManager();
+    const custom = manager.getDefaultShell({ shell: "/bin/sh", shellArgs: ["-e"] });
+    assert.equal(custom.shell, "/bin/sh");
+    assert.deepEqual(custom.args, ["-e"]);
   });
 
   test("open, write, resize, and close terminal lifecycle", async () => {
@@ -106,5 +113,22 @@ describe("TerminalManager", () => {
     // Second session must remain active and reachable
     assert.equal(manager.write(socket, "reopen-id", "echo alive\n"), true);
     assert.equal(manager.close(socket, "reopen-id"), true);
+  });
+
+  test("concurrent same-tick opens serialize cleanly without leaking orphan processes", async () => {
+    const manager = new TerminalManager();
+    const socket = {} as WebSocket;
+
+    // Dispatch two opens in the exact same event loop tick (React StrictMode scenario)
+    await Promise.all([
+      manager.open(socket, "tick-id", process.cwd(), 80, 24, () => {}, () => {}),
+      manager.open(socket, "tick-id", process.cwd(), 80, 24, () => {}, () => {}),
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The final session must be reachable and clean up without issue
+    assert.equal(manager.write(socket, "tick-id", "echo same-tick\n"), true);
+    assert.equal(manager.close(socket, "tick-id"), true);
   });
 });

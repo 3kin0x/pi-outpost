@@ -36,7 +36,7 @@ describe("TerminalPanel", () => {
       </ThemeContext.Provider>,
     );
 
-    expect(screen.getByText("bash 1")).toBeInTheDocument();
+    expect(screen.getByText("terminal 1")).toBeInTheDocument();
     expect(screen.getByTitle("New Terminal Tab")).toBeInTheDocument();
     expect(screen.getByTitle("Clear Terminal Output")).toBeInTheDocument();
     expect(screen.getByTitle(/Maximize Terminal Panel/i)).toBeInTheDocument();
@@ -62,17 +62,17 @@ describe("TerminalPanel", () => {
     const addButton = screen.getByTitle("New Terminal Tab");
     fireEvent.click(addButton);
 
-    expect(screen.getByText("bash 2")).toBeInTheDocument();
+    expect(screen.getByText("terminal 2")).toBeInTheDocument();
     expect(openTerminal).toHaveBeenCalledTimes(2);
   });
 
   it("allows renaming tabs on double click", () => {
     render(<TerminalPanel {...defaultProps} />);
 
-    const tab = screen.getByText("bash 1");
+    const tab = screen.getByText("terminal 1");
     fireEvent.doubleClick(tab);
 
-    const input = screen.getByDisplayValue("bash 1");
+    const input = screen.getByDisplayValue("terminal 1");
     fireEvent.change(input, { target: { value: "API Server" } });
     fireEvent.keyDown(input, { key: "Enter" });
 

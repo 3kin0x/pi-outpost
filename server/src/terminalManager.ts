@@ -64,6 +64,27 @@ async function getPty(): Promise<typeof pty> {
   }
 }
 
+function findWindowsGitBash(): string | undefined {
+  if (process.platform !== "win32") return undefined;
+  const env = (name: string) => process.env[name];
+  const bases = [env("ProgramFiles"), env("ProgramW6432"), env("ProgramFiles(x86)")].filter(
+    (b): b is string => !!b,
+  );
+  if (env("LOCALAPPDATA")) {
+    bases.push(path.join(env("LOCALAPPDATA")!, "Programs"));
+  }
+  for (const base of bases) {
+    const candidates = [
+      path.join(base, "Git", "bin", "bash.exe"),
+      path.join(base, "Git", "usr", "bin", "bash.exe"),
+    ];
+    for (const candidate of candidates) {
+      if (fsSync.existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
 export interface TerminalSession {
   terminalId: string;
   ptyProcess: pty.IPty;
@@ -77,6 +98,11 @@ export class TerminalManager {
    * Ensures absolute isolation across multiple connected clients.
    */
   private socketSessions = new Map<WebSocket, Map<string, TerminalSession>>();
+
+  /**
+   * In-flight opens serialized per (socket, terminalId) to avoid race conditions.
+   */
+  private inFlightOpens = new Map<WebSocket, Map<string, Promise<TerminalSession>>>();
 
   /**
    * Check if PTY support is available on this host.
@@ -93,14 +119,25 @@ export class TerminalManager {
   /**
    * Determine the default shell for the host platform.
    */
-  getDefaultShell(): { shell: string; args: string[] } {
-    if (process.platform === "win32") {
-      const shell = process.env.COMSPEC || "powershell.exe";
-      return { shell, args: [] };
+  getDefaultShell(options?: { shell?: string; shellArgs?: string[] }): { shell: string; args: string[] } {
+    if (options?.shell) {
+      return {
+        shell: options.shell,
+        args: options.shellArgs ?? (process.platform === "win32" ? [] : ["-l"]),
+      };
     }
+
+    if (process.platform === "win32") {
+      const gitBash = findWindowsGitBash();
+      if (gitBash) {
+        return { shell: gitBash, args: ["-l"] };
+      }
+      return { shell: "powershell.exe", args: [] };
+    }
+
     const shell = process.env.SHELL || (os.platform() === "darwin" ? "/bin/zsh" : "/bin/bash");
-    // Start interactive shell
-    return { shell, args: ["-i"] };
+    // Login shell on Unix to source .zprofile / .bash_profile
+    return { shell, args: ["-l"] };
   }
 
   /**
@@ -114,42 +151,50 @@ export class TerminalManager {
     rows = 24,
     onData: (terminalId: string, data: string) => void,
     onExit: (terminalId: string, exitCode?: number) => void,
+    shellOptions?: { shell?: string; shellArgs?: string[] },
   ): Promise<TerminalSession> {
-    const pty = await getPty();
-
-    // If an existing session with this ID exists for this socket, close it first
-    if (this.socketSessions.get(socket)?.has(terminalId)) {
-      this.close(socket, terminalId);
+    let socketInFlight = this.inFlightOpens.get(socket);
+    if (!socketInFlight) {
+      socketInFlight = new Map();
+      this.inFlightOpens.set(socket, socketInFlight);
     }
 
-    let userSessions = this.socketSessions.get(socket);
-    if (!userSessions) {
-      userSessions = new Map();
-      this.socketSessions.set(socket, userSessions);
+    // If an open for the exact same socket + terminalId is already pending, wait for it first
+    const pending = socketInFlight.get(terminalId);
+    if (pending) {
+      try {
+        await pending;
+      } catch {
+        // Ignore previous failure
+      }
     }
 
-    const { shell, args } = this.getDefaultShell();
-    const resolvedCwd = path.resolve(cwd);
+    const openPromise = (async () => {
+      const pty = await getPty();
 
-    const env = {
-      ...process.env,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-    };
+      // If an existing session with this ID exists for this socket, close it first
+      if (this.socketSessions.get(socket)?.has(terminalId)) {
+        this.close(socket, terminalId);
+      }
 
-    ensureSpawnHelperExecutable();
+      let userSessions = this.socketSessions.get(socket);
+      if (!userSessions) {
+        userSessions = new Map();
+        this.socketSessions.set(socket, userSessions);
+      }
 
-    let ptyProcess: pty.IPty;
-    try {
-      ptyProcess = pty.spawn(shell, args, {
-        name: "xterm-256color",
-        cols: Math.max(10, cols),
-        rows: Math.max(5, rows),
-        cwd: resolvedCwd,
-        env,
-      });
-    } catch (err) {
+      const { shell, args } = this.getDefaultShell(shellOptions);
+      const resolvedCwd = path.resolve(cwd);
+
+      const env = {
+        ...process.env,
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+      };
+
       ensureSpawnHelperExecutable();
+
+      let ptyProcess: pty.IPty;
       try {
         ptyProcess = pty.spawn(shell, args, {
           name: "xterm-256color",
@@ -158,43 +203,65 @@ export class TerminalManager {
           cwd: resolvedCwd,
           env,
         });
-      } catch (retryErr) {
-        const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        if (msg.includes("posix_spawnp")) {
-          throw new Error(
-            `posix_spawnp failed: node-pty spawn-helper binary is missing execute permissions. Run "npm install-scripts approve node-pty" or "chmod +x node_modules/node-pty/prebuilds/.../spawn-helper".`,
-          );
+      } catch (err) {
+        ensureSpawnHelperExecutable();
+        try {
+          ptyProcess = pty.spawn(shell, args, {
+            name: "xterm-256color",
+            cols: Math.max(10, cols),
+            rows: Math.max(5, rows),
+            cwd: resolvedCwd,
+            env,
+          });
+        } catch (retryErr) {
+          const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          if (msg.includes("posix_spawnp")) {
+            throw new Error(
+              `posix_spawnp failed: node-pty spawn-helper binary is missing execute permissions. Run "npm install-scripts approve node-pty" or "chmod +x node_modules/node-pty/prebuilds/.../spawn-helper".`,
+            );
+          }
+          throw retryErr;
         }
-        throw retryErr;
+      }
+
+      const session: TerminalSession = {
+        terminalId,
+        ptyProcess,
+        socket,
+        cwd: resolvedCwd,
+      };
+
+      userSessions.set(terminalId, session);
+
+      ptyProcess.onData((data: string) => {
+        onData(terminalId, data);
+      });
+
+      ptyProcess.onExit(({ exitCode }) => {
+        // Guard against sequential reopen: only clean up if this session is still the active registered one!
+        const currentMap = this.socketSessions.get(socket);
+        if (currentMap && currentMap.get(terminalId) === session) {
+          currentMap.delete(terminalId);
+          if (currentMap.size === 0) {
+            this.socketSessions.delete(socket);
+          }
+        }
+        onExit(terminalId, exitCode);
+      });
+
+      return session;
+    })();
+
+    socketInFlight.set(terminalId, openPromise);
+
+    try {
+      return await openPromise;
+    } finally {
+      socketInFlight.delete(terminalId);
+      if (socketInFlight.size === 0) {
+        this.inFlightOpens.delete(socket);
       }
     }
-
-    const session: TerminalSession = {
-      terminalId,
-      ptyProcess,
-      socket,
-      cwd: resolvedCwd,
-    };
-
-    userSessions.set(terminalId, session);
-
-    ptyProcess.onData((data: string) => {
-      onData(terminalId, data);
-    });
-
-    ptyProcess.onExit(({ exitCode }) => {
-      // Guard against sequential reopen: only clean up if this session is still the active registered one!
-      const currentMap = this.socketSessions.get(socket);
-      if (currentMap && currentMap.get(terminalId) === session) {
-        currentMap.delete(terminalId);
-        if (currentMap.size === 0) {
-          this.socketSessions.delete(socket);
-        }
-      }
-      onExit(terminalId, exitCode);
-    });
-
-    return session;
   }
 
   /**

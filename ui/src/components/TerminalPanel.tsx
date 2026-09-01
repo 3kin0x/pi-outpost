@@ -308,7 +308,7 @@ export function TerminalPanel({
     if (open) setHasBeenOpened(true);
   }, [open]);
 
-  const [tabs, setTabs] = useState<TabItem[]>([{ id: "term-1", title: "bash 1" }]);
+  const [tabs, setTabs] = useState<TabItem[]>([{ id: "term-1", title: "terminal 1" }]);
   const [activeTabId, setActiveTabId] = useState<string>("term-1");
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -328,7 +328,7 @@ export function TerminalPanel({
   const addTab = useCallback(() => {
     const nextNum = tabs.length + 1;
     const newId = `term-${Date.now()}-${nextNum}`;
-    const newTab: TabItem = { id: newId, title: `bash ${nextNum}` };
+    const newTab: TabItem = { id: newId, title: `terminal ${nextNum}` };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newId);
   }, [tabs.length]);
@@ -438,6 +438,7 @@ export function TerminalPanel({
                   {isEditing ? (
                     <input
                       type="text"
+                      data-testid="terminal-tab-rename-input"
                       value={editingTitle}
                       autoFocus
                       onChange={(e) => setEditingTitle(e.target.value)}
