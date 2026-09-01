@@ -358,7 +358,7 @@ export interface TreeNode {
 /**
  * What a project is doing, for the selector to show without subscribing to it.
  *
- * Deliberately five named states rather than a pair of booleans: "stopped" and
+ * Deliberately six named states rather than a pair of booleans: "stopped" and
  * "idle" differ in whether a session exists, "working" and "waiting" differ in
  * whether anyone must act, and a client that had to infer those from flags would
  * have to encode the same rules the server already applies.
@@ -373,7 +373,9 @@ export type WorkspaceActivity =
   /** A turn is in flight — including while nobody is looking at it. */
   | "working"
   /** A turn is blocked on a question only the user can answer. */
-  | "waiting";
+  | "waiting"
+  /** Inactive, with an authoritative Work Plan whose completed result awaits review. */
+  | "ready-for-review";
 
 /**
  * One open project, as the selector sees it. Carries no conversation: a client
@@ -388,7 +390,7 @@ export interface WorkspaceInfo {
   /** Directory basename, for the selector's row. The path disambiguates two alike. */
   name: string;
   activity: WorkspaceActivity;
-  /** Whether a turn there is blocked on the user, whatever the client is bound to. */
+  /** Whether this workspace needs user attention, either to answer or to review. */
   needsAttention?: boolean;
 }
 

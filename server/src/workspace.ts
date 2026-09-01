@@ -61,6 +61,7 @@ export interface WorkspaceRetirementState {
   lastUsedAt: number;
   watched: boolean;
   busy: boolean;
+  readyForReview: boolean;
 }
 
 /**
@@ -72,6 +73,7 @@ export function shouldRetireWorkspace(state: WorkspaceRetirementState): boolean 
     state.timeoutMs > 0 &&
     !state.watched &&
     !state.busy &&
+    !state.readyForReview &&
     state.now - state.lastUsedAt >= state.timeoutMs
   );
 }

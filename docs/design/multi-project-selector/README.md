@@ -16,8 +16,8 @@ disagree with the spec, the spec wins.
 |------|-----------------|
 | `Main.dc.html` | The menu open, in the app shell: one row per open project, full name, path in mono, state in words. |
 | `HeaderClosed.dc.html` | The button's four closed appearances — everything it can say without being opened, including the muted dots for other open projects. |
-| `States.dc.html` | The five workspace states as menu rows, light and dark, with their marks. Shape distinguishes as much as colour. |
-| `Attention.dc.html` | The three attention levels: badge alone, badge plus browser notification, and the modal that must never happen. |
+| `States.dc.html` | The six workspace states as menu rows, light and dark, including the distinct ready-for-review mark. Shape distinguishes as much as colour. |
+| `Attention.dc.html` | The three attention levels: badge alone, badge plus browser notification, and the modal that must never happen. It illustrates the waiting case; review notifications use the same level with generic, content-free wording. |
 | `Switch.dc.html` | What the eye sees during a switch — what holds still, what cross-fades, what is forgotten, what keeps running behind. |
 | `canvas.json` | Layout, pages, and the sticky notes carrying the rationale. |
 
@@ -32,6 +32,11 @@ Lifted from the real app, not invented — `web/src/index.css` and
 - Connection dot: 8 px, `emerald-500` / `red-500`
 
 New UI extends that vocabulary; it does not introduce a second one.
+
+Ready for review extends the original attention vocabulary with a violet diamond and
+a review-sheet glyph. It is distinct from the amber waiting-for-an-answer state in
+shape, colour, label, and notification wording. Both contribute to the one attention
+count; switching projects clears neither state.
 
 ## Opening them
 

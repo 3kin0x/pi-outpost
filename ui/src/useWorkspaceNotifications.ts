@@ -6,7 +6,7 @@
  *
  *  - document in the foreground: the selector's badge alone. Nothing moves,
  *    nothing opens, the focus stays where it is.
- *  - document unattended: the badge plus one notification PER waiting project,
+ *  - document unattended: the badge plus one notification PER attention episode,
  *    each naming its own — a notification that does not say where to click cannot
  *    be acted on, so a coalesced "2 projects need you" would be worse than none.
  *  - never: a modal over the project the user is currently looking at. A question
@@ -16,18 +16,19 @@ import { useEffect, useRef } from "react";
 import type { WorkspaceInfo } from "@pi-outpost/shared";
 
 export function useWorkspaceNotifications(workspaces: WorkspaceInfo[], activeRoot: string | null): void {
-  /** Roots already notified, so one blocked turn raises one notification. */
-  const notified = useRef<Set<string>>(new Set());
+  /** Last attention kind notified per root; selecting a root does not clear it. */
+  const notified = useRef<Map<string, WorkspaceInfo["activity"]>>(new Map());
 
   useEffect(() => {
     if (typeof Notification === "undefined") return;
 
-    const waiting = workspaces.filter((w) => w.needsAttention && w.root !== activeRoot);
+    const attention = workspaces.filter((workspace) => workspace.needsAttention);
+    const backgroundAttention = attention.filter((workspace) => workspace.root !== activeRoot);
 
-    // Cleared as soon as a project stops waiting, so the NEXT question there
-    // notifies again rather than being swallowed as a duplicate.
-    for (const root of [...notified.current]) {
-      if (!waiting.some((w) => w.root === root)) notified.current.delete(root);
+    // Cleared only by an authoritative activity update that ends attention. Merely
+    // selecting the project removes it from `backgroundAttention`, not from here.
+    for (const root of [...notified.current.keys()]) {
+      if (!attention.some((workspace) => workspace.root === root)) notified.current.delete(root);
     }
 
     // Asking is the user's call to make; never prompt for permission on our own.
@@ -36,12 +37,13 @@ export function useWorkspaceNotifications(workspaces: WorkspaceInfo[], activeRoo
     // is looking at the app is the level this design refuses.
     if (typeof document !== "undefined" && document.visibilityState === "visible") return;
 
-    for (const workspace of waiting) {
-      if (notified.current.has(workspace.root)) continue;
-      notified.current.add(workspace.root);
+    for (const workspace of backgroundAttention) {
+      if (notified.current.get(workspace.root) === workspace.activity) continue;
+      notified.current.set(workspace.root, workspace.activity);
       try {
-        new Notification(`${workspace.name} needs you`, {
-          body: "The agent needs an answer to continue.",
+        const readyForReview = workspace.activity === "ready-for-review";
+        new Notification(readyForReview ? `${workspace.name} is ready for review` : `${workspace.name} needs you`, {
+          body: readyForReview ? "Background work is ready for review." : "The agent needs an answer to continue.",
           // One notification per project, replaced rather than stacked if that
           // project asks again.
           tag: `pi-outpost:${workspace.root}`,

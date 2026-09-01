@@ -42,7 +42,13 @@ describe("raising attention from a workspace nobody is watching", () => {
   it("stays silent while the document is in the foreground", () => {
     setVisibility("visible");
     renderHook(() =>
-      useWorkspaceNotifications([workspace({ root: "/srv/beta", name: "beta", activity: "waiting", needsAttention: true })], "/srv/alpha"),
+      useWorkspaceNotifications(
+        [
+          workspace({ root: "/srv/beta", name: "beta", activity: "waiting", needsAttention: true }),
+          workspace({ root: "/srv/gamma", name: "gamma", activity: "ready-for-review", needsAttention: true }),
+        ],
+        "/srv/alpha",
+      ),
     );
 
     // The selector's badge is the whole of it: interrupting someone who is
@@ -67,6 +73,30 @@ describe("raising attention from a workspace nobody is watching", () => {
     expect(raised.map((n) => n.options?.tag)).toEqual(["pi-outpost:/srv/beta", "pi-outpost:/srv/gamma"]);
   });
 
+  it("distinguishes ready workspaces without including plan content", () => {
+    renderHook(() =>
+      useWorkspaceNotifications(
+        [
+          workspace({ root: "/srv/beta", name: "beta", activity: "ready-for-review", needsAttention: true }),
+          workspace({ root: "/srv/gamma", name: "gamma", activity: "waiting", needsAttention: true }),
+        ],
+        "/srv/alpha",
+      ),
+    );
+
+    expect(raised).toEqual([
+      {
+        title: "beta is ready for review",
+        options: { body: "Background work is ready for review.", tag: "pi-outpost:/srv/beta" },
+      },
+      {
+        title: "gamma needs you",
+        options: { body: "The agent needs an answer to continue.", tag: "pi-outpost:/srv/gamma" },
+      },
+    ]);
+    expect(JSON.stringify(raised)).not.toMatch(/task|artifact|result/i);
+  });
+
   it("says nothing about the project the user is already looking at", () => {
     renderHook(() =>
       useWorkspaceNotifications([workspace({ activity: "waiting", needsAttention: true })], "/srv/alpha"),
@@ -89,6 +119,31 @@ describe("raising attention from a workspace nobody is watching", () => {
     rerender({ list: [workspace({ root: "/srv/beta", name: "beta", activity: "working" })] });
     rerender({ list: [...waiting] });
     expect(raised).toHaveLength(2);
+  });
+
+  it("does not clear review notification deduplication when the workspace is selected", () => {
+    const ready = [workspace({ root: "/srv/beta", name: "beta", activity: "ready-for-review", needsAttention: true })];
+    const { rerender } = renderHook(
+      ({ activeRoot }) => useWorkspaceNotifications(ready, activeRoot),
+      { initialProps: { activeRoot: "/srv/alpha" } },
+    );
+    expect(raised).toHaveLength(1);
+
+    rerender({ activeRoot: "/srv/beta" });
+    rerender({ activeRoot: "/srv/alpha" });
+    expect(raised).toHaveLength(1);
+
+    rerender({ activeRoot: "/srv/alpha" });
+    expect(raised).toHaveLength(1);
+  });
+
+  it("notifies again when the authoritative attention kind changes", () => {
+    const { rerender } = renderHook(({ list }) => useWorkspaceNotifications(list, "/srv/alpha"), {
+      initialProps: { list: [workspace({ root: "/srv/beta", name: "beta", activity: "waiting", needsAttention: true })] },
+    });
+    rerender({ list: [workspace({ root: "/srv/beta", name: "beta", activity: "ready-for-review", needsAttention: true })] });
+
+    expect(raised.map((notification) => notification.title)).toEqual(["beta needs you", "beta is ready for review"]);
   });
 
   it("never asks for permission on its own", () => {

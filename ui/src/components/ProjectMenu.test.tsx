@@ -39,6 +39,7 @@ describe("what the selector offers", () => {
         workspace(),
         workspace({ root: "/srv/beta", name: "beta", activity: "working" }),
         workspace({ root: "/srv/gamma", name: "gamma", activity: "stopped" }),
+        workspace({ root: "/srv/delta", name: "delta", activity: "ready-for-review", needsAttention: true }),
       ],
     });
 
@@ -49,6 +50,7 @@ describe("what the selector offers", () => {
       ["alpha", "/srv/alpha", "idle"],
       ["beta", "/srv/beta", "working"],
       ["gamma", "/srv/gamma", "stopped"],
+      ["delta", "/srv/delta", "ready for review"],
     ]) {
       expect(within(menu).getByText(name)).toBeInTheDocument();
       // The path is what separates two projects sharing a basename.
@@ -135,21 +137,26 @@ describe("what a pinned server offers", () => {
 });
 
 describe("attention, without interrupting anyone", () => {
-  it("counts the waiting projects on the button", () => {
+  it("counts actionable projects without interrupting focus", () => {
+    const focus = document.createElement("input");
+    document.body.append(focus);
+    focus.focus();
     setup({
       workspaces: [
         workspace(),
         workspace({ root: "/srv/beta", name: "beta", activity: "waiting", needsAttention: true }),
-        workspace({ root: "/srv/gamma", name: "gamma", activity: "waiting", needsAttention: true }),
+        workspace({ root: "/srv/gamma", name: "gamma", activity: "ready-for-review", needsAttention: true }),
       ],
     });
 
     const button = screen.getByRole("button", { expanded: false });
     expect(button).toHaveTextContent("2");
     // The badge is the only change to the current project's screen: no dialog,
-    // no focus move — there is nothing else here to render.
+    // no focus move.
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(focus);
+    focus.remove();
   });
 
   it("names the waiting project in words once the menu is open", () => {
@@ -160,6 +167,25 @@ describe("attention, without interrupting anyone", () => {
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     const row = within(screen.getByRole("menu")).getByText("beta").closest("div")!;
     expect(within(row).getByText("waiting for you")).toBeInTheDocument();
+  });
+
+  it("counts mixed attention and distinguishes every review-ready workspace", () => {
+    const active = workspace({ activity: "ready-for-review", needsAttention: true });
+    setup({
+      workspace: active,
+      workspaces: [
+        active,
+        workspace({ root: "/srv/beta", name: "beta", activity: "waiting", needsAttention: true }),
+        workspace({ root: "/srv/gamma", name: "gamma", activity: "ready-for-review", needsAttention: true }),
+      ],
+    });
+
+    const button = screen.getByRole("button", { expanded: false });
+    expect(button).toHaveTextContent("3");
+    expect(button).toHaveAttribute("title", "Project: alpha (ready for review)");
+    fireEvent.click(button);
+    expect(within(screen.getByRole("menu")).getAllByText("ready for review")).toHaveLength(2);
+    expect(within(screen.getByRole("menu")).getByText("waiting for you")).toBeInTheDocument();
   });
 });
 

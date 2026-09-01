@@ -19,6 +19,113 @@ const plan = (status = "in_progress") => ({
   ],
 });
 
+const messageAfter = (client, predicate, seen) => client.waitFor(
+  (message) => predicate(message) && client.received.filter(predicate).length > seen,
+);
+
+test("workspace review readiness follows only persisted Work Plan transitions", async () => {
+  const root = await makeWorkspace();
+  const sessionFile = path.join(root, "review.jsonl");
+  const fakeConfig = path.join(root, "fake-rpc.json");
+  await writeFile(sessionFile, "");
+  const transition = (status) => ({
+    writes: [{ path: `${sessionFile}.work-plan.json`, content: `${JSON.stringify(plan(status), null, 2)}\n` }],
+    after: [
+      { type: "agent_start" },
+      {
+        type: "tool_execution_end",
+        toolCallId: `plan-${status}`,
+        toolName: "work_plan",
+        result: {
+          content: [{ type: "text", text: "Work Plan updated." }],
+          details: { type: "work_plan", sessionFile, plan: plan(status), changed: true },
+        },
+        isError: false,
+      },
+      { type: "agent_settled" },
+    ],
+  });
+  await writeFile(fakeConfig, JSON.stringify({
+    state: { sessionId: "review", sessionFile },
+    commands_: { prompt: [transition("needs_review"), transition("in_progress"), transition("needs_review"), transition("done")] },
+  }));
+
+  const server = await startServer(
+    root,
+    { sandbox: undefined, agentRuntime: { mode: "rpc", executable: process.execPath, args: [FAKE], startupTimeoutMs: 5_000 } },
+    { env: { FAKE_PI_RPC_CONFIG: fakeConfig } },
+  );
+  const client = connect(server.wsUrl());
+  try {
+    let workspaceRoot = root;
+    const after = async (label, predicate, seen) => {
+      try {
+        return await messageAfter(client, predicate, seen);
+      } catch (error) {
+        const activity = client.received
+          .filter((message) => message.type === "workspace_activity")
+          .map((message) => message.workspaces.find((workspace) => workspace.root === workspaceRoot)?.activity);
+        const statuses = client.received
+          .filter((message) => message.type === "work_plan_changed")
+          .map((message) => message.workPlan?.tasks[0]?.status);
+        throw new Error(`${label} timed out; activities=${activity.join(",")}; planStatuses=${statuses.join(",")}`, { cause: error });
+      }
+    };
+    const hello = await client.waitFor("hello");
+    workspaceRoot = hello.workspace.root;
+    assert.equal(hello.workspace.activity, "idle", "turn completion is not enough without a review-ready plan");
+
+    const ended = (message) => message.type === "agent_end";
+    const reviewPlanChanged = (message) => message.type === "work_plan_changed" && message.workPlan?.tasks[0]?.status === "needs_review";
+    const activePlanChanged = (message) => message.type === "work_plan_changed" && message.workPlan?.tasks[0]?.status === "in_progress";
+    const donePlanChanged = (message) => message.type === "work_plan_changed" && message.workPlan?.tasks[0]?.status === "done";
+    const readyActivity = (message) => message.type === "workspace_activity" && message.workspaces.some((workspace) => workspace.root === workspaceRoot && workspace.activity === "ready-for-review");
+    const workingActivity = (message) => message.type === "workspace_activity" && message.workspaces.some((workspace) => workspace.root === workspaceRoot && workspace.activity === "working");
+    const idleActivity = (message) => message.type === "workspace_activity" && message.workspaces.some((workspace) => workspace.root === workspaceRoot && workspace.activity === "idle");
+
+    let endCount = client.received.filter(ended).length;
+    let planCount = client.received.filter(reviewPlanChanged).length;
+    let activityCount = client.received.filter(readyActivity).length;
+    client.send({ type: "prompt", text: "prepare review" });
+    await after("first review plan", reviewPlanChanged, planCount);
+    await after("first agent end", ended, endCount);
+    const ready = await after("first ready activity", readyActivity, activityCount);
+    const readySummary = ready.workspaces.find((workspace) => workspace.root === workspaceRoot);
+    assert.equal(readySummary.needsAttention, true);
+    assert.deepEqual(Object.keys(readySummary).sort(), ["activity", "name", "needsAttention", "root"]);
+
+    endCount = client.received.filter(ended).length;
+    planCount = client.received.filter(activePlanChanged).length;
+    const workingCount = client.received.filter(workingActivity).length;
+    activityCount = client.received.filter(idleActivity).length;
+    client.send({ type: "prompt", text: "resume meaningful work" });
+    await after("resumed working activity", workingActivity, workingCount);
+    await after("resumed plan", activePlanChanged, planCount);
+    await after("resumed agent end", ended, endCount);
+    await after("resumed idle activity", idleActivity, activityCount);
+
+    endCount = client.received.filter(ended).length;
+    planCount = client.received.filter(reviewPlanChanged).length;
+    activityCount = client.received.filter(readyActivity).length;
+    client.send({ type: "prompt", text: "return for review" });
+    await after("second review plan", reviewPlanChanged, planCount);
+    await after("second agent end", ended, endCount);
+    await after("second ready activity", readyActivity, activityCount);
+
+    endCount = client.received.filter(ended).length;
+    planCount = client.received.filter(donePlanChanged).length;
+    activityCount = client.received.filter(idleActivity).length;
+    client.send({ type: "prompt", text: "acknowledge review" });
+    await after("acknowledged plan", donePlanChanged, planCount);
+    await after("acknowledged agent end", ended, endCount);
+    const acknowledged = await after("acknowledged idle activity", idleActivity, activityCount);
+    assert.equal(acknowledged.workspaces.find((workspace) => workspace.root === workspaceRoot).needsAttention, undefined);
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});
+
 test("running server restores, forks, reconnects, and broadcasts authoritative Work Plans", async () => {
   const root = await makeWorkspace();
   const source = path.join(root, "source.jsonl");

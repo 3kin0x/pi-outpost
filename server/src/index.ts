@@ -43,7 +43,7 @@ import {
 import { rewriteMentionedPaths } from "@pi-outpost/shared/mentions";
 import { readStructuredExchangeDocument } from "@pi-outpost/shared/structured-exchange/document";
 import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
-import { validateWorkPlan } from "@pi-outpost/shared/work-plan";
+import { isWorkPlanReadyForReview, validateWorkPlan } from "@pi-outpost/shared/work-plan";
 import { describeProviderError } from "@pi-outpost/shared/provider-error";
 import {
   type AgentRuntime,
@@ -134,6 +134,7 @@ import { composeAppendSystemPrompt } from "./systemPrompt.ts";
 import { createPdfExtractToolDefinition } from "./pdfTool.ts";
 import { Workspace, shouldRetireWorkspace, type WorkspaceOptions, type WorkspaceSettings } from "./workspace.ts";
 import { WorkspaceRegistry } from "./workspaceRegistry.ts";
+import { deriveWorkspaceActivity, workspaceActivityNeedsAttention } from "./workspaceActivity.ts";
 import { isWithin, realResolve } from "./sandbox.ts";
 import {
   firstExchange,
@@ -1129,6 +1130,7 @@ function queueWorkPlanSessionSync(workspace: Workspace): Promise<void> {
     workspace.workPlanSessionFile = sessionFile;
     broadcast(workspace, { type: "session_replaced", ...snapshot(workspace) });
     if (inherited) broadcast(workspace, { type: "work_plan_changed", workPlan: plan });
+    announceWorkspaceActivity();
     console.log(`[pi] session ${workspace.agent.snapshot().sessionId}`);
   });
   workspace.workPlanSync.catch(reportError);
@@ -1147,7 +1149,10 @@ function queueWorkPlanToolSync(workspace: Workspace, sessionFile: string, change
     if (!sameSessionFile(workspace.agent.snapshot().sessionFile, sessionFile)) return;
     workspace.workPlan = plan;
     workspace.workPlanSessionFile = sessionFile;
-    if (changed) broadcast(workspace, { type: "work_plan_changed", workPlan: plan });
+    if (changed) {
+      broadcast(workspace, { type: "work_plan_changed", workPlan: plan });
+      announceWorkspaceActivity();
+    }
   });
   workspace.workPlanSync.catch(reportError);
 }
@@ -1222,25 +1227,36 @@ function branchUserEntries(workspace: Workspace): { entryId: string; text: strin
  * that drifts the first time a turn ends without anyone updating it.
  */
 function workspaceInfo(target: Workspace): WorkspaceInfo {
+  const activity = workspaceActivity(target);
   return {
     root: target.root,
     name: path.basename(target.root),
-    activity: workspaceActivity(target),
-    ...(target.needsAttention ? { needsAttention: true } : {}),
+    activity,
+    ...(workspaceActivityNeedsAttention(activity) ? { needsAttention: true } : {}),
   };
+}
+
+function workspaceWorkPlanReadyForReview(target: Workspace): boolean {
+  return target.started
+    && target.workPlanSessionFile !== undefined
+    && sameSessionFile(target.agent.snapshot().sessionFile, target.workPlanSessionFile)
+    && isWorkPlanReadyForReview(target.workPlan);
 }
 
 /** The four extension UI methods that block a turn until the user answers. */
 const BLOCKING_UI_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
 function workspaceActivity(target: Workspace): WorkspaceActivity {
-  // Building right now. Checked before `started`, which is still false for the
-  // whole length of the build — without this the `starting` state would be
-  // announced and then read as `stopped`, so it could never be seen.
-  if (starting.has(target.root)) return "starting";
-  if (!target.started) return "stopped";
-  if (target.needsAttention) return "waiting";
-  return target.isBusy() ? "working" : "idle";
+  const started = target.started;
+  return deriveWorkspaceActivity({
+    // Building right now is checked before `started`, which remains false for the
+    // build: otherwise starting would be announced and immediately read stopped.
+    starting: starting.has(target.root),
+    started,
+    waiting: target.needsAttention,
+    busy: target.isBusy(),
+    workPlanReadyForReview: workspaceWorkPlanReadyForReview(target),
+  });
 }
 
 /**
@@ -3544,7 +3560,11 @@ function sweepIdleWorkspaces(): void {
       open.lastUsedAt = now;
       continue;
     }
-    if (!shouldRetireWorkspace({ timeoutMs: timeout, now, lastUsedAt: open.lastUsedAt, watched: isWatched, busy: isBusy })) continue;
+    // Retention follows the authoritative plan fact, not the projected activity:
+    // `waiting` deliberately masks review readiness in the selector but must not
+    // make that review-ready workspace eligible for retirement.
+    const readyForReview = workspaceWorkPlanReadyForReview(open);
+    if (!shouldRetireWorkspace({ timeoutMs: timeout, now, lastUsedAt: open.lastUsedAt, watched: isWatched, busy: isBusy, readyForReview })) continue;
     console.log(`[pi] retiring ${path.basename(open.root)} after ${Math.round((now - open.lastUsedAt) / 1000)}s idle`);
     void open
       .retire()

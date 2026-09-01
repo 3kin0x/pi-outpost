@@ -8,9 +8,9 @@
  *  - **No monograms.** The full name carries identity and the path disambiguates
  *    two projects with the same basename; an initial would cost the reader a
  *    decoding step for something the name already says.
- *  - **The state is a word, not only a colour.** The dot repeats it, and the five
+ *  - **The state is a word, not only a colour.** The dot repeats it, and the six
  *    marks differ in SHAPE — dashed ring, spinning arc, small dot, pulsing halo,
- *    glyph — so the column is legible in greyscale.
+ *    diamond, glyph — so the column is legible in greyscale.
  *
  * Absent entirely while a single project is open: nothing new appears in a header
  * that already carries seven controls until there is something to choose.
@@ -34,6 +34,7 @@ const LABELS: Record<WorkspaceActivity, string> = {
   idle: "idle",
   working: "working",
   waiting: "waiting for you",
+  "ready-for-review": "ready for review",
 };
 
 /** The state mark. Shape first, colour second — see the file header. */
@@ -56,6 +57,8 @@ function ActivityMark({ activity }: { activity: WorkspaceActivity }) {
       );
     case "waiting":
       return <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />;
+    case "ready-for-review":
+      return <span className="h-2 w-2 shrink-0 rotate-45 rounded-[1px] border-2 border-violet-600 bg-violet-100 dark:border-violet-400 dark:bg-violet-950" />;
     default:
       return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-400 dark:bg-zinc-600" />;
   }
@@ -67,6 +70,16 @@ function AttentionGlyph({ className }: { className: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
       <path d="M12 6v7" />
       <path d="M12 18h.01" />
+    </svg>
+  );
+}
+
+/** A review sheet, distinct from the blocking-question exclamation. */
+function ReviewGlyph({ className }: { className: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 3h10v18H7z" />
+      <path d="m9.5 12 1.7 1.7 3.5-3.7" />
     </svg>
   );
 }
@@ -107,7 +120,7 @@ export function ProjectMenu(props: ProjectMenuProps) {
   if (!workspace) return null;
 
   const others = workspaces.filter((w) => w.root !== workspace.root);
-  const waiting = workspaces.filter((w) => w.needsAttention);
+  const attention = workspaces.filter((w) => w.needsAttention);
 
   return (
     <div ref={rootRef} className="relative">
@@ -118,17 +131,17 @@ export function ProjectMenu(props: ProjectMenuProps) {
         aria-haspopup="menu"
         title={`Project: ${workspace.name} (${LABELS[workspace.activity]})`}
         className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
-          waiting.length > 0
+          attention.length > 0
             ? "border-amber-500 bg-amber-50 text-zinc-700 dark:bg-amber-950/40 dark:text-zinc-200"
             : "border-zinc-400 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
         }`}
       >
         <ActivityMark activity={workspace.activity} />
         <span className="font-medium">{workspace.name}</span>
-        {waiting.length > 0 ? (
+        {attention.length > 0 ? (
           <span className="flex items-center gap-1 text-amber-600 dark:text-amber-500">
             <AttentionGlyph className="h-3 w-3" />
-            <span className="font-semibold">{waiting.length}</span>
+            <span className="font-semibold">{attention.length}</span>
           </span>
         ) : (
           // Muted dots: one per other open project, pulsing where an agent is
@@ -189,9 +202,9 @@ export function ProjectMenu(props: ProjectMenuProps) {
                 </button>
                 <span className="flex shrink-0 items-center gap-1.5">
                   {w.needsAttention ? (
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-500">
-                      <AttentionGlyph className="h-3 w-3" />
-                      {LABELS.waiting}
+                    <span className={`flex items-center gap-1 text-[11px] font-medium ${w.activity === "ready-for-review" ? "text-violet-700 dark:text-violet-400" : "text-amber-600 dark:text-amber-500"}`}>
+                      {w.activity === "ready-for-review" ? <ReviewGlyph className="h-3 w-3" /> : <AttentionGlyph className="h-3 w-3" />}
+                      {LABELS[w.activity]}
                     </span>
                   ) : (
                     <span className={`text-[11px] ${w.activity === "working" ? "text-blue-700 dark:text-blue-400" : "text-zinc-400 dark:text-zinc-500"}`}>

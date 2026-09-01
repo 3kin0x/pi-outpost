@@ -73,9 +73,17 @@ restarts.
 
 Each project gets its own agent, sandbox, file tree and session history. Switching
 never disturbs the others: a turn you leave running finishes, and its result is
-waiting when you come back. The selector says what each one is doing (idle, working,
-waiting for you), and a project that needs an answer while you are elsewhere raises a
-browser notification naming it.
+waiting when you come back. The selector distinguishes stopped, starting, idle,
+working, waiting for you, and ready for review. Waiting means the agent needs an
+answer. Ready for review is derived from its persisted Work Plan: every task is done
+or awaiting review, and at least one awaits review. It is not inferred merely because
+a turn ended.
+
+Both actionable states raise the existing attention count. If the browser tab is in
+the background, the notification names the project and whether it needs an answer or
+is ready for review, but never includes plan or workspace content. Switching to the
+project does not clear the state; acknowledge the result in the conversation, or ask
+for meaningful follow-up work.
 
 Two knobs, if the defaults do not suit:
 
@@ -88,9 +96,9 @@ Two knobs, if the defaults do not suit:
 
 `workspaceIdleTimeoutMs` is how long an unused project stays alive before it is
 retired and rebuilt on next use (`0` never retires; a project running a turn is never
-retired). `workspaceLock: true` pins the server to one project and removes the controls
-entirely. Use it for a deployment, embedded or standalone, whose project root must not
-change.
+retired). Waiting and ready-for-review projects are retained too. `workspaceLock: true`
+pins the server to one project and removes the controls entirely. Use it for a deployment,
+embedded or standalone, whose project root must not change.
 
 ## Use a local or self-hosted model
 

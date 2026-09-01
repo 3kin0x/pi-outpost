@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, test } from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Workspace, shouldRetireWorkspace, type WorkspaceOptions } from "../src/workspace.ts";
+import { deriveWorkspaceActivity, workspaceActivityNeedsAttention } from "../src/workspaceActivity.ts";
 
 const limits = {
   pdfMaxBytes: 1_000_000,
@@ -100,16 +101,66 @@ describe("WorkspaceOwnsItsResources", () => {
 describe("RetirementDisabled", () => {
   test("a zero timeout cannot retire even a long-idle, unwatched workspace", () => {
     assert.equal(
-      shouldRetireWorkspace({ timeoutMs: 0, now: 100_000, lastUsedAt: 0, watched: false, busy: false }),
+      shouldRetireWorkspace({ timeoutMs: 0, now: 100_000, lastUsedAt: 0, watched: false, busy: false, readyForReview: false }),
       false,
     );
   });
 
   test("the same workspace retires once a positive timeout has elapsed", () => {
     assert.equal(
-      shouldRetireWorkspace({ timeoutMs: 30_000, now: 100_000, lastUsedAt: 0, watched: false, busy: false }),
+      shouldRetireWorkspace({ timeoutMs: 30_000, now: 100_000, lastUsedAt: 0, watched: false, busy: false, readyForReview: false }),
       true,
     );
+  });
+
+  test("review readiness protects an otherwise retireable workspace", () => {
+    assert.equal(
+      shouldRetireWorkspace({ timeoutMs: 30_000, now: 100_000, lastUsedAt: 0, watched: false, busy: false, readyForReview: true }),
+      false,
+    );
+  });
+
+  test("a waiting projection cannot hide review readiness from retirement", () => {
+    const activity = deriveWorkspaceActivity({
+      starting: false,
+      started: true,
+      waiting: true,
+      busy: false,
+      workPlanReadyForReview: true,
+    });
+    assert.equal(activity, "waiting", "waiting still wins in the selector");
+    assert.equal(
+      shouldRetireWorkspace({ timeoutMs: 30_000, now: 100_000, lastUsedAt: 0, watched: false, busy: false, readyForReview: true }),
+      false,
+      "retirement consumes the underlying plan fact rather than the projected activity",
+    );
+  });
+});
+
+describe("workspace activity projection", () => {
+  const state = {
+    starting: false,
+    started: true,
+    waiting: false,
+    busy: false,
+    workPlanReadyForReview: false,
+  };
+
+  test("applies lifecycle and attention precedence before review readiness", () => {
+    assert.equal(deriveWorkspaceActivity({ ...state, starting: true, started: false, waiting: true, busy: true, workPlanReadyForReview: true }), "starting");
+    assert.equal(deriveWorkspaceActivity({ ...state, started: false, waiting: true, busy: true, workPlanReadyForReview: true }), "stopped");
+    assert.equal(deriveWorkspaceActivity({ ...state, waiting: true, busy: true, workPlanReadyForReview: true }), "waiting");
+    assert.equal(deriveWorkspaceActivity({ ...state, busy: true, workPlanReadyForReview: true }), "working");
+    assert.equal(deriveWorkspaceActivity({ ...state, workPlanReadyForReview: true }), "ready-for-review");
+    assert.equal(deriveWorkspaceActivity(state), "idle");
+  });
+
+  test("only actionable workspace activities use generic attention", () => {
+    assert.equal(workspaceActivityNeedsAttention("waiting"), true);
+    assert.equal(workspaceActivityNeedsAttention("ready-for-review"), true);
+    for (const activity of ["stopped", "starting", "working", "idle"] as const) {
+      assert.equal(workspaceActivityNeedsAttention(activity), false);
+    }
   });
 });
 

@@ -6,7 +6,7 @@
   "artboards": [
     { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1200, "h": 720, "title": "Menu ouvert", "page": "page-1" },
     { "file": "HeaderClosed.dc.html", "x": 1300, "y": 0, "w": 900, "h": 560, "title": "Bouton, menu fermé", "page": "page-1" },
-    { "file": "States.dc.html", "x": 0, "y": 0, "w": 980, "h": 600, "title": "Les cinq états", "page": "page-2" },
+    { "file": "States.dc.html", "x": 0, "y": 0, "w": 980, "h": 680, "title": "Les six états", "page": "page-2" },
     { "file": "Attention.dc.html", "x": 1100, "y": 0, "w": 900, "h": 440, "title": "Paliers d'attention", "page": "page-2" },
     { "file": "Switch.dc.html", "x": 0, "y": 740, "w": 1240, "h": 470, "title": "Pendant la bascule", "page": "page-2" }
   ],
@@ -33,7 +33,7 @@
       "x": 0,
       "y": -130,
       "w": 420,
-      "text": "La forme porte l'information autant que la couleur : trait discontinu pour arrêté, arc qui tourne pour démarrage, point plein pour au repos, halo pulsé pour travaille, glyphe pour l'attention. Lisible en niveaux de gris."
+      "text": "La forme porte l'information autant que la couleur : trait discontinu pour arrêté, arc qui tourne pour démarrage, point plein pour au repos, halo pulsé pour travaille, rond ambre pour attend, losange violet pour prêt à relire. Lisible en niveaux de gris."
     },
     {
       "id": "switch-note",
