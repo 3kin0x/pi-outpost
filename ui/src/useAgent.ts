@@ -18,6 +18,7 @@ import type {
   GitLogEntry,
   GitRepoStatus,
   GitRevision,
+  GitUnavailable,
   ModelChoice,
   ProviderCompat,
   ServerDirEntry,
@@ -296,6 +297,8 @@ export interface AgentState {
   settingsApply: SettingsApplyState | null;
   versions: { piOutpost: string; piSdk?: string; agent?: string } | null;
   gitAvailable: boolean;
+  /** Why git is unavailable, when it is. Null whenever it is available. */
+  gitUnavailable: GitUnavailable | null;
   gitStatus: GitStatusState | null;
   /** Worktree-vs-HEAD contents for the viewer's diff toggle. */
   gitDiff: GitDiffState | null;
@@ -358,6 +361,7 @@ const initialState: AgentState = {
   settingsApply: null,
   versions: null,
   gitAvailable: false,
+  gitUnavailable: null,
   credentials: null,
   gitStatus: null,
   gitDiff: null,
@@ -488,6 +492,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     fileOperation: null,
     writableRoot: message.writableRoot,
     gitAvailable: message.gitAvailable === true,
+    gitUnavailable: message.gitUnavailable ?? null,
     credentials: message.credentials ?? null,
     extensionPaths: message.extensionPaths ?? null,
     configuredExtensionPaths: message.configuredExtensionPaths ?? [],
@@ -1006,7 +1011,12 @@ function reduce(state: AgentState, action: Action): AgentState {
     case "git_repositories_changed":
       // A workspace that has lost its last repository keeps no status to show: the
       // badges and the branch chip would otherwise go on describing what is gone
-      return { ...state, gitAvailable: message.available, gitStatus: message.available ? state.gitStatus : null };
+      return {
+        ...state,
+        gitAvailable: message.available,
+        gitUnavailable: message.available ? null : (message.unavailable ?? null),
+        gitStatus: message.available ? state.gitStatus : null,
+      };
     case "git_diff":
       return { ...state, gitDiff: { path: message.path, before: message.before, after: message.after } };
     case "git_log":

@@ -833,6 +833,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             tools={state.tools}
             commands={state.commands}
             sandbox={state.sandbox}
+            gitUnavailable={state.gitUnavailable}
             userSkillPaths={state.userSkillPaths}
             serverBrowse={state.serverBrowse}
             settingsApply={state.settingsApply}

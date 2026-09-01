@@ -29,6 +29,7 @@ function setup(overrides: Partial<Props> = {}) {
     sandbox: sandbox(),
     userSkillPaths: [],
     serverBrowse: null,
+    gitUnavailable: null,
     applyState: null,
     onBrowseServerPath,
     onCloseServerBrowser,
@@ -518,6 +519,52 @@ describe("SettingsMenu", () => {
       setup({ versions: null });
       openMenu();
       expect(screen.queryByRole("heading", { name: /Versions/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("why git is unavailable", () => {
+    // openlore: scenario=AnOrdinaryDirectoryIsNotAFault spec=git
+    it("states a directory with no repository plainly, with nothing to fix", () => {
+      setup({ gitUnavailable: { reason: "no-repository" } });
+      openMenu();
+      const section = screen.getByTestId("git-unavailable");
+      expect(section).toHaveTextContent(/not in a git repository/i);
+      expect(section).not.toHaveTextContent(/PATH/);
+    });
+
+    // openlore: scenario=TheFaultIsVisibleWhereAUserLooks spec=git
+    it("names the fault and the remedy when the executable could not be run", () => {
+      setup({ gitUnavailable: { reason: "no-executable", message: "git could not be run (tried git)" } });
+      openMenu();
+      const section = screen.getByTestId("git-unavailable");
+      expect(section).toHaveTextContent(/executable could not be run/i);
+      expect(section).toHaveTextContent("git could not be run (tried git)");
+      expect(section).toHaveTextContent(/gitPath/);
+    });
+
+    it("repeats git's own words when git refused the repository", () => {
+      // The message names the directory AND the remedy; paraphrasing loses both
+      const message = "fatal: detected dubious ownership in repository at '/work/proj'";
+      setup({ gitUnavailable: { reason: "refused", message } });
+      openMenu();
+      const section = screen.getByTestId("git-unavailable");
+      expect(section).toHaveTextContent(/refused this repository/i);
+      expect(section).toHaveTextContent(message);
+    });
+
+    it("says nothing at all when git is available", () => {
+      setup({ gitUnavailable: null });
+      openMenu();
+      expect(screen.queryByTestId("git-unavailable")).not.toBeInTheDocument();
+    });
+
+    it("survives a missing value rather than taking the panel down with it", () => {
+      // Every other section here is unrelated to git: one absent prop must not blank
+      // the whole panel, which is exactly how a viewer crash unmounted the app once
+      setup({ gitUnavailable: undefined as never });
+      openMenu();
+      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+      expect(screen.queryByTestId("git-unavailable")).not.toBeInTheDocument();
     });
   });
 });

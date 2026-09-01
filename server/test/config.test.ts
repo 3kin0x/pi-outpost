@@ -579,6 +579,31 @@ describe("loadConfig — resource path resolution", () => {
     });
   });
 
+  // openlore: scenario=UnsetResolvesFromTheEnvironment spec=config
+  test("gitPath is optional and taken as given", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).gitPath, undefined);
+
+      await writeFile(configPath, JSON.stringify({ gitPath: "C:\\Program Files\\Git\\cmd\\git.exe" }, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).gitPath, "C:\\Program Files\\Git\\cmd\\git.exe");
+    });
+  });
+
+  // openlore: scenario=InvalidExecutableValue spec=config
+  test("gitPath refuses a value that names nothing", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      // Only the shape is checked here — whether it RUNS is a question for startup,
+      // which is the one moment an operator is watching
+      for (const gitPath of ["", "   ", 42, true]) {
+        await writeFile(configPath, JSON.stringify({ gitPath }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"gitPath"/);
+      }
+    });
+  });
+
   test("files.watch defaults to on and can be turned off", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");

@@ -453,6 +453,12 @@ export interface AppConfig {
    * itself cannot answer.
    */
   updateRegistry?: string;
+  /**
+   * The git executable to run. Unset, git is resolved from `PATH` and then from the
+   * platform's standard install locations — this exists for a deployment that keeps
+   * git somewhere neither would find.
+   */
+  gitPath?: string;
   port: number;
   host: string;
   /** Extra exact Origins allowed on the WebSocket (for embedding in another app). */
@@ -882,6 +888,17 @@ export function loadConfig(
         fail(`"updateRegistry" must be an http or https URL (got "${registry}")`);
       }
       config.updateRegistry = registry;
+    }
+  }
+
+  if (raw.gitPath !== undefined) {
+    const gitPath = optionalString(raw, "gitPath");
+    // Only the shape is checked here. Whether it RUNS is a question for startup: this
+    // function is synchronous, and an operator who mistyped a path should learn at
+    // boot rather than the first time somebody opens a file tree.
+    if (gitPath !== undefined) {
+      if (gitPath.trim() === "") fail('"gitPath" must be a path to a git executable (got an empty string)');
+      config.gitPath = gitPath;
     }
   }
 

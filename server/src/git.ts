@@ -24,6 +24,7 @@ import { promisify } from "node:util";
 import { isWithin, realResolve } from "./sandbox.ts";
 import {
   WORKTREE_REVISION,
+  type GitUnavailable,
   type GitFileLogEntry,
   type GitFileState,
   type GitFileStatus,
@@ -32,6 +33,83 @@ import {
 } from "@pi-outpost/shared";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * The git this process runs.
+ *
+ * Resolved once at startup and held, rather than looked up per command: it cannot
+ * usefully change mid-run, and a badge refresh should not pay for a search. Left at
+ * the bare name until `useGitExecutable` says otherwise, so any caller that has not
+ * resolved yet behaves exactly as this module always did.
+ */
+let gitBinary = "git";
+let gitResolved = false;
+
+/**
+ * Where git installers put it, per platform.
+ *
+ * SECURITY: every candidate is absolute, and none is derived from the workspace, the
+ * browser root or the working directory. A repository that could contribute a
+ * candidate would be a repository choosing which binary the server runs for it.
+ */
+export function standardLocations(): string[] {
+  const env = (name: string) => process.env[name];
+  if (process.platform === "win32") {
+    return [env("ProgramFiles"), env("ProgramW6432"), env("ProgramFiles(x86)")]
+      .filter((base): base is string => !!base)
+      .map((base) => path.join(base, "Git", "cmd", "git.exe"))
+      .concat(env("LOCALAPPDATA") ? [path.join(env("LOCALAPPDATA")!, "Programs", "Git", "cmd", "git.exe")] : []);
+  }
+  if (process.platform === "darwin") {
+    return ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git"];
+  }
+  return ["/usr/bin/git", "/usr/local/bin/git"];
+}
+
+/** Does this path answer as a git? The cheapest question that proves it runs. */
+async function answersAsGit(candidate: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(candidate, ["--version"], { timeout: GIT_TIMEOUT_MS, encoding: "utf8" });
+    return /^git version /i.test(stdout.trim());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The git executable to use, or a GitError saying what was tried.
+ *
+ * `PATH` is not enough on its own: git is installed on every Windows box that has
+ * VS Code working, and is routinely absent from the PATH a server process inherits —
+ * which removed the whole git surface with no message, and is why this exists.
+ *
+ * A configured path that does not answer FAILS here rather than falling through to
+ * the next candidate. Naming an executable is an instruction, and quietly running a
+ * different git would answer questions about the wrong installation.
+ */
+export async function resolveGitExecutable(configured?: string, candidates: string[] = standardLocations()): Promise<string> {
+  if (configured !== undefined) {
+    if (await answersAsGit(configured)) return configured;
+    throw new GitError(`"${configured}" is not a runnable git`);
+  }
+  if (await answersAsGit("git")) return "git";
+  for (const candidate of candidates) {
+    if (await answersAsGit(candidate)) return candidate;
+  }
+  throw new GitError(`git could not be found on PATH, nor at ${candidates.join(", ")}`);
+}
+
+/** Adopt a resolved executable for every git command from here on. */
+export function useGitExecutable(executable: string): void {
+  gitBinary = executable;
+  gitResolved = true;
+}
+
+/** Test seam: forget the resolved executable, back to the bare name. */
+export function resetGitExecutable(): void {
+  gitBinary = "git";
+  gitResolved = false;
+}
 
 const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER = 10 * 1024 * 1024;
@@ -42,7 +120,7 @@ export class GitError extends Error {}
 
 async function runGit(root: string, args: string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", args, {
+    const { stdout } = await execFileAsync(gitBinary, args, {
       cwd: root,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: GIT_MAX_BUFFER,
@@ -63,6 +141,38 @@ export async function probeGit(root: string): Promise<{ toplevel: string } | nul
     return toplevel ? { toplevel } : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Why git cannot serve this workspace, or undefined when it can.
+ *
+ * Discovery looks for `.git` on disk and never asks git whether it will actually read
+ * what it found — so a repository git refuses (dubious ownership, the everyday case)
+ * enters the set looking perfectly healthy, and every command against it then fails
+ * where nobody is watching. One `rev-parse` against a discovered repository is what
+ * turns that into an answer.
+ *
+ * An unrecognised failure classifies as `refused`, not as `no-repository`: the loud
+ * reading of an unknown error surfaces it, the quiet one buries it, and burying it is
+ * precisely the bug this replaces.
+ */
+export async function whyGitCannotServe(root: string, repos: readonly GitRepo[]): Promise<GitUnavailable | undefined> {
+  if (!gitResolved) {
+    return { reason: "no-executable", message: `git could not be run (tried ${gitBinary})` };
+  }
+  // With a set in hand, ask one of its repositories rather than the root: the root of a
+  // directory-of-projects is no repository at all, and would answer for none of them
+  const [first] = repos;
+  try {
+    await runGit(first ? first.cwd : root, ["rev-parse", "--show-toplevel"]);
+    // It answered. An empty set here means the root is in a repository discovery
+    // dropped — impossible — so a set with something in it is simply healthy.
+    return first ? undefined : { reason: "no-repository" };
+  } catch (error) {
+    const message = (error as Error).message;
+    if (/not a git repository/i.test(message)) return first ? undefined : { reason: "no-repository" };
+    return { reason: "refused", message };
   }
 }
 
