@@ -99,6 +99,18 @@ export type SessionSearch = {
   results: SessionSummary[];
 };
 
+/**
+ * The last commit log answered, and which repository answered it.
+ *
+ * A workspace holds several, so entries alone are not enough: rendered under
+ * another repository's chip they read as that repository's history, and clicking one
+ * would ask for a commit id the named repository has never heard of.
+ */
+export interface GitLogState {
+  repo: string;
+  entries: GitLogEntry[];
+}
+
 /** Latest git working-tree status; null until the first git_status answer. */
 export interface GitStatusState {
   /** Every repository serving the workspace, each with its own branch. */
@@ -287,7 +299,8 @@ export interface AgentState {
   gitStatus: GitStatusState | null;
   /** Worktree-vs-HEAD contents for the viewer's diff toggle. */
   gitDiff: GitDiffState | null;
-  gitLog: GitLogEntry[] | null;
+  /** The last commit log, with the repository it belongs to — see `GitLogState`. */
+  gitLog: GitLogState | null;
   gitShow: GitShowState | null;
   /** The open file's history, and the diff between the two revisions picked in it. */
   gitFileHistory: GitFileHistoryState | null;
@@ -990,10 +1003,14 @@ function reduce(state: AgentState, action: Action): AgentState {
       const repos = previous.repos.map((repo) => message.repos.find((one) => one.repo === repo.repo) ?? repo);
       return { ...state, gitStatus: { repos, files: { ...kept, ...files } } };
     }
+    case "git_repositories_changed":
+      // A workspace that has lost its last repository keeps no status to show: the
+      // badges and the branch chip would otherwise go on describing what is gone
+      return { ...state, gitAvailable: message.available, gitStatus: message.available ? state.gitStatus : null };
     case "git_diff":
       return { ...state, gitDiff: { path: message.path, before: message.before, after: message.after } };
     case "git_log":
-      return { ...state, gitLog: message.entries };
+      return { ...state, gitLog: { repo: message.repo, entries: message.entries } };
     case "git_show":
       return { ...state, gitShow: { sha: message.sha, patch: message.patch, truncated: message.truncated } };
     case "git_file_log":
@@ -1357,6 +1374,12 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         }
         // Bash commands can change git state without any file_changed broadcast
         if (message.type === "agent_end") refreshGitStatus();
+        if (message.type === "git_repositories_changed") {
+          // The gate this ref holds is why the message exists: a client told at
+          // connect that there was no repository here would otherwise never ask again
+          gitAvailableRef.current = message.available;
+          if (message.available) refreshGitStatus();
+        }
         if (message.type === "git_status" || (message.type === "git_error" && message.requestId.startsWith("git:"))) {
           gitStatusSettled(message.requestId);
         }

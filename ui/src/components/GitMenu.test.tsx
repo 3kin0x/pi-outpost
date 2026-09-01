@@ -17,10 +17,19 @@ function status(repos: GitRepoStatus[] = ONE): GitStatusState {
   return { repos, files: {} };
 }
 
-const LOG: GitLogEntry[] = [
+const ENTRIES: GitLogEntry[] = [
   { sha: "aaaaaaa1111", author: "Ada", date: new Date().toISOString(), subject: "most recent" },
   { sha: "bbbbbbb2222", author: "Grace", date: new Date(Date.now() - 3 * 86400_000).toISOString(), subject: "three days back" },
 ];
+
+/** A log answered BY `repo` — the menu shows it only under that repository's chip. */
+const logFor = (repo: string, entries: GitLogEntry[] | null = ENTRIES) =>
+  entries === null ? null : { repo, entries };
+
+/** The repository a browser-root-relative path belongs to, for the fixtures below. */
+const repoOf = (selected: string | null) => (selected === null ? "" : selected.split("/")[0]);
+
+const LOG = logFor("");
 
 function setup(props: Partial<React.ComponentProps<typeof GitMenu>> = {}) {
   const onFetchLog = vi.fn();
@@ -113,7 +122,7 @@ describe("GitMenu", () => {
   });
 
   it("distinguishes a repository with no commits from one still loading", () => {
-    setup({ log: [] });
+    setup({ log: logFor("", []) });
     fireEvent.click(chip());
     expect(screen.getByText("no commits")).toBeInTheDocument();
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
@@ -143,7 +152,7 @@ describe("GitMenu", () => {
 
   describe("a workspace holding several repositories", () => {
     const render2 = (selected: string | null, handlers: Partial<React.ComponentProps<typeof GitMenu>> = {}) =>
-      setup({ status: status(TWO), selected, ...handlers });
+      setup({ status: status(TWO), selected, log: logFor(repoOf(selected)), ...handlers });
 
     it("names the branch of the repository owning the selected file", () => {
       const { rerender, onFetchLog, onShowCommit } = render2("projA/src/main.ts");
@@ -151,7 +160,7 @@ describe("GitMenu", () => {
       expect(chip()).not.toHaveTextContent("release");
 
       rerender(
-        <GitMenu status={status(TWO)} selected="projB/README.md" log={LOG} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />,
+        <GitMenu status={status(TWO)} selected="projB/README.md" log={logFor("projB")} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />,
       );
       expect(chip()).toHaveTextContent("release");
       expect(chip()).toHaveTextContent("↑1");
@@ -175,7 +184,7 @@ describe("GitMenu", () => {
     it("names no branch when the selection is under no repository", () => {
       const { rerender, onFetchLog, onShowCommit } = render2("projA/src/main.ts");
       expect(chip()).toHaveTextContent("main");
-      rerender(<GitMenu status={status(TWO)} selected="notes.md" log={LOG} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />);
+      rerender(<GitMenu status={status(TWO)} selected="notes.md" log={logFor("")} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />);
       expect(chip()).toBeInTheDocument();
       expect(chip()).toHaveTextContent("—");
       expect(chip()).not.toHaveTextContent("main");
@@ -185,7 +194,7 @@ describe("GitMenu", () => {
     it("follows a directory, not only a file", () => {
       const { rerender, onFetchLog, onShowCommit } = render2("projA/src/main.ts");
       expect(chip()).toHaveTextContent("main");
-      rerender(<GitMenu status={status(TWO)} selected="projB" log={LOG} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />);
+      rerender(<GitMenu status={status(TWO)} selected="projB" log={logFor("projB")} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />);
       expect(chip()).toHaveTextContent("release");
       expect(chip()).toHaveTextContent("projB");
     });
@@ -196,6 +205,39 @@ describe("GitMenu", () => {
       expect(onFetchLog).toHaveBeenCalledWith("projB");
       fireEvent.click(screen.getByText("three days back"));
       expect(onShowCommit).toHaveBeenCalledWith("projB", "bbbbbbb2222");
+    });
+
+    it("asks for the new repository's log when the selection moves under an open menu", () => {
+      // The menu stays open while the user walks the tree. Asking only on the toggle
+      // left it saying "loading…" for a request nobody had made.
+      const { onFetchLog, rerender, onShowCommit } = setup({
+        status: status(TWO),
+        selected: "projA/src/main.ts",
+        log: logFor("projA"),
+      });
+      fireEvent.click(chip());
+      expect(onFetchLog).toHaveBeenLastCalledWith("projA");
+
+      rerender(
+        <GitMenu status={status(TWO)} selected="projB" log={logFor("projA")} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />,
+      );
+      expect(onFetchLog).toHaveBeenLastCalledWith("projB");
+      expect(screen.getByText("loading…")).toBeInTheDocument();
+
+      rerender(
+        <GitMenu status={status(TWO)} selected="projB" log={logFor("projB")} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />,
+      );
+      expect(screen.getByText("most recent")).toBeInTheDocument();
+    });
+
+    it("shows no commits under a repository whose answer has not arrived", () => {
+      // Opening projA's history, then projB's: projA's entries must not render under
+      // projB's chip, and must not be clickable into a git_show against projB
+      const { onShowCommit } = setup({ status: status(TWO), selected: "projB/README.md", log: logFor("projA") });
+      fireEvent.click(chip());
+      expect(screen.getByText("loading…")).toBeInTheDocument();
+      expect(screen.queryByText("most recent")).not.toBeInTheDocument();
+      expect(onShowCommit).not.toHaveBeenCalled();
     });
 
     it("offers no history to open while no repository is named", () => {

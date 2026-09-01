@@ -151,6 +151,38 @@ describe("a repository reachable only through a symlink out of the root", () => 
 });
 
 // ---------------------------------------------------------------------------
+describe("a root the filesystem knows by another name", () => {
+  let real: string;
+  let alias: string;
+
+  before(() => {
+    // The shape that took CI down on Windows only: `%TEMP%` is a short name there
+    // (`RUNNER~1` for `runneradmin`), so a root passed in one form and a child
+    // realpath-resolved into the other compared as different trees, and discovery
+    // quietly found nothing. A symlinked root reproduces it on any platform.
+    real = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-real-")));
+    makeRepo(path.join(real, "projA"));
+    alias = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-alias-"))), "link");
+    symlinkSync(real, alias);
+  });
+
+  after(() => {
+    rmSync(path.dirname(alias), { recursive: true, force: true });
+    rmSync(real, { recursive: true, force: true });
+  });
+
+  test("still finds the repositories under it", async () => {
+    const repos = await discoverRepos(alias);
+    assert.deepEqual(ids(repos), ["projA"]);
+  });
+
+  test("and runs git from a directory the filesystem agrees is that repository", async () => {
+    const [projA] = await discoverRepos(alias);
+    assert.equal(projA.cwd, path.join(real, "projA"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("attributing a path to a repository", () => {
   const repos: GitRepo[] = [
     { toplevel: "/w/projA/nested", cwd: "/w/projA/nested", id: "projA/nested" },

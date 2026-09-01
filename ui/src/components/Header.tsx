@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { MIN_SESSION_QUERY_LENGTH, type GitLogEntry, type SessionSummary, type TreeNode, type WorkspaceInfo } from "@pi-outpost/shared";
+import { MIN_SESSION_QUERY_LENGTH, type SessionSummary, type TreeNode, type WorkspaceInfo } from "@pi-outpost/shared";
 import { ProjectMenu } from "./ProjectMenu";
 import { WorkspaceRootControl, type WorkspaceRootSandbox } from "./WorkspaceRootControl";
-import type { GitStatusState, ServerBrowseState, SessionSearch, SettingsApplyState } from "../useAgent";
+import type { GitLogState, GitStatusState, ServerBrowseState, SessionSearch, SettingsApplyState } from "../useAgent";
 import { stripAnsi } from "../util/ansi";
 import { useClickOutside } from "../util/clickOutside";
 import { GitMenu } from "./GitMenu";
@@ -50,7 +50,7 @@ interface HeaderProps {
   hideTools: boolean;
   gitAvailable: boolean;
   gitStatus: GitStatusState | null;
-  gitLog: GitLogEntry[] | null;
+  gitLog: GitLogState | null;
   extensionPaths: string[] | null;
   configuredExtensionPaths: string[];
   userExtensionPaths: string[];

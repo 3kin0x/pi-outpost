@@ -97,8 +97,11 @@ const DISCOVERY_IGNORED_NAMES = new Set(["node_modules", "dist", "build", ".next
 const MAX_DISCOVERY_DEPTH = 4;
 
 function repoAt(browserRoot: string, toplevel: string): GitRepo {
-  const id = isWithin(browserRoot, toplevel) ? path.relative(browserRoot, toplevel).split(path.sep).join("/") : "";
-  return { toplevel, cwd: id === "" ? browserRoot : toplevel, id };
+  // git reports a toplevel with forward slashes on Windows; `resolve` puts it back in
+  // the platform's own terms so it can be compared with a path the filesystem gave us
+  const native = path.resolve(toplevel);
+  const id = isWithin(browserRoot, native) ? path.relative(browserRoot, native).split(path.sep).join("/") : "";
+  return { toplevel: native, cwd: id === "" ? browserRoot : native, id };
 }
 
 /**
@@ -112,7 +115,13 @@ function repoAt(browserRoot: string, toplevel: string): GitRepo {
  * is ever spawned in it. Symlinked directories are not descended into at all, as the
  * file browser's own search already declines to.
  */
-export async function discoverRepos(browserRoot: string): Promise<GitRepo[]> {
+export async function discoverRepos(root: string): Promise<GitRepo[]> {
+  // Canonicalise the root ONCE, and compare everything against that. A caller may
+  // hand over a path the filesystem knows by another name - on Windows `%TEMP%` is a
+  // short name, `RUNNER~1` for `runneradmin` - and every candidate below is
+  // realpath-resolved before the confinement check. Comparing a short root with an
+  // expanded child rejects the whole tree and quietly discovers nothing.
+  const browserRoot = await realResolve(root);
   const repos: GitRepo[] = [];
   const containing = await probeGit(browserRoot);
   if (containing) repos.push(repoAt(browserRoot, containing.toplevel));
@@ -205,6 +214,15 @@ function stateFromXY(xy: string): GitFileState {
 export interface GitStatusResult {
   repos: GitRepoStatus[];
   files: GitFileStatus[];
+  /**
+   * Repositories in the set that could not answer, by id.
+   *
+   * A repository stops being one without touching any directory a client has
+   * listed - `rm -rf proj/.git` changes `proj`, which nobody expanded - so the
+   * watcher never hears of it. The failure is the more reliable signal: a caller
+   * seeing this non-empty knows the set is stale and can go and look again.
+   */
+  missing: string[];
 }
 
 /**
@@ -219,7 +237,7 @@ export async function gitStatusFor(repo: GitRepo): Promise<GitStatusResult> {
   // directory to one "dir/" entry, leaving the files inside without badges)
   const out = await runGit(repo.cwd, ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "--", "."]);
   const repoStatus: GitRepoStatus = { repo: repo.id, branch: "", ahead: 0, behind: 0 };
-  const result: GitStatusResult = { repos: [repoStatus], files: [] };
+  const result: GitStatusResult = { repos: [repoStatus], files: [], missing: [] };
 
   // status paths are relative to the directory git ran in; the `-- .` pathspec already
   // confines entries, the "../" guard is defense in depth
@@ -295,6 +313,7 @@ export async function gitStatus(repos: readonly GitRepo[], scope?: GitRepo): Pro
     const failure = answers.find((answer): answer is Error => answer instanceof Error);
     if (failure) throw failure;
   }
+  const missing = read.filter((_, index) => answers[index] instanceof Error).map((repo) => repo.id);
 
   // A repository nested inside another appears twice: as itself, and as the single
   // entry its container reports for it - a gitlink, or an untracked directory named
@@ -303,6 +322,7 @@ export async function gitStatus(repos: readonly GitRepo[], scope?: GitRepo): Pro
   return {
     repos: ok.flatMap((answer) => answer.repos),
     files: ok.flatMap((answer) => answer.files).filter((file) => !nested.has(file.path.replace(/\/$/, ""))),
+    missing,
   };
 }
 

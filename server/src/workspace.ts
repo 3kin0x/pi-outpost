@@ -93,6 +93,11 @@ export interface WorkspaceOptions {
    */
   onDirectoryChanged: (relPath: string) => void;
   /**
+   * Where "this workspace's repository set changed" goes. Called only when the set
+   * differs from the one it replaces, so a quiet re-scan says nothing.
+   */
+  onRepositoriesChanged?: () => void;
+  /**
    * Builds the agent runtime for this workspace. Injected because the two runtime
    * flavours are assembled from configuration this object deliberately cannot see
    * (extensions, skills, prompt templates, RPC arguments).
@@ -316,12 +321,22 @@ export class Workspace {
     this.repoRescan.unref?.();
   }
 
-  /** Rebuild the repository set from disk. A failed scan leaves the old set in place. */
+  /**
+   * Rebuild the repository set from disk. A failed scan leaves the old set in place.
+   *
+   * Announces a set that actually changed. Silence would strand a client that was
+   * told at connect there was no repository here: it suppresses every git request
+   * from then on, so the first repository cloned into an empty workspace would stay
+   * invisible however many times the tree changed afterwards.
+   */
   async rediscoverRepos(): Promise<void> {
     if (this.stopped) return;
     try {
       const repos = await discoverRepos(this.browserRoot);
-      if (!this.stopped) this.repos = repos;
+      if (this.stopped) return;
+      const before = this.repos.map((repo) => repo.toplevel).join("\n");
+      this.repos = repos;
+      if (repos.map((repo) => repo.toplevel).join("\n") !== before) this.options.onRepositoriesChanged?.();
     } catch {
       // A scan that cannot read the tree is not a reason to forget the repositories
     }

@@ -636,6 +636,15 @@ export type ServerMessage =
     }
   | { type: "file_changed"; path: string }
   /**
+   * The workspace's repository set changed on disk — one was cloned, initialised or
+   * removed. `available` is the new `gitAvailable`.
+   *
+   * Broadcast rather than waited for: a client told at connect that the workspace has
+   * no repository stops asking about git entirely, so nothing short of being told
+   * would ever bring the surface back.
+   */
+  | { type: "git_repositories_changed"; available: boolean }
+  /**
    * A watched directory's entries changed on disk, whatever caused it — this
    * server, the agent through bash, or nothing in this process at all.
    *
@@ -657,7 +666,8 @@ export type ServerMessage =
    */
   | { type: "git_status"; requestId: string; repo?: string; repos: GitRepoStatus[]; files: GitFileStatus[] }
   | { type: "git_diff"; requestId: string; path: string; before: string; after: string }
-  | { type: "git_log"; requestId: string; entries: GitLogEntry[] }
+  /** `repo` is echoed: a log rendered under another repository's chip is a lie. */
+  | { type: "git_log"; requestId: string; repo: string; entries: GitLogEntry[] }
   | { type: "git_show"; requestId: string; sha: string; patch: string; truncated: boolean }
   | { type: "git_file_log"; requestId: string; path: string; entries: GitFileLogEntry[] }
   /** Both revisions are echoed so the client can drop a reply its selection has moved past. */

@@ -218,6 +218,97 @@ describe("repositories that appear and vanish while the server runs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// openlore: scenario=ARepositoryClonedWhileRunning spec=git
+describe("a workspace that had no repository at all, and gains one", () => {
+  let server;
+  let client;
+  let root;
+  let requestCounter = 0;
+
+  async function ask(message) {
+    const requestId = `empty-${++requestCounter}`;
+    client.send({ ...message, requestId });
+    return client.waitFor((m) => m.requestId === requestId, 20_000);
+  }
+
+  before(async () => {
+    root = await makeWorkspace({ "notes.md": "no repository here yet\n" });
+    server = await startServer(root);
+    client = connect(server.wsUrl());
+  });
+
+  after(async () => {
+    client?.close();
+    await server?.stop();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("tells the client, which was told at connect there was none", async () => {
+    const hello = await client.waitFor("hello");
+    assert.equal(hello.gitAvailable, false);
+    // The watcher only watches what a client has listed
+    await ask({ type: "list_directory", path: "" });
+
+    await makeRepo(path.join(root, "arrived"), "main", "arrived initial");
+
+    const announced = await client.waitFor((m) => m.type === "git_repositories_changed", 20_000);
+    assert.equal(announced.available, true, "a client that stopped asking must be told, not left to ask again");
+
+    const status = await ask({ type: "git_status" });
+    assert.equal(status.type, "git_status");
+    assert.deepEqual(
+      status.repos.map((repo) => repo.repo),
+      ["arrived"],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openlore: scenario=ARepositoryThatStopsBeingOne spec=git
+describe("a workspace that loses its last repository", () => {
+  let server;
+  let client;
+  let root;
+  let requestCounter = 0;
+
+  async function ask(message) {
+    const requestId = `lost-${++requestCounter}`;
+    client.send({ ...message, requestId });
+    return client.waitFor((m) => m.requestId === requestId, 20_000);
+  }
+
+  before(async () => {
+    root = await makeWorkspace({});
+    await makeRepo(path.join(root, "only"), "main", "only initial");
+    server = await startServer(root);
+    client = connect(server.wsUrl());
+  });
+
+  after(async () => {
+    client?.close();
+    await server?.stop();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("says git is gone, rather than leaving stale badges on screen", async () => {
+    const hello = await client.waitFor("hello");
+    assert.equal(hello.gitAvailable, true);
+    await ask({ type: "list_directory", path: "" });
+
+    // `rm -rf only/.git` changes `only`, which nobody expanded, so the watcher hears
+    // nothing at all. The next status is what finds out: the repository cannot answer.
+    await rm(path.join(root, "only", ".git"), { recursive: true, force: true });
+    await ask({ type: "git_status" });
+
+    const announced = await client.waitFor((m) => m.type === "git_repositories_changed", 20_000);
+    assert.equal(announced.available, false);
+
+    const answer = await ask({ type: "git_status" });
+    assert.equal(answer.type, "git_error");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // openlore: scenario=NoRepository spec=git
 describe("a workspace with no repository at all", () => {
   let server;

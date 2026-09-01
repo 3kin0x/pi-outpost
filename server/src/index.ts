@@ -354,6 +354,7 @@ const workspace = await Workspace.create({
     workspace.noteDirectoryChange();
     broadcast(workspace, { type: "directory_changed", path: relPath });
   },
+  onRepositoriesChanged: () => broadcast(workspace, { type: "git_repositories_changed", available: workspace.repos.length > 0 }),
   createRuntime: () => {
     throw new Error("the boot workspace's runtime is built in index.ts and attached");
   },
@@ -1043,6 +1044,7 @@ for (const root of config.openProjects) {
         restored.noteDirectoryChange();
         broadcast(restored, { type: "directory_changed", path: relPath });
       },
+      onRepositoriesChanged: () => broadcast(restored, { type: "git_repositories_changed", available: restored.repos.length > 0 }),
       createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
     workspaces.add(restored);
@@ -1956,6 +1958,7 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
         opened.noteDirectoryChange();
         broadcast(opened, { type: "directory_changed", path: relPath });
       },
+      onRepositoriesChanged: () => broadcast(opened, { type: "git_repositories_changed", available: opened.repos.length > 0 }),
       createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
   } catch (error) {
@@ -2849,10 +2852,19 @@ function repoById(workspace: Workspace, id: string): GitRepo {
 async function handleGitStatus(workspace: Workspace, socket: WebSocket, scope: string | undefined, requestId: string): Promise<void> {
   if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const { repos, files } = await gitStatus(workspace.repos, scope === undefined ? undefined : repoById(workspace, scope));
+    const { repos, files, missing } = await gitStatus(workspace.repos, scope === undefined ? undefined : repoById(workspace, scope));
     send(socket, { type: "git_status", requestId, ...(scope === undefined ? {} : { repo: scope }), repos, files });
+    // A repository that cannot answer has usually stopped being one, and did so
+    // without touching a directory any client had listed - `rm -rf proj/.git` changes
+    // `proj`, which nobody expanded, so the watcher heard nothing at all. Look again,
+    // and announce it if the set really did change.
+    if (missing.length > 0) void workspace.rediscoverRepos();
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
+    // The same signal, from the other side: a sweep where EVERY repository failed
+    // throws rather than returning, and a workspace down to its last repository
+    // reaches exactly that path when it loses it.
+    void workspace.rediscoverRepos();
   }
 }
 
@@ -2881,7 +2893,7 @@ async function handleGitDiff(workspace: Workspace, socket: WebSocket, filePath: 
 async function handleGitLog(workspace: Workspace, socket: WebSocket, repo: string, limit: number, requestId: string): Promise<void> {
   if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    send(socket, { type: "git_log", requestId, entries: await gitLog(repoById(workspace, repo), limit) });
+    send(socket, { type: "git_log", requestId, repo, entries: await gitLog(repoById(workspace, repo), limit) });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }

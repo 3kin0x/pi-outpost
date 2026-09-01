@@ -1162,6 +1162,54 @@ describe("git messages", () => {
     ]);
   });
 
+  it("starts asking about git when a workspace that had no repository gains one", async () => {
+    // The gate that makes this message necessary: told at connect there was no
+    // repository, the client suppresses every git request from then on
+    const result = await connected([], { gitAvailable: false });
+    const before = mockWs.sent.length;
+    act(() => mockWs!.receive({ type: "file_changed", path: "projA/README.md" }));
+    expect(mockWs.sent.slice(before).filter((raw) => JSON.parse(raw).type === "git_status")).toHaveLength(0);
+
+    act(() => mockWs!.receive({ type: "git_repositories_changed", available: true }));
+
+    await waitFor(() => expect(result.current.state.gitAvailable).toBe(true));
+    await waitFor(() =>
+      expect(mockWs.sent.slice(before).filter((raw) => JSON.parse(raw).type === "git_status").length).toBeGreaterThan(0),
+    );
+  });
+
+  it("stops describing repositories the workspace no longer has", async () => {
+    const result = await connected([], { gitAvailable: true });
+    act(() =>
+      mockWs!.receive({
+        type: "git_status",
+        repos: [{ repo: "only", branch: "main", ahead: 0, behind: 0 }],
+        files: [{ path: "only/a.ts", status: "modified" }],
+      }),
+    );
+    await waitFor(() => expect(result.current.state.gitStatus?.files["only/a.ts"]).toBe("modified"));
+
+    act(() => mockWs!.receive({ type: "git_repositories_changed", available: false }));
+
+    await waitFor(() => expect(result.current.state.gitAvailable).toBe(false));
+    // The badges and the branch chip would otherwise go on describing what is gone
+    expect(result.current.state.gitStatus).toBeNull();
+  });
+
+  it("keeps one repository's commits from rendering as another's", async () => {
+    const result = await connected([], { gitAvailable: true });
+    act(() =>
+      mockWs!.receive({
+        type: "git_log",
+        requestId: "gitlog:1",
+        repo: "projA",
+        entries: [{ sha: "aaaaaaa", author: "Ada", date: new Date().toISOString(), subject: "in projA" }],
+      }),
+    );
+    await waitFor(() => expect(result.current.state.gitLog?.repo).toBe("projA"));
+    expect(result.current.state.gitLog?.entries).toHaveLength(1);
+  });
+
   it("sweeps every repository when a turn ends, since bash can touch any of them", async () => {
     await connected([], { gitAvailable: true });
     // Connecting already asked once; settle it, or the next request coalesces into it
