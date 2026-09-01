@@ -31,6 +31,10 @@ describe("product system-prompt composition", () => {
     });
     assert.deepEqual(composed, [WORK_PLAN_SYSTEM_GUIDANCE, ...operator]);
     assert.equal(composed.filter((entry) => entry === WORK_PLAN_SYSTEM_GUIDANCE).length, 1);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /needs_review/);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /every other task to done or needs_review/);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /acknowledge review.*tasks to done/);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /meaningful work resumes/);
   });
 
   it("omits Work Plan guidance when an unsandboxed allowlist excludes the tool", () => {

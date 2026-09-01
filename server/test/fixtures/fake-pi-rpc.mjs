@@ -75,7 +75,7 @@ const state = {
   isStreaming: false,
   sessionId: "session-1",
   sessionFile: "/tmp/fake-session-1.jsonl",
-  ...config.state,
+  ...(config.stateByCwd?.[launch.cwd] ?? config.state),
 };
 let messages = config.messages ?? [];
 let entries = config.entries ?? [];

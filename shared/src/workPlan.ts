@@ -41,6 +41,19 @@ export interface WorkPlan {
   updatedAt: string;
 }
 
+/**
+ * Whether the authoritative plan says background work is complete and awaits a
+ * human review. Every task participates, including parents: an unreconciled
+ * container must not make the workspace look finished just because one child is
+ * ready.
+ */
+export function isWorkPlanReadyForReview(plan: WorkPlan | null): boolean {
+  return plan !== null
+    && plan.tasks.length > 0
+    && plan.tasks.some((task) => task.status === "needs_review")
+    && plan.tasks.every((task) => task.status === "done" || task.status === "needs_review");
+}
+
 export const WORK_PLAN_LIMITS = {
   // `action=get` returns the complete plan to the model after resume/compaction.
   // Keep that recovery state useful without letting it refill an entire context.

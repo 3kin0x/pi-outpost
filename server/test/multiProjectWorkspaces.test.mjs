@@ -26,6 +26,14 @@ import {
   wait,
 } from "./multiProjectHarness.mjs";
 
+const reviewPlan = (id) => ({
+  version: 1,
+  id,
+  title: `Review ${id}`,
+  updatedAt: "2026-09-01T00:00:00.000Z",
+  tasks: [{ id: `${id}-review`, title: `Private review task ${id}`, status: "needs_review", dependsOn: [], resources: [] }],
+});
+
 // openlore: scenario=ASingleProjectIsStillDescribed spec=api
 test("a single-project server still says which project it is serving", async (t) => {
   const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
@@ -128,6 +136,114 @@ test("a client hears about another project's activity, and none of its content",
   // everyone.
   assert.equal(Object.keys(activity).sort().join(","), "type,workspaces");
   await mover.waitFor((m) => m.type === "workspace_switched");
+});
+
+test("a background result moves from working to review-ready without exposing its content", async (t) => {
+  const beta = await secondProject();
+  const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
+  const sessionFile = path.join(root, "background-review.jsonl");
+  const privatePlan = reviewPlan("private-background-result");
+  await writeFile(sessionFile, "");
+  const server = await startScriptedServer(root, [beta], {
+    state: { sessionId: "background-review", sessionFile, isStreaming: false },
+    commands_: {
+      prompt: {
+        writes: [{ path: `${sessionFile}.work-plan.json`, content: `${JSON.stringify(privatePlan, null, 2)}\n` }],
+        after: [
+          { type: "agent_start" },
+          {
+            type: "tool_execution_end",
+            toolCallId: "review-plan",
+            toolName: "work_plan",
+            result: {
+              content: [{ type: "text", text: "Private result content" }],
+              details: { type: "work_plan", sessionFile, plan: privatePlan, changed: true },
+            },
+            isError: false,
+          },
+          { type: "agent_settled" },
+        ],
+      },
+    },
+  });
+  t.after(() => server.stop());
+
+  const watcher = connect(server.wsUrl());
+  const worker = connect(server.wsUrl());
+  t.after(() => { watcher.close(); worker.close(); });
+  await watcher.waitFor("hello");
+  await worker.waitFor("hello");
+  worker.send({ type: "switch_workspace", root: beta });
+  await worker.waitFor((message) => message.type === "workspace_switched" && message.workspace.root === beta);
+  worker.send({ type: "prompt", text: "finish in the background" });
+
+  await watcher.waitFor(
+    (message) => message.type === "workspace_activity"
+      && message.workspaces.some((workspace) => workspace.root === beta && workspace.activity === "working"),
+  );
+  const ready = await watcher.waitFor(
+    (message) => message.type === "workspace_activity"
+      && message.workspaces.some((workspace) => workspace.root === beta && workspace.activity === "ready-for-review"),
+  );
+  const summary = ready.workspaces.find((workspace) => workspace.root === beta);
+  assert.equal(summary.needsAttention, true);
+  assert.deepEqual(Object.keys(summary).sort(), ["activity", "name", "needsAttention", "root"]);
+  assert.equal(
+    watcher.received.some((message) => JSON.stringify(message).includes("Private result content") || JSON.stringify(message).includes("Private review task")),
+    false,
+    "neither result nor Work Plan content crossed the workspace boundary",
+  );
+});
+
+test("several review-ready workspaces stay marked across selection without leaking plan content", async (t) => {
+  const beta = await secondProject();
+  const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
+  const rootSessionFile = path.join(root, "review-ready-root.jsonl");
+  const betaSessionFile = path.join(beta, "review-ready-beta.jsonl");
+  await writeFile(rootSessionFile, "");
+  await writeFile(betaSessionFile, "");
+  await writeFile(`${rootSessionFile}.work-plan.json`, `${JSON.stringify(reviewPlan("private-root"), null, 2)}\n`);
+  await writeFile(`${betaSessionFile}.work-plan.json`, `${JSON.stringify(reviewPlan("private-beta"), null, 2)}\n`);
+  const server = await startScriptedServer(root, [beta], {
+    stateByCwd: {
+      [root]: { sessionId: "review-ready-root", sessionFile: rootSessionFile, isStreaming: false },
+      [beta]: { sessionId: "review-ready-beta", sessionFile: betaSessionFile, isStreaming: false },
+    },
+  });
+  t.after(() => server.stop());
+  const watcher = connect(server.wsUrl());
+  const mover = connect(server.wsUrl());
+  t.after(() => { watcher.close(); mover.close(); });
+  const hello = await watcher.waitFor("hello");
+  await mover.waitFor("hello");
+  assert.equal(hello.workspace.activity, "ready-for-review");
+  assert.equal(hello.workPlan?.id, "private-root", "the root derives readiness from its own plan");
+
+  mover.send({ type: "switch_workspace", root: beta });
+  const onBeta = await mover.waitFor((message) => message.type === "workspace_switched" && message.workspace.root === beta);
+  assert.equal(onBeta.workspace.activity, "ready-for-review");
+  assert.equal(onBeta.workPlan?.id, "private-beta", "the second workspace derives readiness from its independent plan");
+
+  const bothReady = await watcher.waitFor(
+    (message) => message.type === "workspace_activity"
+      && [root, beta].every((workspaceRoot) => message.workspaces.some((workspace) => workspace.root === workspaceRoot && workspace.activity === "ready-for-review" && workspace.needsAttention)),
+  );
+  for (const summary of bothReady.workspaces) {
+    assert.deepEqual(Object.keys(summary).sort(), ["activity", "name", "needsAttention", "root"], "only generic summary fields cross workspaces");
+    assert.ok(!JSON.stringify(summary).includes("Private review task private-root"));
+    assert.ok(!JSON.stringify(summary).includes("Private review task private-beta"));
+  }
+
+  mover.send({ type: "switch_workspace", root });
+  await mover.waitFor((message) => message.type === "workspace_switched" && message.workspace.root === root);
+  mover.send({ type: "switch_workspace", root: beta });
+  const selectedAgain = await next(mover, (message) => message.type === "workspace_switched" && message.workspace.root === beta);
+  assert.equal(selectedAgain.workspace.activity, "ready-for-review", "selection never acknowledges review readiness");
+  assert.equal(
+    watcher.received.filter((message) => message.type === "workspace_activity").some((message) => /Private review task private-(root|beta)/.test(JSON.stringify(message))),
+    false,
+    "server-wide activity frames contain no plan content",
+  );
 });
 
 test("a connection names the project it binds to, and an unknown one falls back", async (t) => {

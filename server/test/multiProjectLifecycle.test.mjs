@@ -136,6 +136,44 @@ test("a project whose agent is streaming outlives any idle period", async (t) =>
   assert.equal(hello.workspaces.find((w) => w.root === beta).activity, "working", "the turn kept its project alive");
 });
 
+test("a review-ready project outlives any idle period", async (t) => {
+  const beta = await secondProject();
+  const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));
+  const sessionFile = path.join(root, "review-ready.jsonl");
+  await writeFile(sessionFile, "");
+  const plan = {
+    version: 1,
+    id: "review",
+    title: "Review result",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "review-result", title: "Review result", status: "needs_review", dependsOn: [], resources: [] }],
+  };
+  await writeFile(`${sessionFile}.work-plan.json`, `${JSON.stringify(plan, null, 2)}\n`);
+  const server = await startScriptedServer(
+    root,
+    [beta],
+    { state: { sessionId: "review-ready", sessionFile, isStreaming: false } },
+    { workspaceIdleTimeoutMs: RETIREMENT_TIMEOUT_MS },
+  );
+  t.after(() => server.stop());
+
+  const client = connect(server.wsUrl());
+  t.after(() => client.close());
+  await client.waitFor("hello");
+  client.send({ type: "switch_workspace", root: beta });
+  const started = await client.waitFor((message) => message.type === "workspace_switched" && message.workspace.root === beta);
+  assert.equal(started.workspace.activity, "ready-for-review");
+
+  client.send({ type: "switch_workspace", root });
+  await client.waitFor((message) => message.type === "workspace_switched" && message.workspace.root === root);
+  await wait(RETIREMENT_TIMEOUT_MS * 3);
+
+  const observer = connect(server.wsUrl());
+  t.after(() => observer.close());
+  const hello = await observer.waitFor("hello");
+  assert.equal(hello.workspaces.find((workspace) => workspace.root === beta).activity, "ready-for-review");
+});
+
 test("closing a project releases it, moves whoever was watching, and leaves its history on disk", async (t) => {
   const beta = await secondProject();
   const root = await realpath(await makeWorkspace({ "a.md": "alpha\n" }));

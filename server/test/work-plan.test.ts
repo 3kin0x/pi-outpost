@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { mutateWorkPlan, normalizeWorkPlanDraft, validateWorkPlan, WORK_PLAN_LIMITS, type WorkPlan } from "@pi-outpost/shared/work-plan";
+import { isWorkPlanReadyForReview, mutateWorkPlan, normalizeWorkPlanDraft, validateWorkPlan, WORK_PLAN_LIMITS, type WorkPlan } from "@pi-outpost/shared/work-plan";
 import { applyWorkPlanMutation, copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile, workPlanPath } from "../src/workPlanStore.ts";
 import { createWorkPlanToolDefinition } from "../src/workPlanTool.ts";
 
@@ -20,6 +20,32 @@ const base = (): WorkPlan => ({
 });
 
 describe("Work Plan contract", () => {
+  it("derives review readiness only from a fully reconciled authoritative plan", () => {
+    const withStatuses = (...statuses: WorkPlan["tasks"][number]["status"][]): WorkPlan => ({
+      ...base(),
+      tasks: statuses.map((status, index) => ({
+        id: `task-${index}`,
+        title: `Task ${index}`,
+        status,
+        dependsOn: [],
+        resources: [],
+      })),
+    });
+
+    assert.equal(isWorkPlanReadyForReview(null), false);
+    assert.equal(isWorkPlanReadyForReview(withStatuses()), false);
+    assert.equal(isWorkPlanReadyForReview(withStatuses("done")), false);
+    assert.equal(isWorkPlanReadyForReview(withStatuses("needs_review")), true);
+    assert.equal(isWorkPlanReadyForReview(withStatuses("done", "needs_review", "done")), true);
+    for (const unfinished of ["todo", "in_progress", "blocked"] as const) {
+      assert.equal(
+        isWorkPlanReadyForReview(withStatuses("done", "needs_review", unfinished)),
+        false,
+        `${unfinished} prevents review readiness`,
+      );
+    }
+  });
+
   it("normalizes a minimal creation draft into a canonical version-1 plan", () => {
     const generated = ["plan-generated", "task-one", "task-two"];
     const plan = normalizeWorkPlanDraft(

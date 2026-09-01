@@ -484,6 +484,48 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: thinkingFakeConfig } },
   );
 
+  // A dedicated multi-project server with two independently authoritative
+  // review-ready sidecars. Distinct private markers catch plan mix-ups as well as
+  // content leaking through the server-wide summary.
+  const reviewReadyRoot = await realpath(await makeWorkspace({ "primary.md": "# primary review\n" }));
+  const reviewReadySecond = await realpath(await makeWorkspace({ "secondary.md": "# secondary review\n" }));
+  const reviewReadySession = path.join(reviewReadyRoot, "review-ready.jsonl");
+  const reviewReadySecondSession = path.join(reviewReadySecond, "review-ready.jsonl");
+  const reviewReadyPlan = {
+    version: 1,
+    id: "private-review-plan",
+    title: "Private launch details",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "private-task", title: "Private customer result", status: "needs_review", dependsOn: [], resources: [] }],
+  };
+  const reviewReadySecondPlan = {
+    version: 1,
+    id: "private-secondary-review-plan",
+    title: "Private secondary launch details",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "private-secondary-task", title: "Private secondary customer result", status: "needs_review", dependsOn: [], resources: [] }],
+  };
+  await writeFile(reviewReadySession, "");
+  await writeFile(reviewReadySecondSession, "");
+  await writeFile(`${reviewReadySession}.work-plan.json`, `${JSON.stringify(reviewReadyPlan, null, 2)}\n`);
+  await writeFile(`${reviewReadySecondSession}.work-plan.json`, `${JSON.stringify(reviewReadySecondPlan, null, 2)}\n`);
+  const reviewReadyFakeConfig = path.join(reviewReadyRoot, "fake-rpc.json");
+  await writeFile(reviewReadyFakeConfig, JSON.stringify({
+    stateByCwd: {
+      [reviewReadyRoot]: { sessionId: "review-ready-primary", sessionFile: reviewReadySession, isStreaming: false },
+      [reviewReadySecond]: { sessionId: "review-ready-secondary", sessionFile: reviewReadySecondSession, isStreaming: false },
+    },
+  }));
+  const reviewReady = await startServer(
+    reviewReadyRoot,
+    {
+      openProjects: [reviewReadySecond],
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")], startupTimeoutMs: 20_000 },
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: reviewReadyFakeConfig } },
+  );
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_PRIMARY_PROJECT = await realpath(root);
@@ -499,6 +541,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_NOTIFY_URL = notifications.base;
   process.env.PI_E2E_PROGRESS_URL = progress.base;
   process.env.PI_E2E_THINKING_URL = thinking.base;
+  process.env.PI_E2E_REVIEW_READY_URL = reviewReady.base;
+  process.env.PI_E2E_REVIEW_READY_PRIMARY = reviewReadyRoot;
+  process.env.PI_E2E_REVIEW_READY_SECOND = reviewReadySecond;
   process.env.PI_E2E_PLAN_SOURCE = sourceSession;
   process.env.PI_E2E_PLAN_FORK = forkSession;
   process.env.PI_E2E_EXTENSIONS_DIR = extensionsDir;
@@ -506,6 +551,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_TOKEN = E2E_TOKEN;
 
   return async () => {
+    await reviewReady.stop();
     await thinking.stop();
     await progress.stop();
     await notifications.stop();
@@ -519,6 +565,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await server.stop();
     await rm(secondRoot, { recursive: true, force: true });
     await rm(projectsSecondRoot, { recursive: true, force: true });
+    await rm(reviewReadySecond, { recursive: true, force: true });
     await host.close();
   };
 }

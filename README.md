@@ -166,7 +166,7 @@ one needs, the command that proves it works, and the caution that goes with it.
 
 - [Several projects open at once](#projects), each with its own agent, sandbox, sessions and
   history — switch between them while work continues in the ones you are not watching, and
-  get a browser notification when a background project needs an answer
+  get a browser notification when a background project needs an answer or is ready for review
 - File browser: lazy-loaded tree, syntax-highlighted viewer, Markdown rendering, and an
   editor that saves inside the writable zone. Create, rename, move, copy, delete, or open a
   file with the system's own application; anything outside the writable zone is dimmed
@@ -256,16 +256,18 @@ projects you are not looking at.
 - **Switch** without a reload. A turn running in the project you leave runs to completion,
   and its result is waiting when you come back. Unsent composer text is kept per project
 - **See what is happening elsewhere**: every project reports whether it is stopped, starting,
-  idle, working, or waiting for you. A project that needs an answer — a permission prompt, an
-  extension question — raises a badge in the selector, and a browser notification naming that
-  project when the window is in the background. Nothing ever interrupts the project you are
-  looking at
+  idle, working, waiting for you, or ready for review. Waiting means the agent needs an answer;
+  ready for review means its authoritative Work Plan has no unfinished task and at least one
+  task awaiting review. Both raise the selector's attention badge. When the window is in the
+  background, a browser notification names the project and the kind of attention without
+  exposing its plan or workspace content. Nothing ever interrupts the project you are looking
+  at, and merely selecting it does not acknowledge either state
 - **Close one** to release its resources; the sessions on disk stay, so reopening the same
   directory finds them again. Closing is refused while its agent is running a turn, and the
   last remaining project cannot be closed
 - Projects that nobody is using are retired after `workspaceIdleTimeoutMs` (30 minutes by
-  default, `0` disables it) and rebuilt transparently on next use. A project running a turn
-  is never retired
+  default, `0` disables it) and rebuilt transparently on next use. A project running a turn,
+  waiting for you, or ready for review is never retired
 
 A configuration where no project has ever been opened behaves exactly as a single-project
 server: `cwd` alone. `"workspaceLock": true` pins the server to one project and removes the
@@ -345,7 +347,7 @@ in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
 | `sandbox.allowBash` | Adds bash — **not path-confined**, explicit opt-in (default `false`) |
 | `sandboxLocks` | Which sandbox fields Settings may **not** change: `root`, `writableRoot`, `allowWrite`, `allowBash` |
 | `workspaceLock` | Pin the server to one project: opening, closing and switching are refused, and no control is offered |
-| `workspaceIdleTimeoutMs` | How long an unused project stays alive before it is retired (default `1800000` — 30 min; `0` never retires). A project running a turn is never retired |
+| `workspaceIdleTimeoutMs` | How long an unused project stays alive before it is retired (default `1800000` — 30 min; `0` never retires). A project running a turn, waiting for you, or ready for review is never retired |
 | `openProjects` | The set of open projects. **Written by the server** when you open or close one — not hand-authored |
 | `files.watch` | Watch the directories the file browser has listed, so the tree follows the workspace whoever changed it (default `true`). Set `false` where a watch is a liability — a network mount that emits no events, a spent inotify budget. The tree's ↻ control re-lists by hand either way |
 
@@ -661,6 +663,13 @@ Tasks use five states: `todo`, `in_progress`, `blocked`, `needs_review` and `don
 or review state can carry a reason, and tasks can link to resources; workspace resources open
 directly in the file viewer. The panel is read-only for now, so the conversation stays your
 control surface while the agent owns the plan through its `work_plan` tool.
+
+When a non-empty plan contains at least one `needs_review` task and every other task is either
+`needs_review` or `done`, the project becomes **ready for review** in the project selector.
+This is derived from the persisted plan, not from a turn or tool merely ending. Opening or
+switching to the project does not clear it: tell the agent what you accept or what must change.
+Accepted review tasks move to `done`; meaningful resumed work moves the relevant task back to
+an active state, so the project stops being ready until it reaches the review boundary again.
 
 Each plan is stored beside its session file. It is restored on reconnect and session resume,
 replaced when the active session changes, copied when a conversation is forked, and

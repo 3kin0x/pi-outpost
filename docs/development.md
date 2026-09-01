@@ -38,6 +38,7 @@ developers.
 ```bash
 npm run test --workspace server        # integration tests: no model auth, no tokens spent
 npm run test --workspace ui            # component unit tests (vitest, jsdom, testing-library)
+npm run test:e2e                        # real built app in Chromium, including multi-project flows
 npm run test:live --workspace server   # drives real agent turns (needs model auth, costs tokens)
 npm run test:linux                     # the ubuntu CI leg — suite then coverage — on Linux, non-root
 ```
@@ -48,6 +49,12 @@ HTTP/WebSocket. See [`server/test/README.md`](../server/test/README.md).
 
 UI component tests run under vitest with jsdom and `@testing-library/react`, covering
 `ui/src/components/` and `ui/src/util/`. They need no model auth and cost no tokens.
+
+Playwright builds and drives the real standalone app and widget. Use it for any change
+to visible behaviour or to the way a user operates the interface; assert the resulting
+DOM, persisted files, or transcript rather than relying on a screenshot. Multi-project
+activity and attention changes belong here because unit fakes cannot prove that switching
+projects preserves the server's authoritative state or its isolation boundary.
 
 ### Why `test:linux` exists
 

@@ -19,6 +19,9 @@ npm run test:live --workspace server   # drives real agent turns (needs model au
 |-------|--------|
 | `auth.test.mjs` | WebSocket token check (valid connects; missing/wrong closes 4401 with no data), `/branding` Bearer, `/health` session-id redaction, unchanged behavior without a token |
 | `files-raw.test.mjs` | `/files/raw`: confinement (traversal, absolute paths, symlink escapes → 404), 1 MiB cap → 413, image content types, non-images served as `attachment` (an HTML file must never render on our origin), SVG served with a scripts-off CSP, DNS-rebinding Host guard on token-less servers, token gating |
+| `work-plan-server.test.mjs` | Persisted Work Plan synchronization and authoritative workspace activity transitions, including ready-for-review, acknowledgement, and resumed work |
+| `multiProjectWorkspaces.test.mjs` | Concurrent workspace lifecycle, switching, generic attention summaries, simultaneous review-ready projects, and cross-workspace isolation |
+| `multiProjectLifecycle.test.mjs` | Idle retirement and retention of workspaces that are working, waiting for the user, or ready for review |
 | `live/conversation-branching.test.mjs` | Editing a past prompt branches the session and the original exchange stays restorable *with its reply* (`tipId`); navigating to the turn itself rewinds with composer prefill; unknown entry ids refused; **the phantom-bubble regression** — a message an extension swallowed is echoed but never persisted, so pairing must fail closed instead of handing that bubble the previous turn's entry id (aligning by position would make an edit rewind the wrong turn) |
 
 `fixtures/swallow-extension.ts` is what produces that phantom: an `input` handler returning
