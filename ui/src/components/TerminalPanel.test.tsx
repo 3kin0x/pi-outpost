@@ -79,7 +79,7 @@ describe("TerminalPanel", () => {
     expect(screen.getByText("API Server")).toBeInTheDocument();
   });
 
-  it("calls onSetWorkspaceRoot when clicking sync button", () => {
+  it("calls onSetWorkspaceRoot when clicking open as project button", () => {
     const onSetWorkspaceRoot = vi.fn();
     render(
       <TerminalPanel
@@ -89,7 +89,7 @@ describe("TerminalPanel", () => {
       />,
     );
 
-    const syncButton = screen.getByTitle(/Sync workspace root & LLM agent to/i);
+    const syncButton = screen.getByTitle(/as the workspace project and reposition the LLM agent/i);
     fireEvent.click(syncButton);
 
     expect(onSetWorkspaceRoot).toHaveBeenCalledWith("/custom/subproject");
