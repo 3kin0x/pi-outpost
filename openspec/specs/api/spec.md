@@ -24,7 +24,7 @@ The API SHALL support `GET /branding` to retrieve branding information for the a
 
 The API SHALL support `GET /ws` to establish a websocket connection for real-time communication. The connection SHALL be bound to exactly one workspace: the one named in the upgrade request, or the server's default workspace when none is named. The state snapshot it sends SHALL describe that workspace, and SHALL carry the server's credential status: which providers are configured and whether a usable model exists — never a stored key. The snapshot SHALL additionally list every open project with its activity state, so a client can show background work without subscribing to it.
 
-The snapshot SHALL also carry the current model's **accepted thinking levels** — the ordered subset of the known levels the model will actually honour — so a client can present a control that offers only those. Where the runtime cannot report them, the snapshot SHALL omit the list rather than guess, and a client SHALL then fall back to offering the full set.
+The snapshot SHALL also carry the current model's **accepted thinking levels** — the ordered subset of the known levels the model will actually honour — so a client can present a control that offers only those. The list SHALL come from configuration where the deployment declares one for that model, and from the runtime otherwise: a model the SDK does not know is exactly the model whose capabilities only the operator can state. Where neither says, the snapshot SHALL omit the list rather than guess, and a client SHALL then fall back to offering the full set.
 
 Both SHALL be present whatever the number of projects open, one included: a client that is told nothing about the project it is bound to cannot name it, and naming it is what the interface owes its user before anything else.
 
@@ -74,6 +74,16 @@ Server messages carrying workspace content SHALL reach only the connections boun
 - **GIVEN** a runtime that cannot report which thinking levels the model accepts
 - **WHEN** a client connects
 - **THEN** the snapshot omits the list rather than inventing one
+
+#### Scenario: ADeclaredSetOverridesTheRuntime
+- **GIVEN** a configuration declaring the thinking levels of the current model, and a runtime reporting a different set
+- **WHEN** a client connects
+- **THEN** the snapshot carries the declared set
+
+#### Scenario: ADeclaredSetAnswersForAModelTheRuntimeCannot
+- **GIVEN** a configuration declaring the thinking levels of a model the runtime knows nothing about
+- **WHEN** a client connects
+- **THEN** the snapshot carries the declared set rather than omitting it
 
 ### Requirement: TheSnapshotNamesWhatAnswersPrompts
 
@@ -505,3 +515,28 @@ empty list read as a fact tells the operator something untrue.
 - **GIVEN** a server whose conversation is served by a supervised agent child
 - **WHEN** a client connects
 - **THEN** the snapshot marks the loaded-extension inventory as unavailable rather than listing none
+
+### Requirement: RefuseAThinkingLevelTheDeploymentExcludes
+
+Where configuration declares which thinking levels a model accepts, the system SHALL refuse a
+`set_thinking` naming a level outside that set, and SHALL leave the current level unchanged.
+
+The control already offers only the declared levels, so this is not about the control: it is
+about every other way the message can arrive — an embedded widget, a reconnecting client
+restoring a level the deployment has since narrowed, a script. A level the model cannot
+honour should not be forwarded to it on the strength of who asked.
+
+#### Scenario: AnExcludedLevelIsRefused
+- **GIVEN** a configuration declaring that the current model accepts only `off`
+- **WHEN** a client sends `set_thinking` with `high`
+- **THEN** the request is refused and the thinking level is unchanged
+
+#### Scenario: ADeclaredLevelIsAccepted
+- **GIVEN** a configuration declaring that the current model accepts `off` and `low`
+- **WHEN** a client sends `set_thinking` with `low`
+- **THEN** the level is set
+
+#### Scenario: NoDeclarationRefusesNothing
+- **GIVEN** a configuration declaring nothing for the current model
+- **WHEN** a client sends `set_thinking` with any known level
+- **THEN** the request is handled exactly as it was before
