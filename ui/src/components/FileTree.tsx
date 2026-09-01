@@ -43,6 +43,14 @@ interface TreeProps {
   /** Paths currently attached to the composer as references (from the tree or the open preview). */
   attachedPaths?: string[];
   onExpand: (path: string) => void;
+  /**
+   * A directory the user touched, opened or closed.
+   *
+   * Distinct from `onExpand`, which fires once per directory and only to fetch it:
+   * re-opening a cached directory, or collapsing one, tells the tree nothing while
+   * telling the user's eye a great deal about which project they are looking at.
+   */
+  onSelectDirectory?: (path: string) => void;
   onSelectFile: (path: string) => void;
   /** Open the file directly on its uncommitted diff (badge click). */
   onSelectDiff?: (path: string) => void;
@@ -296,6 +304,7 @@ function TreeNode({
               const next = !open;
               setOpen(next);
               if (next && props.tree[fullPath] === undefined) props.onExpand(fullPath);
+              props.onSelectDirectory?.(fullPath);
             }}
             style={{ paddingLeft: depth * 12 }}
             className="flex min-w-0 flex-1 items-center gap-1 rounded py-0.5 text-left"

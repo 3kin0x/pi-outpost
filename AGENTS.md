@@ -132,3 +132,27 @@ shows those.
 What "exercised" means: drive the actual feature — create the file, open the
 document, ask the agent for the thing — then read back the DOM, the filesystem, or
 the session transcript to check what really happened. A screenshot is not a check.
+
+### Do not stop at the happy path
+
+Once the intended walkthrough passes, make a second pass whose only goal is to
+break it. The happy path is the sequence the code was written against, so it is
+the one least likely to be broken; the defects live in the transitions.
+
+Hammer it like a monkey tester: rapid and double clicks, a menu left open while
+the context under it changes, switching projects or sessions mid-request,
+clicking a file that was just deleted on disk, spamming expand/collapse, acting
+before the first data has arrived, and clicking in an order nobody would design
+for. Remove things underneath the running app — delete the directory, revoke the
+permission, kill the repository — and watch what it claims afterwards.
+
+Read back the DOM after each burst, and watch for the shapes that only show up
+here: stale state rendered under a new context, a reply answering a question that
+has since changed, a handler assuming an object it no longer holds, a panel stuck
+loading a request nobody made. Report what broke, not merely that the feature
+works.
+
+Two defects in the per-repository git work were exactly of this shape, and both
+had green suites over them: a commit log rendered under another project's name,
+and — once that was correlated — a menu that sat on "loading…" forever because
+the fetch only happened on the toggle.

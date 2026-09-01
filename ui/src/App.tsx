@@ -7,6 +7,7 @@ import { ThemeContext } from "./theme/ThemeContext";
 import { useConversationJump } from "./useConversationJump";
 import { analyzeSession } from "./util/sessionAnalysis";
 import { sessionUsage } from "./util/sessionUsage";
+import { repoForPath } from "./util/gitRepos";
 import { ToolCard } from "./components/ToolCard";
 import { createActionDispatch } from "./presentations/actions";
 import { UserMessage } from "./components/UserMessage";
@@ -173,6 +174,13 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
    * would close the listing the other is still reading.
    */
   const [headerPicker, setHeaderPicker] = useState<"project" | "root" | "settings" | null>(null);
+  /**
+   * The last path the user touched in the tree, file or directory — what the branch
+   * chip names a repository from. Not `openFile`: walking into a project without
+   * opening anything is still saying which project you are in, and closing the viewer
+   * is not saying you have left it.
+   */
+  const [treeSelection, setTreeSelection] = useState<string | null>(null);
   const projectPicker = headerPicker === "project";
   const setProjectPicker = (open: boolean) => setHeaderPicker(open ? "project" : null);
   /**
@@ -701,13 +709,16 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             gitFiles={state.gitStatus?.files}
             attachedPaths={attachedPaths}
             onExpand={listDirectory}
+            onSelectDirectory={setTreeSelection}
             onRefresh={refreshFileTree}
             onSelectFile={(path) => {
               setDiffOnOpen(false);
+              setTreeSelection(path);
               readFile(path);
             }}
             onSelectDiff={(path) => {
               setDiffOnOpen(true);
+              setTreeSelection(path);
               readFile(path);
             }}
             onToggleAttachPath={toggleAttachPath}
@@ -813,6 +824,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             onForkSession={forkSession}
             gitAvailable={state.gitAvailable}
             gitStatus={state.gitStatus}
+            gitSelectedPath={treeSelection}
             gitLog={state.gitLog}
             extensionPaths={state.extensionPaths}
             configuredExtensionPaths={state.configuredExtensionPaths}
@@ -862,7 +874,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               gitDiff={state.gitDiff}
               onFetchGitDiff={fetchGitDiff}
               onClearGitDiff={clearGitDiff}
-              gitAvailable={state.gitAvailable}
+              inRepository={repoForPath(state.gitStatus?.repos ?? [], state.openFile.path) !== null}
               onOpenGitHistory={fetchGitFileHistory}
               onClose={closePreview}
               onReload={readFile}

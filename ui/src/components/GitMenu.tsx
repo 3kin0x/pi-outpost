@@ -1,13 +1,19 @@
-import { useState } from "react";
-import type { GitLogEntry } from "@pi-outpost/shared";
-import type { GitStatusState } from "../useAgent";
+import { useEffect, useState } from "react";
+import type { GitRepoStatus } from "@pi-outpost/shared";
+import type { GitLogState, GitStatusState } from "../useAgent";
 import { useClickOutside } from "../util/clickOutside";
+import { repoForPath } from "../util/gitRepos";
 
 interface GitMenuProps {
   status: GitStatusState | null;
-  log: GitLogEntry[] | null;
-  onFetchLog: () => void;
-  onShowCommit: (sha: string) => void;
+  /**
+   * Browser-root-relative path of the last thing the user touched in the tree — a file
+   * or a directory — or null when they have touched nothing yet.
+   */
+  selected: string | null;
+  log: GitLogState | null;
+  onFetchLog: (repo: string) => void;
+  onShowCommit: (repo: string, sha: string) => void;
 }
 
 function relativeDate(iso: string): string {
@@ -18,39 +24,81 @@ function relativeDate(iso: string): string {
   return `${Math.round(seconds / 86400)}d ago`;
 }
 
-/** Header branch chip; opens the recent-commit history, click a commit for its diff. */
-export function GitMenu({ status, log, onFetchLog, onShowCommit }: GitMenuProps) {
+/** Last path segment: what a person calls the project, rather than where it sits. */
+function repoName(repo: string): string {
+  return repo.slice(repo.lastIndexOf("/") + 1);
+}
+
+/**
+ * Header branch chip; opens that repository's recent commits, click one for its diff.
+ *
+ * A workspace holds a set of repositories, so there is no single branch to show and
+ * the chip follows the selection instead — a file OR a directory, since walking into
+ * a project is how you say which one you are in. No picker: the user already chose by
+ * clicking, and a control for choosing again would be asking twice.
+ *
+ * A selection under no repository names nothing. The chip stays on screen and says
+ * `—`, rather than going on claiming the last repository it knew: in a directory of
+ * projects the loose files at the root are exactly where a README lives, and a chip
+ * naming a project the user has left is worse than one admitting it has none.
+ */
+export function GitMenu({ status, selected, log, onFetchLog, onShowCommit }: GitMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useClickOutside(() => setOpen(false));
+  const repos = status?.repos ?? [];
+  const owner = selected === null ? null : repoForPath(repos, selected);
+  // Nothing touched yet: a workspace with one repository has only one answer, and a
+  // workspace with several has none worth guessing at
+  const current: GitRepoStatus | null = owner ?? (selected === null && repos.length === 1 ? repos[0] : null);
   const counts =
-    status && (status.ahead > 0 || status.behind > 0)
-      ? ` ${status.ahead > 0 ? `↑${status.ahead}` : ""}${status.behind > 0 ? `↓${status.behind}` : ""}`
+    current && (current.ahead > 0 || current.behind > 0)
+      ? ` ${current.ahead > 0 ? `↑${current.ahead}` : ""}${current.behind > 0 ? `↓${current.behind}` : ""}`
       : "";
+  // Naming the project matters only when there is more than one to confuse it with
+  const prefix = repos.length > 1 && current !== null && current.repo !== "" ? `${repoName(current.repo)} ` : "";
+  const label = status === null ? "…" : (current?.branch ?? "—");
+  // Only this repository's own log. Switching projects with the menu open, or a
+  // slower answer landing after a newer one, would otherwise put one project's
+  // commits under another's name - and clicking one asks for a commit id the named
+  // repository has never heard of.
+  const entries = current !== null && log?.repo === current.repo ? log.entries : null;
+
+  // The menu is a panel, not a dialog: it stays open while the user walks the tree,
+  // so the repository under it can change without it ever being reopened. Asking only
+  // on the toggle left it saying "loading…" for a request nobody had made.
+  useEffect(() => {
+    if (open && current !== null && log?.repo !== current.repo) onFetchLog(current.repo);
+    // `log` is deliberately absent: it is the ANSWER to this request, and depending on
+    // it would ask again on every reply that is not the one being waited for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, current?.repo, onFetchLog]);
 
   return (
     <div className="relative" ref={ref}>
       <button
         type="button"
+        disabled={current === null}
         onClick={() => {
+          if (current === null) return;
           setOpen(!open);
-          if (!open) onFetchLog();
+          if (!open) onFetchLog(current.repo);
         }}
-        title="git history"
-        className="rounded-md border border-zinc-300 px-2 py-1 font-mono text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200"
+        title={current === null ? "no repository selected" : `git history — ${current.repo === "" ? "this project" : current.repo}`}
+        className="rounded-md border border-zinc-300 px-2 py-1 font-mono text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 disabled:cursor-default disabled:hover:border-zinc-300 disabled:hover:text-zinc-500 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200 dark:disabled:hover:border-zinc-800 dark:disabled:hover:text-zinc-400"
       >
-        ⎇ {status?.branch ?? "…"}
+        {prefix}⎇ {label}
         {counts}
       </button>
-      {open && (
+      {open && current !== null && (
         <div className="absolute left-0 top-full z-20 mt-1 max-h-96 w-[26rem] max-w-[80vw] overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
-          {log === null && <div className="px-3 py-2 text-xs text-zinc-500">loading…</div>}
-          {log?.length === 0 && <div className="px-3 py-2 text-xs text-zinc-500">no commits</div>}
-          {log?.map((entry) => (
+          {entries === null && <div className="px-3 py-2 text-xs text-zinc-500">loading…</div>}
+          {entries?.length === 0 && <div className="px-3 py-2 text-xs text-zinc-500">no commits</div>}
+          {entries?.map((entry) => (
             <button
               key={entry.sha}
               type="button"
               onClick={() => {
-                onShowCommit(entry.sha);
+                onShowCommit(current.repo, entry.sha);
                 setOpen(false);
               }}
               className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"

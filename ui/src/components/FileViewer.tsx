@@ -36,8 +36,14 @@ interface FileViewerProps {
   gitDiff: GitDiffState | null;
   onFetchGitDiff: (path: string) => void;
   onClearGitDiff: () => void;
-  /** Enables the history affordance — for any tracked file, changed or not. */
-  gitAvailable: boolean;
+  /**
+   * Whether this file is inside one of the workspace's repositories — which enables
+   * the history affordance, for any file in one, changed or not.
+   *
+   * Not "does the workspace have git": a directory of projects can hold loose files
+   * beside versioned ones, and a file under no repository has no history to show.
+   */
+  inRepository: boolean;
   onOpenGitHistory: (path: string) => void;
   onClose: () => void;
   /** Refetch the file from disk (discards the edit baseline). */
@@ -143,7 +149,7 @@ export function FileViewer({
   gitDiff,
   onFetchGitDiff,
   onClearGitDiff,
-  gitAvailable,
+  inRepository,
   onOpenGitHistory,
   onClose,
   onReload,
@@ -538,7 +544,7 @@ export function FileViewer({
             ± diff
           </button>
         )}
-        {gitAvailable && edit === null && (
+        {inRepository && edit === null && (
           <button
             type="button"
             onClick={() => onOpenGitHistory(file.path)}
