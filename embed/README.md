@@ -30,6 +30,7 @@ const widget = mount(document.getElementById("assistant"), {
   serverUrl: "https://your-pi-outpost-server", // omit for same-origin
   theme: "dark", // optional; falls back to the server's branding.defaultTheme, then "system"
   token: "…", // only for servers with `server.token` set
+  workspace: "/srv/projects/example", // optional resolved root of an already-open project
 });
 
 widget.setTheme("light"); // change the theme at runtime
@@ -37,6 +38,10 @@ widget.unmount(); // tear down the React tree
 ```
 
 `mount(container, options?)` returns `{ unmount(), setTheme(theme) }`. The container itself stays in the DOM after `unmount()`, with an empty shadow root.
+
+When `workspace` is set, the host binds that widget to the named open project and the widget
+offers no project switcher. If the root is not open, the server falls back to its default
+project rather than leaving the widget disconnected.
 
 ### Which theme wins
 
@@ -67,6 +72,10 @@ In Next.js, the component doing this must be a client component (`"use client"`)
 Configure this on the pi-outpost server, whatever the deployment topology:
 
 - **`server.allowedOrigins`** — the widget carries the *host page's* origin (e.g. `https://your-app.example.com`), not pi-outpost's own. Add it explicitly; even same-domain deployments need this (only `localhost`/`127.0.0.1` are trusted automatically). Listing it is all a cross-origin mount needs: the server answers those origins with the CORS headers the browser requires on every HTTP route, and applies the same allowlist to the WebSocket handshake. It grants no authority of its own — a token-protected route still wants its token.
+- **`embed.workspaceControls`** — when the host does not pass `workspace`, choose what the
+  widget exposes: `"settings"` (the one-project default), `"root"` (a compact root chooser)
+  or `"projects"` (open/switch/close controls). `workspaceLock` still overrides this and
+  pins the deployment to one project.
 
 ## License
 

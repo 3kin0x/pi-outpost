@@ -23,11 +23,16 @@ JSON Schema decides shape. These are the relational rules that follow it, and th
 | Rule | What it refuses |
 |---|---|
 | `duplicate-identifier` | two elements sharing an envelope-scoped `id` |
+| `duplicate-container-identifier` | two containers sharing an `id` |
 | `unresolved-endpoint` | a relationship endpoint that no declared element carries |
+| `unresolved-container` | an element assigned to a container the document never declares |
 | `kind-data-mismatch` | a declared `kind` that disagrees with the data variant present |
 | `kind-not-proposable` | a `table` carrying a `target` or a `removal` |
 | `removal-without-target` | a removal in a document that targets nothing |
 | `duplicate-reference` | the same reference addressed twice — changed twice, or changed and removed |
+| `change-without-reference` | a `set` with no `ref` naming what should change |
+| `change-without-target` | a `set` in an envelope that names no target authority |
+| `too-many-kinds` | more distinct element or relationship kinds than the rendering can distinguish |
 | `row-column-mismatch` | a row whose length differs from the declared columns |
 
 Rules prefixed `schema/` come from the JSON Schema itself; the suffix is the keyword

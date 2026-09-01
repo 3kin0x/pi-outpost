@@ -118,6 +118,28 @@ Diagnostics name the rule and point at the value:
 
 Every broken rule is reported, not just the first.
 
+## Grouping graph and sequence elements
+
+Graphs and sequences may declare `data.containers`, then assign a node or participant with
+its `container` field:
+
+```json
+{
+  "schema": "urn:structured-exchange:1",
+  "kind": "graph",
+  "data": {
+    "containers": [{ "id": "backend", "label": "Backend", "kind": "service-group" }],
+    "nodes": [{ "id": "billing", "label": "Billing", "container": "backend" }],
+    "edges": []
+  }
+}
+```
+
+A container groups elements visually; it is not itself an element or relationship endpoint.
+Container identifiers must be unique, and every `container` reference must resolve to one
+declared in the same document. Moving an existing element between containers is a change, so
+put the new container id under `set.container` beside that element's `ref`.
+
 ## Getting a diagram into a document
 
 Use **download SVG**, then insert the file as a picture. Word does not accept an SVG
@@ -136,12 +158,14 @@ and an envelope declaring a table with a `target` or a `removal` is refused. It 
 still report on a change it projects. Any row may declare what it plays:
 
 ```json
-"rows": [
-  { "role": "added",   "cells": ["REQ-5", "Log every actuation.", "draft"] },
-  { "role": "changed", "cells": ["REQ-2", "Signal a fault within 200 ms.", "in review"] },
-  { "role": "removed", "cells": ["REQ-3", "Read battery voltage at 10 Hz.", "withdrawn"] },
-  { "cells": ["REQ-1", "Stop within 40 m.", "approved"] }
-]
+{
+  "rows": [
+    { "role": "added",   "cells": ["REQ-5", "Log every actuation.", "draft"] },
+    { "role": "changed", "cells": ["REQ-2", "Signal a fault within 200 ms.", "in review"] },
+    { "role": "removed", "cells": ["REQ-3", "Read battery voltage at 10 Hz.", "withdrawn"] },
+    { "cells": ["REQ-1", "Stop within 40 m.", "approved"] }
+  ]
+}
 ```
 
 `role` is `added`, `changed`, `context` or `removed`, and it is rendered with the

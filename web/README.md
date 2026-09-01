@@ -1,32 +1,40 @@
-# React + TypeScript + Vite
+# pi-outpost standalone web app
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This private workspace is the Vite shell for the standalone pi-outpost interface. The
+shared React application lives in `@pi-outpost/ui`; this package supplies the page entry
+point, global stylesheet, web manifest and icons used by the server-hosted app. It has no
+service worker and does not cache the interface for offline use.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From the repository root:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+That starts Vite on `http://localhost:5173` and the agent server on
+`http://127.0.0.1:3141`. Vite proxies `/ws`, `/branding`, `/health` and `/files` to the
+server. Set `PI_OUTPOST_PORT` when the development server listens on another port.
+
+The root command deliberately supplies
+[`pi-outpost.config.dev.json`](../pi-outpost.config.dev.json) to the agent server. Running
+the web workspace alone starts only Vite; it does not start or configure pi-outpost:
+
+```bash
+npm run dev --workspace web
+```
+
+## Checks and production build
+
+```bash
+npm run typecheck --workspace web
+npm run lint --workspace web
+npm run build --workspace web
+```
+
+The build writes `web/dist/`. `npm run start` from the repository root builds that output
+and starts the server that serves it. Packaging builds may instead inline the same assets
+into the CLI bundle or standalone executable; see
+[`docs/sea-packaging.md`](../docs/sea-packaging.md).

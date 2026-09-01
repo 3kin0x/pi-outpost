@@ -205,13 +205,15 @@ one needs, the command that proves it works, and the caution that goes with it.
 
 ## Model credentials
 
-Credentials come from either **provider environment variables** (`ANTHROPIC_API_KEY`, …) or
-an **`auth.json` in the agent directory** — `<agentDir>/auth.json`, which is
-`~/.pi/agent/auth.json` unless your configuration names its own `agentDir`.
+For built-in providers, credentials come from either **provider environment variables**
+(`ANTHROPIC_API_KEY`, …) or an **`auth.json` in the agent directory** —
+`<agentDir>/auth.json`, which is `~/.pi/agent/auth.json` unless your configuration names its
+own `agentDir`. A custom OpenAI-compatible provider, including its key, is stored separately
+in `<agentDir>/models.json`.
 
 | | |
 |---|---|
-| **The interface** | With no usable model, pi-outpost shows a setup screen instead of a chat that could only fail. Paste a key, or declare your own endpoint. It writes `<agentDir>/auth.json` and starts working immediately — no restart |
+| **The interface** | With no usable model, pi-outpost shows a setup screen instead of a chat that could only fail. Pasting a key for a built-in provider writes `<agentDir>/auth.json`; declaring your own endpoint writes the provider and its key to `<agentDir>/models.json`. Either takes effect immediately — no restart |
 | **`pi-outpost login`** | For headless servers, where no browser will ever open the interface:<br>`pi-outpost login --provider anthropic` (prompts, not echoed)<br>`echo "$KEY" \| pi-outpost login --provider anthropic` (scripted)<br>The key has no flag on purpose — argv is readable by anyone who can list processes |
 | **Environment** | `export ANTHROPIC_API_KEY=…` before starting. Nothing is written to disk |
 
@@ -327,7 +329,7 @@ One exception, and it is deliberate: **a sandbox that grants write or bash but n
 turn "write inside my project" into "write inside `/`" without touching the file that
 granted it. Name the root, and the grant says what it covers.
 
-Relative paths are resolved against the configuration file's directory. A full example lives
+Relative paths are resolved against the configuration file's directory. A larger example lives
 in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
 
 ### Workspace and sandbox
@@ -351,6 +353,7 @@ in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
 | Key | Effect |
 |-----|--------|
 | `agentRuntime` | `{ "mode": "embedded" }` (default) keeps the pi SDK session in this process; `{ "mode": "rpc", "executable": "pi", "args": [] }` supervises a `pi --mode rpc` child. See [Agent runtimes](#agent-runtimes) |
+| `agentRuntime.startupTimeoutMs` / `commandTimeoutMs` / `shutdownGraceMs` | RPC child startup, per-command and graceful-shutdown ceilings. Defaults: `60000`, `300000` and `5000` ms |
 | `tools` | Tool allowlist when no sandbox is configured, e.g. `["read","grep","find","ls"]` |
 | `noExtensions` / `extensionPaths` / `extensionScripts` | Disable extension discovery, or name extension files and directories the deployment loads |
 | `userExtensionPaths` | Extension directories added from Settings. Written by the server; `extensionPaths` stays yours |
@@ -379,7 +382,7 @@ in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
 | `server.port` | Port to listen on (default `3141`). `--port` and `PI_OUTPOST_PORT`/`PORT` override it |
 | `server.host` | Address to bind (default `127.0.0.1` — only change this if you have read the security note above) |
 | `server.allowedOrigins` | Extra exact Origins accepted on the WebSocket, and given CORS headers on the HTTP endpoints |
-| `server.token` | Shared secret required on the WebSocket and `/branding` (`PI_OUTPOST_TOKEN` overrides). Mandatory in practice off loopback |
+| `server.token` | Shared secret required on the WebSocket, `/branding` and `/files/raw` (`PI_OUTPOST_TOKEN` overrides). Mandatory in practice off loopback |
 | `openBrowser` | Whether starting the server opens the interface (default: wherever a desktop session exists) |
 | `openIn` | `"window"` (its own window, the default) or `"browser"` (a tab). `openBrowser` still decides *whether* |
 | `branding` | `title` (default `"π"`), `welcome` message, `accentColor` |

@@ -1,9 +1,11 @@
 # Server tests
 
-Integration tests: each one boots a real server (`npx tsx src/index.ts`) against a throwaway
-workspace in `$TMPDIR` and talks to it over HTTP/WebSocket, the way a browser does. Nothing is
-mocked — what these guard is the wiring (path confinement, auth, session bookkeeping) that unit
-tests of the pure functions cannot see.
+Integration tests boot a real server (`node --import=tsx/esm src/index.ts`) against a
+throwaway workspace in `$TMPDIR` and talk to it over HTTP/WebSocket, the way a browser does.
+The server and its wiring are not mocked; suites that need a deterministic external boundary
+may use a controlled provider, npm executable or RPC child. What these guard is the wiring
+(path confinement, auth, process supervision, session bookkeeping) that unit tests of pure
+functions cannot see.
 
 The harness pins `agentDir` inside the temp workspace, so runs never touch your real
 `~/.pi/agent` (no reading your extensions, no writing your sessions).

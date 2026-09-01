@@ -1,7 +1,7 @@
-# Packaging pi-outpost as a Windows executable (Node SEA)
+# Packaging pi-outpost as a standalone executable (Node SEA)
 
 Node's [Single Executable Applications](https://nodejs.org/api/single-executable-applications.html)
-(SEA) feature bundles the server **and the built web UI** into one `.exe` with
+(SEA) feature bundles the server **and the built web UI** into one executable with
 the Node runtime baked in — end users need nothing installed, no `npm install`,
 no terminal, and **no separate web/ folder** next to the executable. The UI is
 inlined at build time into the bundle.
@@ -10,14 +10,13 @@ inlined at build time into the bundle.
 
 ## The two ways to get one
 
-**Download it.** Every release carries an executable per platform, under
+**Download it.** Current releases carry these platform executables under
 [Releases](https://github.com/laurentftech/pi-outpost/releases): `pi-outpost-<version>-macos-arm64`,
 `-linux-x64`, `-windows-x64.exe`. Nothing installed, nothing built.
 
-No Intel macOS build: GitHub retired the `macos-13` runner, and a job asking for it
-queues until it times out rather than failing. On an Intel Mac, build your own with
-`npx pi-outpost build-exe` — it works, and it is what produced the executables this
-feature was tested with.
+No Intel macOS artifact is currently published. On an Intel Mac, build your own with
+`npx pi-outpost build-exe` — the fallback path used for the macOS x64 runtime is covered by
+the build command's launch smoke test.
 
 They are **not signed for distribution**. macOS Gatekeeper and Windows SmartScreen
 both warn on a downloaded unsigned binary; on macOS you clear it with
@@ -41,10 +40,11 @@ requires it, and prints the path.
 --force        replace an existing file at that path
 ```
 
-On **Node ≥ 26** it uses `node --build-sea`. On anything older it falls back to
-injecting the shipped `sea-prep.blob` into a copy of your `node` binary with
-`postject`, and says so — the two artifacts are not identical, and when one of them
-misbehaves the first question is which one you have.
+On **Node ≥ 26** it first uses `node --build-sea`. If that executable fails its launch
+smoke test on a platform where direct SEA building is unreliable, the command may fall back
+to injecting the shipped `sea-prep.blob` into a copy of the same Node runtime with
+`postject`, and says so. Node versions older than 26 are refused: they cannot load the
+ES-module SEA blob used by pi-outpost.
 
 On macOS the result is signed ad-hoc (`codesign --sign -`). That is what makes a
 modified binary *launch* at all: without it the kernel kills it, naming neither the
@@ -52,11 +52,12 @@ signature nor the remedy. It is not a distribution signature.
 
 ## Starting it
 
-Running the executable starts the server and opens the interface in your default
-browser, at the address it actually bound — including when the configuration asked
-for port `0` and the operating system chose. Launching it from a file manager works
-the same way, which is the point: there is no terminal there for an address to be
-printed to.
+Running the executable starts the server and, by default, opens the interface in a window of
+its own at the address it actually bound — including when the configuration asked for port
+`0` and the operating system chose. It falls back to a browser tab if a standalone window
+cannot be launched; `--open-in browser` requests the tab explicitly. Launching it from a file
+manager works the same way, which is the point: there is no terminal there for an address to
+be printed to.
 
 No browser is opened where none can be shown — no desktop session, a container, a
 remote shell, a CI runner. `--open` and `--no-open` decide it explicitly, and
@@ -87,7 +88,9 @@ The `build:sea` step in `server/scripts/build-sea.mjs`:
    `server/src/embedded-web.ts` so the bundle is self-contained.
 2. **Bundles** `server/src/index.ts` via esbuild into one ESM file (`bundle.mjs`).
 3. **Generates a cross-platform blob** (`sea-prep.blob`) via `--experimental-sea-config`.
-4. **On Windows only** (skipped in CI), builds a native `.exe` via `--build-sea`.
+4. **Outside CI**, builds a host-specific executable named `server/dist/pi-outpost.exe`
+   via `--build-sea`. Release jobs use `pi-outpost build-exe --out …` instead, so each
+   published artifact gets its platform-specific name and launch smoke test.
 
 ## Server-only / embed mode (no inlined UI)
 
@@ -115,10 +118,11 @@ With `BUILD_EMBED_WEB=0`:
 This is the recommended setup when the executable is a **backend for an embedded
 widget** rather than a standalone desktop app.
 
-## Using the cross-platform blob (any platform)
+## Using the cross-platform blob (supported Node runtimes)
 
 The `sea-prep.blob` is included in the npm package and can be injected into
-any Node.js binary of the same major version using postject:
+a Node.js 26 binary of the same major version using postject. Older runtimes cannot load its
+ES-module entry point:
 
 ```powershell
 copy "C:\path\to\node.exe" pi-outpost.exe
@@ -146,11 +150,20 @@ extensions from inside the executable:
 ```ts
 // ext.ts, sitting next to pi-outpost, with no node_modules anywhere
 import { Type } from "typebox";
-import * as agent from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export default function extension() {
-  const schema = Type.Object({ ok: Type.Boolean() });
-  return { name: "my-extension", tools: [] };
+const healthTool = defineTool({
+  name: "health_check",
+  label: "Health check",
+  description: "Return a typed health result.",
+  parameters: Type.Object({ verbose: Type.Optional(Type.Boolean()) }),
+  async execute() {
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+});
+
+export default function extension(pi: ExtensionAPI) {
+  pi.registerTool(healthTool);
 }
 ```
 

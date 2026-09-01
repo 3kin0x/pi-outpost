@@ -58,7 +58,8 @@ write never returns, the runner then reports every test as passing and prints no
 because a test file that never exits never reports. Run it before pushing anything that
 touches paths, permissions, signals, or file watching.
 
-It runs both server steps of the ubuntu leg — `npm test` and then `npm run test:coverage` —
+It runs both server steps of the ubuntu leg — `npm test --workspace server` and then
+`npm run test:coverage --workspace server` —
 because each has gone red on its own while the other was green, and coverage runs on no
 other platform. That step once failed on `main` with 1250 tests passing and none failing:
 npm children spawned by the code under test inherited `NODE_V8_COVERAGE`, were killed at
