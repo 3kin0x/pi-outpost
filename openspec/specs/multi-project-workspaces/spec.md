@@ -93,7 +93,12 @@ Switching a client from one workspace to another SHALL change only what that cli
 
 ### Requirement: IsolateWorkspacesFromEachOther
 
-Each workspace SHALL own its agent session, sandbox, browser and writable roots, git state, file watcher, toolset, session manager and work plan. A server message produced by one workspace SHALL reach only the clients subscribed to that workspace. A tool call in one workspace SHALL be confined to that workspace's sandbox.
+Each workspace SHALL own its agent session, sandbox, browser and writable roots, its set of
+git repositories, file watcher, toolset, session manager and work plan. A server message
+produced by one workspace SHALL reach only the clients subscribed to that workspace. A tool
+call in one workspace SHALL be confined to that workspace's sandbox. A git command served
+for one workspace SHALL run only against a repository in that workspace's own set, whichever
+repositories another open workspace holds.
 
 #### Scenario: EventsDoNotCrossWorkspaces
 - **GIVEN** turns running concurrently in workspace A and workspace B
@@ -104,6 +109,11 @@ Each workspace SHALL own its agent session, sandbox, browser and writable roots,
 - **GIVEN** workspace A rooted at one directory and workspace B at another
 - **WHEN** an agent tool in A tries to read a file under B's root
 - **THEN** the tool call fails, unless that path is within A's own sandbox
+
+#### Scenario: RepositoriesArePerWorkspace
+- **GIVEN** workspace A and workspace B, each holding repositories under its own root
+- **WHEN** a git request is served for a client subscribed to A
+- **THEN** it is answered from A's repository set only, and none of B's repositories is consulted
 
 ### Requirement: PerWorkspaceSessionHistory
 
