@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { chmodSync } from "node:fs";
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -388,7 +389,9 @@ describe("a workspace with no repository at all", () => {
 
 // ---------------------------------------------------------------------------
 // openlore: scenario=ARepositoryOnDiskGitWillNotRead spec=git
-describe("a repository git will not read", () => {
+// chmod is advisory on Windows, so a repository cannot be made unreadable there; the
+// classification is covered on every platform by the unit tests in git-executable.test.ts
+describe("a repository git will not read", { skip: process.platform === "win32" }, () => {
   let server;
   let client;
   let root;
@@ -396,14 +399,16 @@ describe("a repository git will not read", () => {
   before(async () => {
     root = await makeWorkspace({});
     await makeRepo(path.join(root, "proj"), "main", "proj initial");
-    // git's own test hook for the dubious-ownership path, which is what a Windows box
-    // with a repository from another user profile hits every day
-    server = await startServer(root, {}, { env: { GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" } });
+    // A refusal git states in its own words, as dubious ownership does in the field.
+    // `GIT_TEST_ASSUME_DIFFERENT_OWNER` would read better and is not in every git.
+    chmodSync(path.join(root, "proj", ".git", "config"), 0o000);
+    server = await startServer(root);
     client = connect(server.wsUrl());
   });
 
   after(async () => {
     client?.close();
+    chmodSync(path.join(root, "proj", ".git", "config"), 0o644);
     await server?.stop();
     await rm(root, { recursive: true, force: true });
   });
@@ -415,7 +420,7 @@ describe("a repository git will not read", () => {
     // and a surface offered on the strength of the disk alone fails where nobody looks.
     assert.equal(hello.gitAvailable, false);
     assert.equal(hello.gitUnavailable?.reason, "refused");
-    assert.match(hello.gitUnavailable.message, /dubious ownership/i);
+    assert.match(hello.gitUnavailable.message, /permission denied/i);
   });
 });
 

@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -99,27 +99,29 @@ describe("saying why git is unavailable", () => {
     assert.deepEqual(why, { reason: "no-repository" });
   });
 
-  test("says git refused, and carries its own words, for dubious ownership", async () => {
+  // chmod is advisory on Windows, so a repository cannot be made unreadable there. The
+  // classification itself is covered on every platform by the unrecognised-failure test
+  // below, which is the one that matters: the reading, not the particular refusal.
+  test("says git refused, and carries its own words, for a repository it cannot read", { skip: process.platform === "win32" }, async () => {
     useGitExecutable(realGit);
     const refused = path.join(root, "refused");
     mkdirSync(refused, { recursive: true });
     execFileSync(realGit, ["init", "-q"], { cwd: refused });
-
-    // git's own test hook for this path: it produces the real message, verbatim, and
-    // this is the failure the field report was about
-    process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1";
+    // A refusal git states in its own words, the way dubious ownership does in the
+    // field — and unlike `GIT_TEST_ASSUME_DIFFERENT_OWNER`, present in every git
+    chmodSync(path.join(refused, ".git", "config"), 0o000);
     try {
       const why = await whyGitCannotServe(refused, []);
       assert.equal(why?.reason, "refused", `expected a refusal, got ${JSON.stringify(why)}`);
-      // The message names the directory AND the remedy; paraphrasing loses both
-      assert.match(why?.reason === "refused" ? why.message : "", /dubious ownership/i);
+      // Git's words are the remedy; paraphrasing loses the path it names
+      assert.match(why?.reason === "refused" ? why.message : "", /permission denied/i);
     } finally {
-      delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      chmodSync(path.join(refused, ".git", "config"), 0o644);
     }
   });
 
   // openlore: scenario=ARepositoryGitRefuses spec=git
-  test("catches a repository git will not read, though the disk says it is one", async () => {
+  test("catches a repository git will not read, though the disk says it is one", { skip: process.platform === "win32" }, async () => {
     // Discovery finds `.git` on disk and never asks git whether it will read it, so a
     // refused repository used to look perfectly healthy and fail every command in
     // silence — the branch chip sat on "…" forever
@@ -127,14 +129,12 @@ describe("saying why git is unavailable", () => {
     const held = path.join(root, "held");
     mkdirSync(held, { recursive: true });
     execFileSync(realGit, ["init", "-q"], { cwd: held });
-    const repos = [{ toplevel: held, cwd: held, id: "held" }];
-
-    process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1";
+    chmodSync(path.join(held, ".git", "config"), 0o000);
     try {
-      const why = await whyGitCannotServe(root, repos);
+      const why = await whyGitCannotServe(root, [{ toplevel: held, cwd: held, id: "held" }]);
       assert.equal(why?.reason, "refused", `a repository nothing can read is not "available"`);
     } finally {
-      delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      chmodSync(path.join(held, ".git", "config"), 0o644);
     }
   });
 
@@ -147,10 +147,10 @@ describe("saying why git is unavailable", () => {
   });
 
   test("classifies an unrecognised failure as a refusal, not as an ordinary directory", async () => {
-    // The direction that matters: burying an unknown failure in the quiet case is the
-    // bug this replaces, so anything unrecognised must surface
+    // The direction that matters, and the one assertion that runs everywhere: burying
+    // an unknown failure in the quiet case is the bug this replaces
     useGitExecutable(realGit);
     const why = await whyGitCannotServe(path.join(root, "does-not-exist"), []);
-    assert.notEqual(why?.reason, "no-repository");
+    assert.equal(why?.reason, "refused", `an unrecognised failure must surface, got ${JSON.stringify(why)}`);
   });
 });
