@@ -1112,13 +1112,22 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               onSetWorkspaceRoot={(newRoot) => {
                 if (openProject && !embedded) {
                   openProject(newRoot);
-                } else {
+                } else if (state.sandbox) {
                   updateConfig({
                     sandbox: {
                       root: newRoot,
-                      allowWrite: state.sandbox?.allowWrite ?? false,
-                      allowBash: state.sandbox?.allowBash ?? false,
-                      ...(state.sandbox?.writableRoot ? { writableRoot: state.sandbox.writableRoot } : {}),
+                      allowWrite: state.sandbox.allowWrite,
+                      allowBash: state.sandbox.allowBash,
+                      ...(state.sandbox.writableRoot ? { writableRoot: state.sandbox.writableRoot } : {}),
+                    },
+                  });
+                } else {
+                  // No sandbox configured on this server: keep unconstrained write and bash
+                  updateConfig({
+                    sandbox: {
+                      root: newRoot,
+                      allowWrite: true,
+                      allowBash: true,
                     },
                   });
                 }

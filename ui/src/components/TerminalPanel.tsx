@@ -385,7 +385,7 @@ export function TerminalPanel({
     }
   };
 
-  const handleClearCurrent = useCallback(() => {
+    const handleClearCurrent = useCallback(() => {
     const fn = clearHandlersRef.current.get(activeTabId);
     if (fn) fn();
   }, [activeTabId]);
@@ -394,6 +394,11 @@ export function TerminalPanel({
 
   const handleSyncToWorkspace = () => {
     if (activeCwd && onSetWorkspaceRoot) {
+      if (activeCwd === "/" || activeCwd === "\\" || /^[A-Za-z]:[\\/]?$/.test(activeCwd)) {
+        if (!window.confirm(`Open root filesystem "${activeCwd}" as the workspace project?`)) {
+          return;
+        }
+      }
       onSetWorkspaceRoot(activeCwd);
       setSyncedConfirm(true);
       setTimeout(() => setSyncedConfirm(false), 2000);
@@ -408,32 +413,28 @@ export function TerminalPanel({
         open ? "flex" : "hidden"
       } ${
         isMaximized ? "h-[85vh]" : "h-72"
-      } min-h-36 max-h-[90vh] z-20`}
+      } relative z-20`}
     >
-      {/* Header bar / Tabs */}
-      <div className="flex items-center justify-between px-2 h-9 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 select-none">
+      {/* Terminal Toolbar */}
+      <div className="flex items-center justify-between px-2 py-1 border-b border-zinc-200 dark:border-zinc-800 select-none bg-zinc-50 dark:bg-zinc-950 text-xs">
         {/* Left: Tab list */}
-        <div className="flex items-center space-x-1 overflow-x-auto scrollbar-none py-1">
+        <div className="flex items-center space-x-1 overflow-x-auto min-w-0">
           <div className="flex items-center space-x-1">
             {tabs.map((tab) => {
-              const active = tab.id === activeTabId;
-              const isEditing = editingTabId === tab.id;
-
+              const isActive = tab.id === activeTabId;
+              const isEditing = tab.id === editingTabId;
               return (
                 <div
                   key={tab.id}
                   onClick={() => setActiveTabId(tab.id)}
                   onDoubleClick={(e) => startRenameTab(tab, e)}
-                  role="button"
-                  tabIndex={0}
                   title="Double-click to rename tab"
-                  className={`flex items-center space-x-1.5 px-2.5 py-1 rounded text-xs font-mono transition-colors cursor-pointer ${
-                    active
-                      ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-xs font-medium"
+                  className={`flex items-center space-x-1 px-2.5 py-1 rounded text-xs cursor-pointer transition-colors ${
+                    isActive
+                      ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium shadow-sm"
                       : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
                   }`}
                 >
-                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
                   {isEditing ? (
                     <input
                       type="text"
@@ -476,24 +477,25 @@ export function TerminalPanel({
           </button>
         </div>
 
-        {/* Center: Current PWD & Sync to Workspace button */}
+        {/* Center: Current PWD & Open as Project button */}
         {activeCwd && (
           <div className="hidden md:flex items-center space-x-1.5 px-2 text-xs font-mono text-zinc-500 dark:text-zinc-400">
-            <span className="truncate max-w-xs text-[11px]" title={activeCwd}>
-              📁 {shortenPath(activeCwd)}
-            </span>
             {onSetWorkspaceRoot && (
               <button
                 onClick={handleSyncToWorkspace}
                 type="button"
-                title={`Sync workspace root & LLM agent to ${activeCwd}`}
+                title={`Open "${activeCwd}" as the workspace project and reposition the LLM agent`}
                 className={`flex items-center space-x-1 px-1.5 py-0.5 rounded text-[11px] font-sans transition-colors ${
                   syncedConfirm
                     ? "bg-emerald-500 text-white font-medium"
                     : "bg-zinc-200/80 hover:bg-sky-500 hover:text-white dark:bg-zinc-800 dark:hover:bg-sky-600 dark:hover:text-white text-zinc-700 dark:text-zinc-300"
                 }`}
               >
-                <span>{syncedConfirm ? "✓ Synchronisé" : "🎯 Sync LLM"}</span>
+                <span>
+                  {syncedConfirm
+                    ? "✓ Project opened"
+                    : `📁 ${shortenPath(activeCwd)} → open as project`}
+                </span>
               </button>
             )}
           </div>

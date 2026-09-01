@@ -92,4 +92,19 @@ describe("TerminalManager", () => {
 
     manager.closeAll();
   });
+
+  test("sequential reopen preserves reachability and does not leak orphan sessions", async () => {
+    const manager = new TerminalManager();
+    const socket = {} as WebSocket;
+
+    await manager.open(socket, "reopen-id", process.cwd(), 80, 24, () => {}, () => {});
+    const session2 = await manager.open(socket, "reopen-id", process.cwd(), 80, 24, () => {}, () => {});
+
+    // Wait for previous session to terminate and trigger its exit callback
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Second session must remain active and reachable
+    assert.equal(manager.write(socket, "reopen-id", "echo alive\n"), true);
+    assert.equal(manager.close(socket, "reopen-id"), true);
+  });
 });

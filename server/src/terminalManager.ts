@@ -5,6 +5,8 @@
  * piping input/output through the WebSocket protocol.
  */
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
@@ -17,10 +19,42 @@ const execFileAsync = promisify(execFile);
 let ptyModule: typeof pty | null = null;
 let ptyLoadError: Error | null = null;
 
+function ensureSpawnHelperExecutable(): void {
+  if (process.platform === "win32") return;
+  try {
+    const req = createRequire(import.meta.url);
+    const ptyPath = req.resolve("node-pty");
+    const baseDir = path.dirname(ptyPath);
+    const candidates = [
+      path.join(baseDir, `../prebuilds/${process.platform}-${process.arch}/spawn-helper`),
+      path.join(baseDir, `prebuilds/${process.platform}-${process.arch}/spawn-helper`),
+      path.join(baseDir, "../build/Release/spawn-helper"),
+      path.join(baseDir, "build/Release/spawn-helper"),
+      path.join(baseDir, "../build/Debug/spawn-helper"),
+      path.join(baseDir, "build/Debug/spawn-helper"),
+    ];
+    for (const helper of candidates) {
+      if (fsSync.existsSync(helper)) {
+        try {
+          const stat = fsSync.statSync(helper);
+          if ((stat.mode & 0o111) === 0) {
+            fsSync.chmodSync(helper, 0o755);
+          }
+        } catch {
+          // Best effort
+        }
+      }
+    }
+  } catch {
+    // node-pty might not be resolvable (e.g. bundled)
+  }
+}
+
 async function getPty(): Promise<typeof pty> {
   if (ptyModule) return ptyModule;
   if (ptyLoadError) throw ptyLoadError;
   try {
+    ensureSpawnHelperExecutable();
     const mod = await import("node-pty");
     ptyModule = ((mod as any).default || mod) as typeof pty;
     return ptyModule;
@@ -81,15 +115,17 @@ export class TerminalManager {
     onData: (terminalId: string, data: string) => void,
     onExit: (terminalId: string, exitCode?: number) => void,
   ): Promise<TerminalSession> {
+    const pty = await getPty();
+
+    // If an existing session with this ID exists for this socket, close it first
+    if (this.socketSessions.get(socket)?.has(terminalId)) {
+      this.close(socket, terminalId);
+    }
+
     let userSessions = this.socketSessions.get(socket);
     if (!userSessions) {
       userSessions = new Map();
       this.socketSessions.set(socket, userSessions);
-    }
-
-    // If an existing session with this ID exists for this socket, close it first
-    if (userSessions.has(terminalId)) {
-      this.close(socket, terminalId);
     }
 
     const { shell, args } = this.getDefaultShell();
@@ -101,14 +137,37 @@ export class TerminalManager {
       COLORTERM: "truecolor",
     };
 
-    const pty = await getPty();
-    const ptyProcess = pty.spawn(shell, args, {
-      name: "xterm-256color",
-      cols: Math.max(10, cols),
-      rows: Math.max(5, rows),
-      cwd: resolvedCwd,
-      env,
-    });
+    ensureSpawnHelperExecutable();
+
+    let ptyProcess: pty.IPty;
+    try {
+      ptyProcess = pty.spawn(shell, args, {
+        name: "xterm-256color",
+        cols: Math.max(10, cols),
+        rows: Math.max(5, rows),
+        cwd: resolvedCwd,
+        env,
+      });
+    } catch (err) {
+      ensureSpawnHelperExecutable();
+      try {
+        ptyProcess = pty.spawn(shell, args, {
+          name: "xterm-256color",
+          cols: Math.max(10, cols),
+          rows: Math.max(5, rows),
+          cwd: resolvedCwd,
+          env,
+        });
+      } catch (retryErr) {
+        const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        if (msg.includes("posix_spawnp")) {
+          throw new Error(
+            `posix_spawnp failed: node-pty spawn-helper binary is missing execute permissions. Run "npm install-scripts approve node-pty" or "chmod +x node_modules/node-pty/prebuilds/.../spawn-helper".`,
+          );
+        }
+        throw retryErr;
+      }
+    }
 
     const session: TerminalSession = {
       terminalId,
@@ -124,9 +183,13 @@ export class TerminalManager {
     });
 
     ptyProcess.onExit(({ exitCode }) => {
-      userSessions.delete(terminalId);
-      if (userSessions.size === 0) {
-        this.socketSessions.delete(socket);
+      // Guard against sequential reopen: only clean up if this session is still the active registered one!
+      const currentMap = this.socketSessions.get(socket);
+      if (currentMap && currentMap.get(terminalId) === session) {
+        currentMap.delete(terminalId);
+        if (currentMap.size === 0) {
+          this.socketSessions.delete(socket);
+        }
       }
       onExit(terminalId, exitCode);
     });
