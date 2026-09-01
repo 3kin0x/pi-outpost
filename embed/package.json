@@ -1,6 +1,6 @@
 {
   "name": "@pi-outpost/embed",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "type": "module",
   "description": "Mount pi-outpost as a Shadow-DOM-isolated widget inside another web app.",
   "license": "MIT",
@@ -61,6 +61,7 @@
   "devDependencies": {
     "@microsoft/api-extractor": "^7.58.9",
     "@pi-outpost/shared": "*",
+    "@pi-outpost/ui": "*",
     "@tailwindcss/vite": "^4.3.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
@@ -74,7 +75,6 @@
     "tailwindcss": "^4.3.2",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
-    "vite-plugin-dts": "^5.0.3",
-    "@pi-outpost/ui": "*"
+    "vite-plugin-dts": "^5.0.3"
   }
 }
