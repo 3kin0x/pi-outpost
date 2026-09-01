@@ -100,7 +100,19 @@ import {
   uploadFileFromBrowser,
   writeFileFromBrowser,
 } from "./fileBrowser.ts";
-import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus, repoFor, type GitRepo } from "./git.ts";
+import {
+  GitError,
+  gitFileLog,
+  gitHeadContent,
+  gitLog,
+  gitRevisionContent,
+  gitShow,
+  gitStatus,
+  repoFor,
+  resolveGitExecutable,
+  useGitExecutable,
+  type GitRepo,
+} from "./git.ts";
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
@@ -265,6 +277,23 @@ const config = await (async () => {
     process.exit(1);
   }
 })();
+// Find git once, before anything asks for it. `PATH` alone is not enough: git is
+// installed on every machine that has a working VS Code, and is routinely absent from
+// the PATH a server process inherits — which used to remove the entire git surface
+// with no message at all.
+try {
+  useGitExecutable(await resolveGitExecutable(config.gitPath));
+} catch (error) {
+  // A CONFIGURED path that cannot run is an operator mistake, and startup is where
+  // they should hear about it. No git anywhere is not a reason to refuse to start:
+  // the server runs, and the git surface now says why it is missing.
+  if (config.gitPath !== undefined) {
+    complain(error);
+    await holdConsoleIfOwned();
+    process.exit(1);
+  }
+}
+
 // Answers "which of the four files am I actually running, and who won each setting"
 // without starting anything. The token is the one thing never echoed back.
 if (cli.command === "config") {
@@ -354,7 +383,12 @@ const workspace = await Workspace.create({
     workspace.noteDirectoryChange();
     broadcast(workspace, { type: "directory_changed", path: relPath });
   },
-  onRepositoriesChanged: () => broadcast(workspace, { type: "git_repositories_changed", available: workspace.repos.length > 0 }),
+  onRepositoriesChanged: () =>
+        broadcast(workspace, {
+          type: "git_repositories_changed",
+          available: workspace.repos.length > 0 && workspace.gitUnavailable === undefined,
+          ...(workspace.gitUnavailable ? { unavailable: workspace.gitUnavailable } : {}),
+        }),
   createRuntime: () => {
     throw new Error("the boot workspace's runtime is built in index.ts and attached");
   },
@@ -1044,7 +1078,12 @@ for (const root of config.openProjects) {
         restored.noteDirectoryChange();
         broadcast(restored, { type: "directory_changed", path: relPath });
       },
-      onRepositoriesChanged: () => broadcast(restored, { type: "git_repositories_changed", available: restored.repos.length > 0 }),
+      onRepositoriesChanged: () =>
+        broadcast(restored, {
+          type: "git_repositories_changed",
+          available: restored.repos.length > 0 && restored.gitUnavailable === undefined,
+          ...(restored.gitUnavailable ? { unavailable: restored.gitUnavailable } : {}),
+        }),
       createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
     workspaces.add(restored);
@@ -1268,7 +1307,9 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     // combine the new transcript/session id with the previous session's plan.
     workPlan: sameSessionFile(state.sessionFile, workspace.workPlanSessionFile) ? workspace.workPlan : null,
     writableRoot: workspace.writableRoot,
-    gitAvailable: workspace.repos.length > 0,
+    // Not merely "a repository was found on disk": one git will actually read
+    gitAvailable: workspace.repos.length > 0 && workspace.gitUnavailable === undefined,
+    ...(workspace.gitUnavailable ? { gitUnavailable: workspace.gitUnavailable } : {}),
     credentials: credentialStatus(workspace),
     // Omitted, not emptied, when the runtime cannot report an inventory: "none
     // loaded" and "this runtime never sees them" are different facts, and only one
@@ -1958,7 +1999,12 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
         opened.noteDirectoryChange();
         broadcast(opened, { type: "directory_changed", path: relPath });
       },
-      onRepositoriesChanged: () => broadcast(opened, { type: "git_repositories_changed", available: opened.repos.length > 0 }),
+      onRepositoriesChanged: () =>
+        broadcast(opened, {
+          type: "git_repositories_changed",
+          available: opened.repos.length > 0 && opened.gitUnavailable === undefined,
+          ...(opened.gitUnavailable ? { unavailable: opened.gitUnavailable } : {}),
+        }),
       createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
   } catch (error) {

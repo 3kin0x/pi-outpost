@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MIN_SESSION_QUERY_LENGTH, type SessionSummary, type TreeNode, type WorkspaceInfo } from "@pi-outpost/shared";
+import { MIN_SESSION_QUERY_LENGTH, type GitUnavailable, type SessionSummary, type TreeNode, type WorkspaceInfo } from "@pi-outpost/shared";
 import { ProjectMenu } from "./ProjectMenu";
 import { WorkspaceRootControl, type WorkspaceRootSandbox } from "./WorkspaceRootControl";
 import type { GitLogState, GitStatusState, ServerBrowseState, SessionSearch, SettingsApplyState } from "../useAgent";
@@ -58,6 +58,8 @@ interface HeaderProps {
   tools?: { name: string; active: boolean }[];
   commands?: { name: string; source: string }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
+  /** Why git is unavailable, when it is — shown in Settings, where a user looks. */
+  gitUnavailable: GitUnavailable | null;
   versions?: { piOutpost: string; piSdk?: string; agent?: string } | null;
   /** Skill paths added through Settings — editable there. */
   userSkillPaths: string[];
@@ -454,6 +456,7 @@ export function Header(props: HeaderProps) {
           tools={props.tools ?? []}
           commands={props.commands ?? []}
           sandbox={props.sandbox}
+          gitUnavailable={props.gitUnavailable}
           userSkillPaths={props.userSkillPaths}
           serverBrowse={props.serverBrowse}
           applyState={props.settingsApply}

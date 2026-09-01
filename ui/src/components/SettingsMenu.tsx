@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useClickOutside } from "../util/clickOutside";
 import { ServerPathPicker } from "./ServerPathPicker";
 import type { ServerBrowseState, SettingsApplyState } from "../useAgent";
+import type { GitUnavailable } from "@pi-outpost/shared";
 
 interface SandboxConfig {
   root: string;
@@ -44,6 +45,15 @@ interface SettingsMenuProps {
   commands: { name: string; source: string }[];
   sandbox: SandboxConfig | null;
   /**
+   * Why git is unavailable, or null when it is available.
+   *
+   * Shown here because this is where a user goes when a feature is missing, and
+   * because the alternative — hiding every git affordance and saying nothing — makes
+   * an unrunnable executable indistinguishable from a directory that was never a
+   * repository. One of those is a five-second fix; the other is not a fault at all.
+   */
+  gitUnavailable: GitUnavailable | null;
+  /**
    * Skill paths added through Settings — the only ones this menu shows. The
    * configuration file's own `skillPaths` are the deployment's business: they
    * load either way, their skills appear in the inventory above, and they are
@@ -76,6 +86,7 @@ export function SettingsMenu({
   tools,
   commands,
   sandbox,
+  gitUnavailable,
   userSkillPaths,
   serverBrowse,
   pickerBlocked = false,
@@ -233,6 +244,33 @@ export function SettingsMenu({
           </div>
 
           <div className="min-h-0 overflow-y-auto p-4">
+            {/* Truthy, not `!== null`: a prop that never arrives must not take the whole
+                panel down with it — every other section here is unrelated to git. */}
+            {gitUnavailable && (
+              <section className="mb-4" data-testid="git-unavailable">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Version control</h3>
+                {gitUnavailable.reason === "no-repository" ? (
+                  // The ordinary state of a directory. Stated, not raised: there is
+                  // nothing here for the user to fix, and dressing it as a fault would
+                  // send them looking for one.
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">This project is not in a git repository.</p>
+                ) : (
+                  <div className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 dark:border-amber-900 dark:bg-amber-950/40">
+                    <p className="text-xs text-amber-800 dark:text-amber-300">
+                      {gitUnavailable.reason === "no-executable"
+                        ? "Git is unavailable: its executable could not be run."
+                        : "Git is unavailable: it refused this repository."}
+                    </p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-amber-700 dark:text-amber-400">{gitUnavailable.message}</p>
+                    {gitUnavailable.reason === "no-executable" && (
+                      <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                        Install git, add it to PATH, or name it with <span className="font-mono">gitPath</span> in the configuration.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
             <section className="mb-4">
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Agent resources</h3>
               {tools.length === 0 ? <p className="text-xs text-zinc-400 dark:text-zinc-500">Tool inventory unavailable for this runtime</p> : <details data-testid="tools-loaded">

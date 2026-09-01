@@ -174,7 +174,8 @@ one needs, the command that proves it works, and the caution that goes with it.
   you type rather than what was last saved
 - Git: uncommitted-change badges in the tree, per-file diffs, log and commit inspection, and
   a per-file history graph (renames followed) that diffs any two revisions, working tree
-  included
+  included. A directory of independently versioned projects works too — each child
+  repository answers for its own files. See [Git](#git)
 - PDF in the viewer (pages, zoom, keyboard paging); the agent reads its text and tables
   through `pdf_extract` — no shell, no external binary, no OCR
 - Office documents: `docx_extract`, `xlsx_extract` and `pptx_extract` give the agent Word
@@ -390,6 +391,29 @@ in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
 | `branding.allowThemeToggle` | Show the theme toggle (default `true`). Set `false` when a host app drives the theme |
 | `embed.workspaceControls` | What a mounted widget offers: `"settings"` (default, one project), `"root"` (a compact root chooser), `"projects"` (open/switch/close) |
 | `updateCheck` / `updateRegistry` | See [Staying up to date](#staying-up-to-date) |
+| `gitPath` | Path to the git executable. Unset, git is found on `PATH` and then where installers put it. See [Git](#git) |
+
+### Git
+
+Git features need a git to run. It is looked for in this order:
+
+1. `gitPath`, when the configuration names one
+2. `git`, as `PATH` resolves it
+3. The standard install locations — `C:\Program Files\Git\cmd\git.exe` and friends on
+   Windows, `/usr/bin/git` and the Homebrew and Xcode paths on macOS, `/usr/bin/git` and
+   `/usr/local/bin/git` on Linux
+
+The third step exists because git is routinely installed and absent from the `PATH` a
+server process inherits — a Windows machine where VS Code shows git perfectly while a
+service launched from a shortcut cannot find it at all.
+
+A `gitPath` that is not a runnable git fails startup, naming it. It never falls back to
+another git: naming an executable is an instruction, and quietly running a different one
+would answer questions about the wrong installation.
+
+When git features are missing, **Settings says why**: the executable could not be run, this
+project is not in a repository, or git refused it — with git's own message, which for the
+common "detected dubious ownership" names both the directory and the remedy.
 
 ### Theming
 

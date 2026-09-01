@@ -21,10 +21,10 @@ import type { AgentRuntime } from "./agentRuntime.ts";
 import type { SandboxConfig } from "./config.ts";
 import { type DirectoryWatcher, createDirectoryWatcher } from "./fileWatcher.ts";
 import { resolveBrowserRoot, resolveWritableRoot } from "./fileBrowser.ts";
-import { discoverRepos, type GitRepo } from "./git.ts";
+import { discoverRepos, whyGitCannotServe, type GitRepo } from "./git.ts";
 import { ExtensionRenderer } from "./extensionRender.ts";
 import { createSandboxedTools } from "./sandbox.ts";
-import type { ExtensionUIRequest, WorkPlan } from "@pi-outpost/shared";
+import type { ExtensionUIRequest, GitUnavailable, WorkPlan } from "@pi-outpost/shared";
 
 /**
  * What a workspace needs to know about itself. A narrow slice of AppConfig rather
@@ -131,6 +131,8 @@ export class Workspace {
    * both, and a path is answered by whichever owns it.
    */
   repos: GitRepo[];
+  /** Why `repos` is empty, when it is. Undefined whenever the workspace holds one. */
+  gitUnavailable: GitUnavailable | undefined;
   fileWatcher: DirectoryWatcher | undefined;
   sandboxedTools: ToolDefinition[] | undefined;
 
@@ -216,6 +218,7 @@ export class Workspace {
     this.browserRoot = resources.browserRoot;
     this.writableRoot = resources.writableRoot;
     this.repos = resources.repos;
+    this.gitUnavailable = resources.gitUnavailable;
     this.fileWatcher = resources.fileWatcher;
     this.sandboxedTools = resources.sandboxedTools;
     this.options = options;
@@ -294,6 +297,7 @@ export class Workspace {
     this.browserRoot = resources.browserRoot;
     this.writableRoot = resources.writableRoot;
     this.repos = resources.repos;
+    this.gitUnavailable = resources.gitUnavailable;
     this.fileWatcher = resources.fileWatcher;
     this.sandboxedTools = resources.sandboxedTools;
   }
@@ -336,6 +340,9 @@ export class Workspace {
       if (this.stopped) return;
       const before = this.repos.map((repo) => repo.toplevel).join("\n");
       this.repos = repos;
+      // The reason describes the set it was asked about, so it is asked again whenever
+      // that set moves — a stale one would explain a state that has passed
+      this.gitUnavailable = await whyGitCannotServe(this.browserRoot, repos);
       if (repos.map((repo) => repo.toplevel).join("\n") !== before) this.options.onRepositoriesChanged?.();
     } catch {
       // A scan that cannot read the tree is not a reason to forget the repositories
@@ -392,6 +399,8 @@ interface WorkspaceResources {
    * both, and a path is answered by whichever owns it.
    */
   repos: GitRepo[];
+  /** Set only when `repos` is empty: why it is. */
+  gitUnavailable: GitUnavailable | undefined;
   fileWatcher: DirectoryWatcher | undefined;
   sandboxedTools: ToolDefinition[] | undefined;
 }
@@ -401,6 +410,9 @@ async function buildResources(options: WorkspaceOptions): Promise<WorkspaceResou
   const browserRoot = await resolveBrowserRoot(settings);
   const writableRoot = await resolveWritableRoot(settings, browserRoot);
   const repos = await discoverRepos(browserRoot);
+  // One probe, always: it separates "no repository here" from "git could not be run at
+  // all", and it is the only thing that notices a repository git will refuse to read
+  const gitUnavailable = await whyGitCannotServe(browserRoot, repos);
   const sandboxedTools = settings.sandbox
     ? [
         ...(await createSandboxedTools(
@@ -417,5 +429,5 @@ async function buildResources(options: WorkspaceOptions): Promise<WorkspaceResou
   const fileWatcher = options.watchFiles
     ? createDirectoryWatcher({ root: browserRoot, onChange: options.onDirectoryChanged })
     : undefined;
-  return { browserRoot, writableRoot, repos, fileWatcher, sandboxedTools };
+  return { browserRoot, writableRoot, repos, gitUnavailable, fileWatcher, sandboxedTools };
 }

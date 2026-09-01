@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { chmodSync } from "node:fs";
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -207,6 +208,12 @@ describe("repositories that appear and vanish while the server runs", () => {
     );
   });
 
+  // openlore: scenario=TheReasonDoesNotOutliveItsCause spec=git
+  test("stops explaining an absence that has ended", async () => {
+    const announced = await client.waitFor((m) => m.type === "git_repositories_changed" && m.available === true, 20_000);
+    assert.equal(announced.unavailable, undefined, "a reason outliving its cause explains a state that has passed");
+  });
+
   // openlore: scenario=ARepositoryThatStopsBeingOne spec=git
   test("a directory that stops being a repository stops being consulted", async () => {
     await rm(path.join(root, "second", ".git"), { recursive: true, force: true });
@@ -309,6 +316,44 @@ describe("a workspace that loses its last repository", () => {
 });
 
 // ---------------------------------------------------------------------------
+// openlore: scenario=GitInstalledButNotOnThePath spec=git
+describe("a server whose PATH has lost git", () => {
+  let server;
+  let client;
+  let root;
+
+  before(async () => {
+    root = await makeWorkspace({});
+    await makeRepo(path.join(root, "proj"), "main", "proj initial");
+    // Exactly the reported failure: git installed where the installer put it, and a
+    // server process whose PATH does not mention it. This used to remove the entire
+    // git surface with no message at all.
+    server = await startServer(root, {}, { env: { PATH: "" } });
+    client = connect(server.wsUrl());
+  });
+
+  after(async () => {
+    client?.close();
+    await server?.stop();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("finds git anyway, and keeps its features", async () => {
+    const hello = await client.waitFor("hello");
+    assert.equal(hello.gitAvailable, true, "git is installed; PATH is the only thing that lost it");
+    assert.equal(hello.gitUnavailable, undefined);
+
+    client.send({ type: "git_status", requestId: "nopath-1" });
+    const status = await client.waitFor((m) => m.requestId === "nopath-1", 20_000);
+    assert.equal(status.type, "git_status");
+    assert.deepEqual(
+      status.repos.map((repo) => repo.repo),
+      ["proj"],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // openlore: scenario=NoRepository spec=git
 describe("a workspace with no repository at all", () => {
   let server;
@@ -333,6 +378,72 @@ describe("a workspace with no repository at all", () => {
     client.send({ type: "git_status", requestId: "none-1" });
     const answer = await client.waitFor((m) => m.requestId === "none-1", 20_000);
     assert.equal(answer.type, "git_error");
+  });
+
+  // openlore: scenario=NoRepositoryHere spec=git
+  test("says WHY, so an ordinary directory is not mistaken for a broken install", async () => {
+    const hello = await client.waitFor("hello");
+    assert.deepEqual(hello.gitUnavailable, { reason: "no-repository" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openlore: scenario=ARepositoryOnDiskGitWillNotRead spec=git
+// chmod is advisory on Windows, so a repository cannot be made unreadable there; the
+// classification is covered on every platform by the unit tests in git-executable.test.ts
+describe("a repository git will not read", { skip: process.platform === "win32" }, () => {
+  let server;
+  let client;
+  let root;
+
+  before(async () => {
+    root = await makeWorkspace({});
+    await makeRepo(path.join(root, "proj"), "main", "proj initial");
+    // A refusal git states in its own words, as dubious ownership does in the field.
+    // `GIT_TEST_ASSUME_DIFFERENT_OWNER` would read better and is not in every git.
+    chmodSync(path.join(root, "proj", ".git", "config"), 0o000);
+    server = await startServer(root);
+    client = connect(server.wsUrl());
+  });
+
+  after(async () => {
+    client?.close();
+    chmodSync(path.join(root, "proj", ".git", "config"), 0o644);
+    await server?.stop();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // openlore: scenario=GitRefusesTheRepository spec=git
+  test("is not offered as though it worked, and git's own words say why", async () => {
+    const hello = await client.waitFor("hello");
+    // The disk says this is a repository. Only git can say whether it is a usable one,
+    // and a surface offered on the strength of the disk alone fails where nobody looks.
+    assert.equal(hello.gitAvailable, false);
+    assert.equal(hello.gitUnavailable?.reason, "refused");
+    assert.match(hello.gitUnavailable.message, /permission denied/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openlore: scenario=InvalidExecutableValue spec=config
+describe("a configured git that cannot run", () => {
+  let root;
+
+  before(async () => {
+    root = await makeWorkspace({});
+  });
+
+  after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("stops the server at startup rather than running one feature short", async () => {
+    // An operator who names an executable should hear about a typo at boot, not the
+    // first time somebody opens a file tree
+    await assert.rejects(
+      () => startServer(root, { gitPath: path.join(root, "not-a-git") }),
+      (error) => /server exited/i.test(error.message) && /not-a-git/.test(error.message),
+    );
   });
 });
 

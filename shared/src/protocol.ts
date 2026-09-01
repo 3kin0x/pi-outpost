@@ -249,6 +249,21 @@ export type FileBrowserErrorReason =
 /** Mutating/opening operation acknowledged by file_operation_result. */
 export type FileOperation = "open_native" | "rename_file" | "delete_file" | "move_file" | "copy_file";
 
+/**
+ * Why git is unavailable, when it is.
+ *
+ * Three states, because they call for three different things from the reader: a
+ * directory that holds no repository is ordinary and needs nothing, while an
+ * executable that cannot be run and a repository git refuses are both setup faults
+ * somebody can fix. `message` carries git's own words where there are any — "detected
+ * dubious ownership in repository at …" names the directory AND the remedy, and
+ * paraphrasing it would lose both.
+ */
+export type GitUnavailable =
+  | { reason: "no-executable"; message: string }
+  | { reason: "no-repository" }
+  | { reason: "refused"; message: string };
+
 /** Working-tree state of one file, scoped to the browser root. */
 export type GitFileState = "modified" | "added" | "deleted" | "untracked" | "conflicted";
 
@@ -442,6 +457,8 @@ export interface SessionSnapshot {
   writableRoot?: string | null;
   /** Whether the browser root is inside a git work tree (and git is installed). */
   gitAvailable?: boolean;
+  /** Present only when `gitAvailable` is false: why, so the absence can be acted on. */
+  gitUnavailable?: GitUnavailable;
   /** Which providers are usable, and whether the agent can answer at all. Never carries a key. */
   credentials?: CredentialStatus;
   /**
@@ -643,7 +660,7 @@ export type ServerMessage =
    * no repository stops asking about git entirely, so nothing short of being told
    * would ever bring the surface back.
    */
-  | { type: "git_repositories_changed"; available: boolean }
+  | { type: "git_repositories_changed"; available: boolean; unavailable?: GitUnavailable }
   /**
    * A watched directory's entries changed on disk, whatever caused it — this
    * server, the agent through bash, or nothing in this process at all.
