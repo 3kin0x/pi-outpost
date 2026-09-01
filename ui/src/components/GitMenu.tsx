@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { GitLogEntry, GitRepoStatus } from "@pi-outpost/shared";
 import type { GitStatusState } from "../useAgent";
 import { useClickOutside } from "../util/clickOutside";
@@ -6,7 +6,10 @@ import { repoForPath } from "../util/gitRepos";
 
 interface GitMenuProps {
   status: GitStatusState | null;
-  /** Browser-root-relative path of what the user has open, or null when nothing is. */
+  /**
+   * Browser-root-relative path of the last thing the user touched in the tree — a file
+   * or a directory — or null when they have touched nothing yet.
+   */
   selected: string | null;
   log: GitLogEntry[] | null;
   onFetchLog: (repo: string) => void;
@@ -30,25 +33,23 @@ function repoName(repo: string): string {
  * Header branch chip; opens that repository's recent commits, click one for its diff.
  *
  * A workspace holds a set of repositories, so there is no single branch to show and
- * the chip follows the selection instead: opening a file in one project names that
- * project's branch. No picker — the user already chose by clicking a file, and a
- * control for choosing again would be asking twice.
+ * the chip follows the selection instead — a file OR a directory, since walking into
+ * a project is how you say which one you are in. No picker: the user already chose by
+ * clicking, and a control for choosing again would be asking twice.
+ *
+ * A selection under no repository names nothing. The chip stays on screen and says
+ * `—`, rather than going on claiming the last repository it knew: in a directory of
+ * projects the loose files at the root are exactly where a README lives, and a chip
+ * naming a project the user has left is worse than one admitting it has none.
  */
 export function GitMenu({ status, selected, log, onFetchLog, onShowCommit }: GitMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useClickOutside(() => setOpen(false));
   const repos = status?.repos ?? [];
   const owner = selected === null ? null : repoForPath(repos, selected);
-
-  // A file under no repository — a loose note beside three projects — leaves the chip
-  // where it was rather than blanking it: it would flicker on every click into one.
-  const [sticky, setSticky] = useState<string | null>(null);
-  useEffect(() => {
-    if (owner !== null) setSticky(owner.repo);
-  }, [owner]);
-
-  const current: GitRepoStatus | null =
-    owner ?? repos.find((repo) => repo.repo === sticky) ?? (repos.length === 1 ? repos[0] : null);
+  // Nothing touched yet: a workspace with one repository has only one answer, and a
+  // workspace with several has none worth guessing at
+  const current: GitRepoStatus | null = owner ?? (selected === null && repos.length === 1 ? repos[0] : null);
   const counts =
     current && (current.ahead > 0 || current.behind > 0)
       ? ` ${current.ahead > 0 ? `↑${current.ahead}` : ""}${current.behind > 0 ? `↓${current.behind}` : ""}`

@@ -369,6 +369,38 @@ describe("App — panes and handovers", () => {
     expect(screen.getByRole("button", { name: "Close file viewer" })).toBeInTheDocument();
   });
 
+  // openlore: scenario=TheChipFollowsADirectoryToo spec=git
+  it("moves the branch chip when the user walks into another project's directory", () => {
+    // The gap a component test could not see: GitMenu was right, and App fed it the
+    // open FILE, so clicking a project's folder moved nothing.
+    mount({
+      gitAvailable: true,
+      fileTree: {
+        "": [
+          { name: "projA", type: "directory" },
+          { name: "projB", type: "directory" },
+        ],
+      },
+      gitStatus: {
+        repos: [
+          { repo: "projA", branch: "main", ahead: 0, behind: 0 },
+          { repo: "projB", branch: "release", ahead: 0, behind: 0 },
+        ],
+        files: {},
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /[◨◧]\s*files/ }));
+
+    const chip = () => screen.getByRole("button", { name: /⎇/ });
+    expect(chip()).toHaveTextContent("—");
+
+    fireEvent.click(screen.getByRole("button", { name: /^[▸▾]\s*projB\s*\d*$/ }));
+    expect(chip()).toHaveTextContent("release");
+
+    fireEvent.click(screen.getByRole("button", { name: /^[▸▾]\s*projA\s*\d*$/ }));
+    expect(chip()).toHaveTextContent("main");
+  });
+
   it("offers no history for a file under no repository, though the workspace has git", () => {
     // A directory of projects: two repositories, and a loose file beside them. The
     // workspace has git; this file has no history, and the affordance would 404.

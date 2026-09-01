@@ -171,11 +171,23 @@ describe("GitMenu", () => {
       expect(chip()).not.toHaveTextContent("release");
     });
 
-    it("leaves the chip where it was when the selection is under no repository", () => {
+    // openlore: scenario=ASelectionUnderNoRepositoryNamesNothing spec=git
+    it("names no branch when the selection is under no repository", () => {
       const { rerender, onFetchLog, onShowCommit } = render2("projA/src/main.ts");
       expect(chip()).toHaveTextContent("main");
       rerender(<GitMenu status={status(TWO)} selected="notes.md" log={LOG} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />);
+      expect(chip()).toBeInTheDocument();
+      expect(chip()).toHaveTextContent("—");
+      expect(chip()).not.toHaveTextContent("main");
+    });
+
+    // openlore: scenario=TheChipFollowsADirectoryToo spec=git
+    it("follows a directory, not only a file", () => {
+      const { rerender, onFetchLog, onShowCommit } = render2("projA/src/main.ts");
       expect(chip()).toHaveTextContent("main");
+      rerender(<GitMenu status={status(TWO)} selected="projB" log={LOG} onFetchLog={onFetchLog} onShowCommit={onShowCommit} />);
+      expect(chip()).toHaveTextContent("release");
+      expect(chip()).toHaveTextContent("projB");
     });
 
     it("asks for the selected repository's log, and reports a commit against it", () => {

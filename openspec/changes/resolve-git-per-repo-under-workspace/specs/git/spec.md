@@ -203,13 +203,20 @@ for files with changes, offer a history affordance in the viewer for any tracked
 only changed ones — that opens the file-history graph, and open commit history from the
 branch chip (click a commit → its patch full-pane).
 
-The branch chip SHALL name the repository owning the file the user has selected, with that
-repository's branch and ahead/behind counts, and the commit history opened from it SHALL be
-that repository's. Selecting a file in another repository SHALL move the chip to that
-repository without any picker control. When no file is selected, the chip SHALL name the
-workspace's only repository if it has exactly one, and SHALL otherwise name no branch while
-remaining visible. A selected file owned by no repository SHALL leave the chip on the last
-repository it named, and SHALL offer neither diff toggle nor history affordance.
+The branch chip SHALL name the repository owning what the user last touched in the file
+tree — a file or a directory — with that repository's branch and ahead/behind counts, and
+the commit history opened from it SHALL be that repository's. Touching anything in another
+repository SHALL move the chip to that repository without any picker control: walking into a
+project's directory says which project the user is in as surely as opening one of its files,
+and SHALL move the chip as surely.
+
+When nothing has been touched, the chip SHALL name the workspace's only repository if it has
+exactly one, and SHALL otherwise name no branch while remaining visible. A selection owned by
+no repository SHALL likewise name no branch, rather than continuing to name the last
+repository it knew — in a directory of projects the loose files at the root are exactly where
+a README lives, and a chip naming a project the user has left is worse than one admitting it
+has none. A file owned by no repository SHALL additionally offer neither diff toggle nor
+history affordance.
 
 #### Scenario: BranchChipVisible
 - **WHEN** the app connects to a server with gitAvailable: true
@@ -228,6 +235,16 @@ repository it named, and SHALL offer neither diff toggle nor history affordance.
 - **GIVEN** a workspace holding two repositories on different branches
 - **WHEN** the user selects a file in the first and then a file in the second
 - **THEN** the chip names the first repository's branch, then the second's
+
+#### Scenario: TheChipFollowsADirectoryToo
+- **GIVEN** a workspace holding two repositories, with the chip naming the first
+- **WHEN** the user clicks the second repository's directory in the tree, opening no file
+- **THEN** the chip names the second repository's branch
+
+#### Scenario: ASelectionUnderNoRepositoryNamesNothing
+- **GIVEN** a workspace holding two repositories, with the chip naming one of them
+- **WHEN** the user selects a file that lies under no repository
+- **THEN** the chip remains on screen and names no branch
 
 #### Scenario: FullGitSurfaceOnClickingATrackedLeaf
 - **GIVEN** a workspace whose root is not a repository, holding a repository with a modified tracked file

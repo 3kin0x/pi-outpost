@@ -215,6 +215,24 @@ describe("FileTree", () => {
         expect(within(dirToggle("projB")).getByTitle("1 changed file(s) inside")).toBeInTheDocument();
       });
 
+      it("reports the directory the user touched, opening it, closing it, or reopening it", () => {
+        const onSelectDirectory = vi.fn();
+        setup({ tree: projects, gitFiles: across, onSelectDirectory });
+
+        fireEvent.click(dirToggle("projA"));
+        expect(onSelectDirectory).toHaveBeenLastCalledWith("projA");
+
+        // Collapsing is still saying which project you are looking at
+        fireEvent.click(dirToggle("projA"));
+        expect(onSelectDirectory).toHaveBeenCalledTimes(2);
+
+        // And reopening a directory already listed fetches nothing, so onExpand is
+        // silent — this is the case the branch chip used to miss entirely
+        fireEvent.click(dirToggle("projA"));
+        expect(onSelectDirectory).toHaveBeenCalledTimes(3);
+        expect(onSelectDirectory).toHaveBeenLastCalledWith("projA");
+      });
+
       it("leaves a file under no repository unbadged", () => {
         setup({ tree: projects, gitFiles: across });
         expect(screen.queryByRole("button", { name: "Show diff of notes.md" })).not.toBeInTheDocument();
