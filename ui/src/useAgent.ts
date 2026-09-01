@@ -297,6 +297,8 @@ export interface AgentState {
   extensionLock: boolean;
   tools: { name: string; active: boolean }[];
   sandbox: { root: string; allowWrite: boolean; allowBash: boolean; writableRoot?: string } | null;
+  /** Terminal configuration — whether the terminal is enabled and locked. */
+  terminal?: { enabled: boolean; locked?: boolean } | null;
   /**
    * Skill paths added through Settings — the list the user may add to and remove
    * from. The configuration file's own `skillPaths` are not carried into the UI:
@@ -368,6 +370,7 @@ const initialState: AgentState = {
   extensionLock: false,
   tools: [],
   sandbox: null,
+  terminal: null,
   userSkillPaths: [],
   serverBrowse: null,
   settingsApply: null,
@@ -512,6 +515,7 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     extensionLock: message.extensionLock === true,
     tools: message.tools ?? [],
     sandbox: message.sandbox ?? null,
+    terminal: message.terminal ?? null,
     userSkillPaths: message.userSkillPaths ?? [],
     serverBrowse: null,
     settingsApply: null,

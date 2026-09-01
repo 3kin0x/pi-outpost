@@ -38,8 +38,23 @@ export interface TerminalSession {
 }
 
 export class TerminalManager {
-  private sessions = new Map<string, TerminalSession>();
-  private socketToTerminals = new Map<WebSocket, Set<string>>();
+  /**
+   * Sessions keyed by WebSocket connection, mapping terminalId -> TerminalSession.
+   * Ensures absolute isolation across multiple connected clients.
+   */
+  private socketSessions = new Map<WebSocket, Map<string, TerminalSession>>();
+
+  /**
+   * Check if PTY support is available on this host.
+   */
+  async isAvailable(): Promise<boolean> {
+    try {
+      await getPty();
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * Determine the default shell for the host platform.
@@ -55,7 +70,7 @@ export class TerminalManager {
   }
 
   /**
-   * Open a new interactive terminal session.
+   * Open a new interactive terminal session for a specific socket.
    */
   async open(
     socket: WebSocket,
@@ -66,9 +81,15 @@ export class TerminalManager {
     onData: (terminalId: string, data: string) => void,
     onExit: (terminalId: string, exitCode?: number) => void,
   ): Promise<TerminalSession> {
+    let userSessions = this.socketSessions.get(socket);
+    if (!userSessions) {
+      userSessions = new Map();
+      this.socketSessions.set(socket, userSessions);
+    }
+
     // If an existing session with this ID exists for this socket, close it first
-    if (this.sessions.has(terminalId)) {
-      this.close(terminalId);
+    if (userSessions.has(terminalId)) {
+      this.close(socket, terminalId);
     }
 
     const { shell, args } = this.getDefaultShell();
@@ -96,21 +117,17 @@ export class TerminalManager {
       cwd: resolvedCwd,
     };
 
-    this.sessions.set(terminalId, session);
-
-    let termSet = this.socketToTerminals.get(socket);
-    if (!termSet) {
-      termSet = new Set();
-      this.socketToTerminals.set(socket, termSet);
-    }
-    termSet.add(terminalId);
+    userSessions.set(terminalId, session);
 
     ptyProcess.onData((data: string) => {
       onData(terminalId, data);
     });
 
     ptyProcess.onExit(({ exitCode }) => {
-      this.cleanupSession(terminalId);
+      userSessions.delete(terminalId);
+      if (userSessions.size === 0) {
+        this.socketSessions.delete(socket);
+      }
       onExit(terminalId, exitCode);
     });
 
@@ -118,20 +135,20 @@ export class TerminalManager {
   }
 
   /**
-   * Send input characters / keystrokes to a terminal.
+   * Send input characters / keystrokes to a terminal owned by this socket.
    */
-  write(terminalId: string, data: string): boolean {
-    const session = this.sessions.get(terminalId);
+  write(socket: WebSocket, terminalId: string, data: string): boolean {
+    const session = this.socketSessions.get(socket)?.get(terminalId);
     if (!session) return false;
     session.ptyProcess.write(data);
     return true;
   }
 
   /**
-   * Resize a terminal session (SIGWINCH).
+   * Resize a terminal session owned by this socket (SIGWINCH).
    */
-  resize(terminalId: string, cols: number, rows: number): boolean {
-    const session = this.sessions.get(terminalId);
+  resize(socket: WebSocket, terminalId: string, cols: number, rows: number): boolean {
+    const session = this.socketSessions.get(socket)?.get(terminalId);
     if (!session) return false;
     const safeCols = Math.max(10, cols);
     const safeRows = Math.max(5, rows);
@@ -144,10 +161,10 @@ export class TerminalManager {
   }
 
   /**
-   * Query the current working directory of a terminal process.
+   * Query the current working directory of a terminal process owned by this socket.
    */
-  async getCwd(terminalId: string): Promise<string | undefined> {
-    const session = this.sessions.get(terminalId);
+  async getCwd(socket: WebSocket, terminalId: string): Promise<string | undefined> {
+    const session = this.socketSessions.get(socket)?.get(terminalId);
     if (!session) return undefined;
     const pid = session.ptyProcess.pid;
 
@@ -176,17 +193,22 @@ export class TerminalManager {
   }
 
   /**
-   * Close a specific terminal session.
+   * Close a specific terminal session owned by this socket.
    */
-  close(terminalId: string): boolean {
-    const session = this.sessions.get(terminalId);
+  close(socket: WebSocket, terminalId: string): boolean {
+    const userSessions = this.socketSessions.get(socket);
+    if (!userSessions) return false;
+    const session = userSessions.get(terminalId);
     if (!session) return false;
     try {
       session.ptyProcess.kill();
     } catch {
       // Process might already be dead
     }
-    this.cleanupSession(terminalId);
+    userSessions.delete(terminalId);
+    if (userSessions.size === 0) {
+      this.socketSessions.delete(socket);
+    }
     return true;
   }
 
@@ -194,48 +216,31 @@ export class TerminalManager {
    * Clean up all terminal sessions associated with a disconnected socket.
    */
   closeAllForSocket(socket: WebSocket): void {
-    const termSet = this.socketToTerminals.get(socket);
-    if (!termSet) return;
-    for (const termId of termSet) {
-      const session = this.sessions.get(termId);
-      if (session) {
-        try {
-          session.ptyProcess.kill();
-        } catch {
-          // Ignore
-        }
-        this.sessions.delete(termId);
-      }
-    }
-    this.socketToTerminals.delete(socket);
-  }
-
-  /**
-   * Close all terminal sessions across all sockets (e.g. on server shutdown).
-   */
-  closeAll(): void {
-    for (const session of this.sessions.values()) {
+    const userSessions = this.socketSessions.get(socket);
+    if (!userSessions) return;
+    for (const session of userSessions.values()) {
       try {
         session.ptyProcess.kill();
       } catch {
         // Ignore
       }
     }
-    this.sessions.clear();
-    this.socketToTerminals.clear();
+    this.socketSessions.delete(socket);
   }
 
-  private cleanupSession(terminalId: string): void {
-    const session = this.sessions.get(terminalId);
-    if (session) {
-      const termSet = this.socketToTerminals.get(session.socket);
-      if (termSet) {
-        termSet.delete(terminalId);
-        if (termSet.size === 0) {
-          this.socketToTerminals.delete(session.socket);
+  /**
+   * Close all terminal sessions across all sockets (e.g. on server shutdown).
+   */
+  closeAll(): void {
+    for (const userSessions of this.socketSessions.values()) {
+      for (const session of userSessions.values()) {
+        try {
+          session.ptyProcess.kill();
+        } catch {
+          // Ignore
         }
       }
-      this.sessions.delete(terminalId);
     }
+    this.socketSessions.clear();
   }
 }

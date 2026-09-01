@@ -1386,6 +1386,10 @@ function snapshot(workspace: Workspace): SessionSnapshot {
       console.log("[snapshot] sandbox =", JSON.stringify(v));
       return v;
     })(),
+    terminal: {
+      enabled: config.terminal?.enabled ?? false,
+      ...(config.sandboxLocks?.terminal ? { locked: true } : {}),
+    },
   };
 }
 
@@ -3450,6 +3454,14 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     }
     case "terminal_open": {
       if (typeof message.terminalId !== "string") return;
+      if (!config.terminal?.enabled) {
+        send(socket, {
+          type: "terminal_error",
+          terminalId: message.terminalId,
+          message: "Terminal access is disabled by server configuration.",
+        });
+        return;
+      }
       const allowBash = workspace.settings.sandbox ? workspace.settings.sandbox.allowBash : true;
       if (!allowBash) {
         send(socket, {
@@ -3479,17 +3491,17 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     }
     case "terminal_input": {
       if (typeof message.terminalId !== "string" || typeof message.data !== "string") return;
-      terminalManager.write(message.terminalId, message.data);
+      terminalManager.write(socket, message.terminalId, message.data);
       break;
     }
     case "terminal_resize": {
       if (typeof message.terminalId !== "string" || typeof message.cols !== "number" || typeof message.rows !== "number") return;
-      terminalManager.resize(message.terminalId, message.cols, message.rows);
+      terminalManager.resize(socket, message.terminalId, message.cols, message.rows);
       break;
     }
     case "terminal_get_cwd": {
       if (typeof message.terminalId !== "string") return;
-      terminalManager.getCwd(message.terminalId).then((cwd) => {
+      terminalManager.getCwd(socket, message.terminalId).then((cwd) => {
         if (cwd) {
           send(socket, { type: "terminal_cwd", terminalId: message.terminalId, cwd });
         }
@@ -3498,7 +3510,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     }
     case "terminal_close": {
       if (typeof message.terminalId !== "string") return;
-      terminalManager.close(message.terminalId);
+      terminalManager.close(socket, message.terminalId);
       break;
     }
   }

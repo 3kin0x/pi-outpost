@@ -187,17 +187,31 @@ function SingleTerminalView({
     // Notify server to spawn shell
     callbacksRef.current.openTerminal?.(id, callbacksRef.current.cwd, term.cols, term.rows);
 
-    // Initial query for cwd
-    callbacksRef.current.getTerminalCwd?.(id);
+    let cwdDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastCwdQueryTime = 0;
+
+    const requestCwdThrottled = () => {
+      const now = Date.now();
+      if (now - lastCwdQueryTime < 1000) {
+        if (!cwdDebounceTimer) {
+          cwdDebounceTimer = setTimeout(() => {
+            cwdDebounceTimer = null;
+            lastCwdQueryTime = Date.now();
+            callbacksRef.current.getTerminalCwd?.(id);
+          }, 1000 - (now - lastCwdQueryTime));
+        }
+        return;
+      }
+      lastCwdQueryTime = now;
+      callbacksRef.current.getTerminalCwd?.(id);
+    };
 
     // Keystrokes to server
     const dataDispose = term.onData((data) => {
       callbacksRef.current.sendTerminalInput?.(id, data);
-      // When enter is pressed, query cwd shortly after
+      // When enter is pressed, query cwd with throttling
       if (data.includes("\r") || data.includes("\n")) {
-        setTimeout(() => {
-          callbacksRef.current.getTerminalCwd?.(id);
-        }, 150);
+        requestCwdThrottled();
       }
     });
 
@@ -205,6 +219,16 @@ function SingleTerminalView({
     const unsubscribe = callbacksRef.current.subscribeTerminal?.(id, {
       onData: (data) => {
         term.write(data);
+        // Extract OSC 7 (current directory notification) if emitted by shell
+        const osc7Match = data.match(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]+)(?:\x07|\x1b\\)/);
+        if (osc7Match && osc7Match[1]) {
+          try {
+            const decodedPath = decodeURIComponent(osc7Match[1]);
+            callbacksRef.current.onCwdUpdate(id, decodedPath);
+          } catch {
+            // Ignore
+          }
+        }
       },
       onCwd: (newCwd) => {
         callbacksRef.current.onCwdUpdate(id, newCwd);

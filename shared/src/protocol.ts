@@ -522,7 +522,12 @@ export interface SessionSnapshot {
     allowBash: boolean;
     writableRoot?: string;
     /** Which fields the settings menu must not allow editing — set from config.sandboxLocks. */
-    locks?: { root?: boolean; allowWrite?: boolean; allowBash?: boolean; writableRoot?: boolean };
+    locks?: { root?: boolean; allowWrite?: boolean; allowBash?: boolean; writableRoot?: boolean; terminal?: boolean };
+  };
+  /** Terminal configuration — whether the integrated web terminal is enabled and whether it is locked. */
+  terminal?: {
+    enabled: boolean;
+    locked?: boolean;
   };
 }
 
