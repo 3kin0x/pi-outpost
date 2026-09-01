@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  "plugins": ["vitest"],
+  "rules": {
+    "vitest/expect-expect": ["error", { "assertFunctionNames": ["expect", "assert*"] }],
+    "vitest/no-standalone-expect": "error",
+    "vitest/no-identical-title": "error",
+    "vitest/require-mock-type-parameters": "off"
+  },
+  "ignorePatterns": ["dist", "coverage"]
+}

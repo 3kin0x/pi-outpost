@@ -145,6 +145,17 @@ scenario is `partial` or `uncovered`. If a correct test exposes a product bug,
 keep the assertion strong: fix the implementation when in scope, otherwise
 report the blocker instead of weakening the test.
 
+Write the matrix to `openspec/changes/<change>/scenario-coverage.md`, and run
+`npm run check:scenarios` before opening the PR — CI runs it over the changes the
+branch touches. It verifies the mechanical half: a matrix exists, every declared
+scenario appears in it as `covered`, and every file the evidence cites is really
+in the repository. It cannot tell whether a cited assertion is worth anything;
+that is the reading job above, and passing this check is not evidence of coverage.
+
+`npm run lint` refuses a test with no assertion at all (`vitest/expect-expect`),
+which is the cheapest form of the same mistake: a test whose name claims a
+contract and whose body never checks it.
+
 ## UI and UX changes: test them in the running app
 
 Any change that touches the interface **or the way it is used** — a component, a
