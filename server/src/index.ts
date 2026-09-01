@@ -3460,23 +3460,21 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         return;
       }
       const termCwd = message.cwd && typeof message.cwd === "string" ? message.cwd : workspace.settings.cwd;
-      try {
-        terminalManager.open(
-          socket,
-          message.terminalId,
-          termCwd,
-          message.cols ?? 80,
-          message.rows ?? 24,
-          (termId, data) => send(socket, { type: "terminal_data", terminalId: termId, data }),
-          (termId, exitCode) => send(socket, { type: "terminal_exit", terminalId: termId, exitCode }),
-        );
-      } catch (error) {
+      terminalManager.open(
+        socket,
+        message.terminalId,
+        termCwd,
+        message.cols ?? 80,
+        message.rows ?? 24,
+        (termId, data) => send(socket, { type: "terminal_data", terminalId: termId, data }),
+        (termId, exitCode) => send(socket, { type: "terminal_exit", terminalId: termId, exitCode }),
+      ).catch((error) => {
         send(socket, {
           type: "terminal_error",
           terminalId: message.terminalId,
           message: error instanceof Error ? error.message : String(error),
         });
-      }
+      });
       break;
     }
     case "terminal_input": {

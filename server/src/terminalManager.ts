@@ -9,10 +9,26 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
-import * as pty from "node-pty";
+import type * as pty from "node-pty";
 import type { WebSocket } from "ws";
 
 const execFileAsync = promisify(execFile);
+
+let ptyModule: typeof pty | null = null;
+let ptyLoadError: Error | null = null;
+
+async function getPty(): Promise<typeof pty> {
+  if (ptyModule) return ptyModule;
+  if (ptyLoadError) throw ptyLoadError;
+  try {
+    const mod = await import("node-pty");
+    ptyModule = ((mod as any).default || mod) as typeof pty;
+    return ptyModule;
+  } catch (err) {
+    ptyLoadError = err instanceof Error ? err : new Error(String(err));
+    throw ptyLoadError;
+  }
+}
 
 export interface TerminalSession {
   terminalId: string;
@@ -41,7 +57,7 @@ export class TerminalManager {
   /**
    * Open a new interactive terminal session.
    */
-  open(
+  async open(
     socket: WebSocket,
     terminalId: string,
     cwd: string,
@@ -49,7 +65,7 @@ export class TerminalManager {
     rows = 24,
     onData: (terminalId: string, data: string) => void,
     onExit: (terminalId: string, exitCode?: number) => void,
-  ): TerminalSession {
+  ): Promise<TerminalSession> {
     // If an existing session with this ID exists for this socket, close it first
     if (this.sessions.has(terminalId)) {
       this.close(terminalId);
@@ -64,6 +80,7 @@ export class TerminalManager {
       COLORTERM: "truecolor",
     };
 
+    const pty = await getPty();
     const ptyProcess = pty.spawn(shell, args, {
       name: "xterm-256color",
       cols: Math.max(10, cols),
