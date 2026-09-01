@@ -8,7 +8,12 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+// `realpath` from the promises API, never `realpathSync`: on Windows only the former
+// expands a short path (`RUNNER~1` for `runneradmin`), and the code under test
+// canonicalises with it - a fixture built the other way compares two names of one
+// directory and fails on a difference that is not there.
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -42,8 +47,8 @@ const ids = (repos: readonly GitRepo[]) => repos.map((repo) => repo.id).sort();
 describe("discovering the repositories under a workspace", () => {
   let root: string;
 
-  before(() => {
-    root = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-")));
+  before(async () => {
+    root = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-")));
     makeRepo(path.join(root, "projA"));
     makeRepo(path.join(root, "projB"), "release");
     // Not a repository, and not in the way
@@ -105,8 +110,8 @@ describe("discovering the repositories under a workspace", () => {
 describe("a repository marker that is a file, not a directory", () => {
   let root: string;
 
-  before(() => {
-    root = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-linked-")));
+  before(async () => {
+    root = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-linked-")));
     makeRepo(path.join(root, "main-repo"));
     // A linked work tree writes a `.git` FILE holding a gitdir: pointer
     git(path.join(root, "main-repo"), "worktree", "add", path.join(root, "linked"), "-b", "side");
@@ -132,10 +137,10 @@ describe("a repository reachable only through a symlink out of the root", () => 
   let outside: string;
   let root: string;
 
-  before(() => {
-    outside = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-outside-")));
+  before(async () => {
+    outside = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-outside-")));
     makeRepo(path.join(outside, "secret"));
-    root = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-linkroot-")));
+    root = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-linkroot-")));
     symlinkSync(path.join(outside, "secret"), path.join(root, "secret"));
   });
 
@@ -155,14 +160,14 @@ describe("a root the filesystem knows by another name", () => {
   let real: string;
   let alias: string;
 
-  before(() => {
+  before(async () => {
     // The shape that took CI down on Windows only: `%TEMP%` is a short name there
     // (`RUNNER~1` for `runneradmin`), so a root passed in one form and a child
     // realpath-resolved into the other compared as different trees, and discovery
     // quietly found nothing. A symlinked root reproduces it on any platform.
-    real = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-real-")));
+    real = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-real-")));
     makeRepo(path.join(real, "projA"));
-    alias = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-alias-"))), "link");
+    alias = path.join(await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-alias-"))), "link");
     symlinkSync(real, alias);
   });
 
@@ -215,7 +220,7 @@ describe("status across several repositories", () => {
   let repos: GitRepo[];
 
   before(async () => {
-    root = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-status-")));
+    root = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-status-")));
     makeRepo(path.join(root, "projA"));
     makeRepo(path.join(root, "projB"), "release");
     write(path.join(root, "projA", "README.md"), "# changed\n");
@@ -283,9 +288,9 @@ describe("status across several repositories", () => {
 describe("a repository inside the workspace's own repository", () => {
   let root: string;
 
-  before(() => {
-    root = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-sub-")));
-    const inner = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-subsrc-")));
+  before(async () => {
+    root = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-sub-")));
+    const inner = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-subsrc-")));
     makeRepo(inner);
     makeRepo(root);
     git(root, "-c", "protocol.file.allow=always", "submodule", "add", inner, "vendor");
@@ -314,7 +319,7 @@ describe("a repository embedded under a browser root that sits inside another", 
 
   before(async () => {
     // The workspace is a subdirectory of a repository, and holds a repository of its own
-    outer = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-outer-")));
+    outer = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-outer-")));
     makeRepo(outer);
     root = path.join(outer, "workspace");
     mkdirSync(root);
@@ -359,7 +364,7 @@ describe("history is read from the repository owning the path", () => {
   let repos: GitRepo[];
 
   before(async () => {
-    root = realpathSync(mkdtempSync(path.join(tmpdir(), "pi-repos-log-")));
+    root = await realpath(mkdtempSync(path.join(tmpdir(), "pi-repos-log-")));
     makeRepo(path.join(root, "projA"));
     makeRepo(path.join(root, "projB"), "release");
     write(path.join(root, "projB", "only-here.txt"), "b\n");
