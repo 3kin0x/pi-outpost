@@ -57,7 +57,7 @@ test.describe("Integrated Terminal (when enabled via config/flag)", () => {
 
     // Rename first tab on double click
     await page.getByText("bash 1").dblclick();
-    const renameInput = page.getByDisplayValue("bash 1");
+    const renameInput = page.locator('input[type="text"]');
     await expect(renameInput).toBeVisible();
     await renameInput.fill("Build Server");
     await renameInput.press("Enter");
