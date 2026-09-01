@@ -34,6 +34,7 @@ import {
   type WorkspaceInfo,
   type SessionSummary,
   THINKING_LEVELS,
+  type ThinkingLevel,
   type TreeNode,
   type WireImage,
   type WorkPlan,
@@ -62,7 +63,16 @@ import { bindFailureMessage, holdConsoleIfOwned } from "./startupFailure.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
 import { runStartupUpdateNotice, runUpdateCommand, updateCheckEnabled, whyCheckingDisabled } from "./update.ts";
-import { allExtensionPaths, allSkillPaths, ConfigWriteError, type EditableSettings, loadConfig, NoConfigError, persistEditableSettings } from "./config.ts";
+import {
+  allExtensionPaths,
+  allSkillPaths,
+  ConfigWriteError,
+  declaredThinkingLevels,
+  type EditableSettings,
+  loadConfig,
+  NoConfigError,
+  persistEditableSettings,
+} from "./config.ts";
 import { listServerDirectories, ServerDirectoryError } from "./serverDirectories.ts";
 import {
   CredentialError,
@@ -1147,6 +1157,20 @@ function modelName(workspace: Workspace): string {
   return model ? `${model.provider}/${model.id}` : "unknown";
 }
 
+/**
+ * The thinking levels to report for a workspace's current model.
+ *
+ * A deployment's declaration wins over the runtime's: this setting exists because the
+ * runtime is guessing, and for a model it does not recognise its guess is the full set
+ * — a slider offering levels the model cannot honour, snapping back with no reason
+ * given. Undefined when neither has anything to say, which a client reads as "offer
+ * everything", exactly as before.
+ */
+function acceptedThinkingLevels(workspace: Workspace): ThinkingLevel[] | undefined {
+  const state = workspace.agent.snapshot();
+  return declaredThinkingLevels(config.thinkingLevels, state.model) ?? state.thinkingLevels;
+}
+
 function contextUsage(workspace: Workspace): ContextUsage | undefined {
   return workspace.agent.snapshot().contextUsage;
 }
@@ -1291,7 +1315,10 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     sessionId: state.sessionId,
     model: modelName(workspace),
     thinkingLevel: state.thinkingLevel,
-    ...(state.thinkingLevels ? { thinkingLevels: state.thinkingLevels } : {}),
+    ...((): { thinkingLevels?: ThinkingLevel[] } => {
+      const levels = acceptedThinkingLevels(workspace);
+      return levels ? { thinkingLevels: levels } : {};
+    })(),
     isStreaming: state.isStreaming,
     items: historyToItems(
       state.messages as never,
@@ -3134,7 +3161,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       workspace.agent
         .setModel(provider, id)
         .then((model) => {
-          const levels = workspace.agent.snapshot().thinkingLevels;
+          const levels = acceptedThinkingLevels(workspace);
           broadcast(workspace, {
             type: "model_changed",
             model: modelName(workspace),
@@ -3151,6 +3178,12 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     }
     case "set_thinking": {
       if (!THINKING_LEVELS.includes(message.level)) return;
+      // A deployment that has stated what its model accepts is stating a fact about
+      // that model. The control already offers only those levels; this is for every
+      // other way the message arrives — an embedded widget, a client reconnecting with
+      // a level since narrowed away, a script.
+      const declared = declaredThinkingLevels(config.thinkingLevels, workspace.agent.snapshot().model);
+      if (declared && !declared.includes(message.level)) return;
       const level = message.level;
       workspace.agent
         .setThinkingLevel(level)

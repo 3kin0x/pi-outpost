@@ -22,7 +22,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { THEMES, type Theme } from "@pi-outpost/shared";
+import { normalizeThinkingLevels, THEMES, type Theme, type ThinkingLevel } from "@pi-outpost/shared";
 import { STRUCTURED_EXCHANGE_BYTES_CEILING } from "@pi-outpost/shared/structured-exchange/bounds";
 import { OPEN_SHAPES, type OpenShape } from "./openBrowser.ts";
 
@@ -394,6 +394,15 @@ export interface AppConfig {
    * air-gapped internal endpoint). Omit to keep the unrestricted list.
    */
   allowedModels?: { provider: string; id: string }[];
+  /**
+   * What thinking levels a model accepts, for a model the runtime cannot describe.
+   *
+   * An entry without `id` covers every model of that provider — an in-house endpoint
+   * usually has one answer for all of them. Where both could apply, the entry naming
+   * the model wins. A declaration is authoritative over whatever the runtime reports:
+   * this setting exists because the runtime is guessing.
+   */
+  thinkingLevels?: { provider: string; id?: string; levels: ThinkingLevel[] }[];
   /** Replace pi's built-in system prompt entirely (tool guidelines are lost — write your own). */
   systemPrompt?: string;
   /** Extra text appended after the (built-in or custom) system prompt, one entry per paragraph. */
@@ -609,6 +618,50 @@ export function optionalModelList(
     if (!provider || !id) fail(`"${key}[${i}]" must have "provider" and "id" strings`);
     return { provider, id };
   });
+}
+
+/**
+ * Declared thinking levels, normalised the way a runtime-reported list is.
+ *
+ * One normalisation for both sources, so a declared list and a reported one cannot
+ * drift into meaning different things. An entry that normalises to nothing is refused
+ * rather than kept: a model accepting no level at all cannot be asked for anything, so
+ * it is far likelier to be a typo than an intention, and boot is when to say so.
+ */
+export function optionalThinkingLevels(
+  raw: Record<string, unknown>,
+  key: string,
+): { provider: string; id?: string; levels: ThinkingLevel[] }[] | undefined {
+  const value = raw[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) fail(`"${key}" must be an array`);
+  return value.map((entry, i) => {
+    const obj = asObject(entry, `${key}[${i}]`);
+    const provider = optionalString(obj, "provider");
+    if (!provider) fail(`"${key}[${i}]" must have a "provider" string`);
+    const id = optionalString(obj, "id");
+    if (!Array.isArray(obj.levels)) fail(`"${key}[${i}]" must have a "levels" array`);
+    const levels = normalizeThinkingLevels(obj.levels);
+    if (!levels) {
+      fail(`"${key}[${i}]" lists no usable thinking level (got ${JSON.stringify(obj.levels)})`);
+    }
+    return { provider, ...(id ? { id } : {}), levels: levels! };
+  });
+}
+
+/**
+ * The levels declared for one model, or undefined when the deployment declares none.
+ *
+ * Most specific wins: an entry naming the model id is a more deliberate statement than
+ * the provider-wide one it sits beside.
+ */
+export function declaredThinkingLevels(
+  declarations: { provider: string; id?: string; levels: ThinkingLevel[] }[] | undefined,
+  model: { provider: string; id: string } | undefined,
+): ThinkingLevel[] | undefined {
+  if (!declarations || !model) return undefined;
+  const forProvider = declarations.filter((entry) => entry.provider === model.provider);
+  return (forProvider.find((entry) => entry.id === model.id) ?? forProvider.find((entry) => entry.id === undefined))?.levels;
 }
 
 /** `label` names the setting the way the user wrote it (`"agentRuntime.commandTimeoutMs"`). */
@@ -845,6 +898,7 @@ export function loadConfig(
   config.noPromptTemplates = optionalBoolean(raw, "noPromptTemplates", false);
   config.promptPaths = (optionalStringArray(raw, "promptPaths") ?? []).map(resolve);
   config.allowedModels = optionalModelList(raw, "allowedModels");
+  config.thinkingLevels = optionalThinkingLevels(raw, "thinkingLevels");
 
   const systemPrompt = optionalString(raw, "systemPrompt");
   const systemPromptFile = optionalString(raw, "systemPromptFile");

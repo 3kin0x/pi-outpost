@@ -604,6 +604,70 @@ describe("loadConfig — resource path resolution", () => {
     });
   });
 
+  // openlore: scenario=DeclaringOneModel spec=config
+  test("thinkingLevels declares what a model accepts, provider-wide or per model", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(configPath, JSON.stringify({}, null, 2));
+      assert.equal(loadConfig(dir, { config: configPath }).thinkingLevels, undefined);
+
+      await writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            thinkingLevels: [
+              { provider: "maison", levels: ["off"] },
+              { provider: "maison", id: "big", levels: ["medium", "low"] },
+            ],
+          },
+          null,
+          2,
+        ),
+      );
+      const declared = loadConfig(dir, { config: configPath }).thinkingLevels;
+      assert.deepEqual(declared?.[0], { provider: "maison", levels: ["off"] });
+      // Normalised the way a runtime-reported list is: canonical order, `off` ensured
+      assert.deepEqual(declared?.[1], { provider: "maison", id: "big", levels: ["off", "low", "medium"] });
+    });
+  });
+
+  // openlore: scenario=AnEntryThatAcceptsNothing spec=config
+  test("thinkingLevels refuses an entry that names no usable level", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      // A model accepting nothing at all cannot be asked for anything: far likelier a
+      // typo than an intention, and boot is when to say so
+      for (const levels of [[], ["ludicrous"], ["nope", "also-nope"]]) {
+        await writeFile(configPath, JSON.stringify({ thinkingLevels: [{ provider: "maison", levels }] }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"thinkingLevels\[0\]"/);
+      }
+    });
+  });
+
+  // openlore: scenario=UnknownLevelName spec=config
+  test("thinkingLevels keeps the known levels of a list that also names an unknown one", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      await writeFile(
+        configPath,
+        JSON.stringify({ thinkingLevels: [{ provider: "maison", levels: ["low", "ludicrous"] }] }, null, 2),
+      );
+      assert.deepEqual(loadConfig(dir, { config: configPath }).thinkingLevels?.[0].levels, ["off", "low"]);
+    });
+  });
+
+  test("thinkingLevels refuses a malformed entry, naming it", async () => {
+    await withTempDir(async (dir) => {
+      const configPath = path.join(dir, "config.json");
+      for (const entry of [{ levels: ["off"] }, { provider: "maison" }, "maison", 42]) {
+        await writeFile(configPath, JSON.stringify({ thinkingLevels: [entry] }, null, 2));
+        assert.throws(() => loadConfig(dir, { config: configPath }), /"thinkingLevels\[0\]"/);
+      }
+      await writeFile(configPath, JSON.stringify({ thinkingLevels: "off" }, null, 2));
+      assert.throws(() => loadConfig(dir, { config: configPath }), /"thinkingLevels" must be an array/);
+    });
+  });
+
   test("files.watch defaults to on and can be turned off", async () => {
     await withTempDir(async (dir) => {
       const configPath = path.join(dir, "config.json");
