@@ -24,7 +24,7 @@ function setup(overrides: Partial<Props> = {}) {
     file: loaded(),
     isStreaming: false,
     gitDiff: null,
-    gitAvailable: false,
+    inRepository: false,
     ...handlers,
     ...overrides,
   };
@@ -346,18 +346,18 @@ describe("FileViewer", () => {
     });
 
     it("offers the history affordance for any tracked file, changed or not", () => {
-      const { onOpenGitHistory } = setup({ gitAvailable: true, gitState: undefined });
+      const { onOpenGitHistory } = setup({ inRepository: true, gitState: undefined });
       fireEvent.click(button("⎇ history"));
       expect(onOpenGitHistory).toHaveBeenCalledWith("src/main.ts");
     });
 
-    it("hides the history affordance when git is unavailable", () => {
-      setup({ gitAvailable: false });
+    it("hides the history affordance for a file under no repository", () => {
+      setup({ inRepository: false });
       expect(queryButton("⎇ history")).not.toBeInTheDocument();
     });
 
     it("hides both git affordances while editing", () => {
-      setup({ gitAvailable: true, gitState: "modified" });
+      setup({ inRepository: true, gitState: "modified" });
       fireEvent.click(button("✎ edit"));
       expect(queryButton("⎇ history")).not.toBeInTheDocument();
       expect(queryButton("± diff")).not.toBeInTheDocument();

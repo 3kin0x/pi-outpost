@@ -369,9 +369,43 @@ describe("App — panes and handovers", () => {
     expect(screen.getByRole("button", { name: "Close file viewer" })).toBeInTheDocument();
   });
 
+  it("offers no history for a file under no repository, though the workspace has git", () => {
+    // A directory of projects: two repositories, and a loose file beside them. The
+    // workspace has git; this file has no history, and the affordance would 404.
+    mount({
+      gitAvailable: true,
+      gitStatus: {
+        repos: [
+          { repo: "projA", branch: "main", ahead: 0, behind: 0 },
+          { repo: "projB", branch: "release", ahead: 0, behind: 0 },
+        ],
+        files: {},
+      },
+      openFile: { status: "loaded", path: "notes.md", content: "x", size: 1, mtimeMs: 1 },
+    });
+    expect(screen.queryByRole("button", { name: /history/ })).not.toBeInTheDocument();
+  });
+
+  it("offers history for a file inside one of several repositories", () => {
+    const { api } = mount({
+      gitAvailable: true,
+      gitStatus: {
+        repos: [
+          { repo: "projA", branch: "main", ahead: 0, behind: 0 },
+          { repo: "projB", branch: "release", ahead: 0, behind: 0 },
+        ],
+        files: {},
+      },
+      openFile: { status: "loaded", path: "projB/src/main.ts", content: "x", size: 1, mtimeMs: 1 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /history/ }));
+    expect(api.fetchGitFileHistory).toHaveBeenCalledWith("projB/src/main.ts");
+  });
+
   it("asks for a file's history from the viewer", () => {
     const { api } = mount({
       gitAvailable: true,
+      gitStatus: { repos: [{ repo: "", branch: "main", ahead: 0, behind: 0 }], files: {} },
       openFile: { status: "loaded", path: "src/main.ts", content: "x", size: 1, mtimeMs: 1 },
     });
     fireEvent.click(screen.getByRole("button", { name: /history/ }));
@@ -381,6 +415,7 @@ describe("App — panes and handovers", () => {
   it("shows the history pane once the answer arrives", () => {
     mount({
       gitAvailable: true,
+      gitStatus: { repos: [{ repo: "", branch: "main", ahead: 0, behind: 0 }], files: {} },
       openFile: { status: "loaded", path: "src/main.ts", content: "x", size: 1, mtimeMs: 1 },
       gitFileHistory: { path: "src/main.ts", status: "loaded", entries: [], requestId: "r1" },
     });
@@ -780,7 +815,7 @@ describe("App — model bar and tree", () => {
   it("opens a file from the tree straight onto its diff", () => {
     const api = mount({
       fileTree: { "": [{ name: "readme.md", type: "file" }] },
-      gitStatus: { branch: "main", ahead: 0, behind: 0, files: { "readme.md": "modified" } },
+      gitStatus: { repos: [{ repo: "", branch: "main", ahead: 0, behind: 0 }], files: { "readme.md": "modified" } },
       gitAvailable: true,
     });
     fireEvent.click(screen.getByRole("button", { name: /[◨◧]\s*files/ }));

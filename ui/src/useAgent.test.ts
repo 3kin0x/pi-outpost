@@ -84,7 +84,7 @@ afterEach(() => {
 // Shared harness: a connected hook with a session already established.
 // ---------------------------------------------------------------------------
 /** Renders the hook, opens the socket, and replays a `hello` with `items`. */
-async function connected(items: unknown[] = []) {
+async function connected(items: unknown[] = [], hello: Record<string, unknown> = {}) {
   const { result } = renderHook(() => useAgent());
   act(() => mockWs!.open());
   await waitFor(() => expect(result.current.state.connected).toBe(true));
@@ -101,6 +101,7 @@ async function connected(items: unknown[] = []) {
       items,
       contextUsage: null,
       gitAvailable: false,
+      ...hello,
     }),
   );
   await waitFor(() => expect(result.current.state.sessionId).toBe("sess_1"));
@@ -1095,15 +1096,112 @@ describe("git messages", () => {
     act(() =>
       mockWs!.receive({
         type: "git_status",
-        branch: "main",
-        ahead: 1,
-        behind: 0,
+        repos: [{ repo: "", branch: "main", ahead: 1, behind: 0 }],
         files: [{ path: "a.ts", status: "modified" }],
       }),
     );
 
     await waitFor(() => expect(result.current.state.gitStatus?.files["a.ts"]).toBe("modified"));
-    expect(result.current.state.gitStatus?.branch).toBe("main");
+    expect(result.current.state.gitStatus?.repos[0]?.branch).toBe("main");
+  });
+
+  it("carries every repository's branch, and files from all of them", async () => {
+    const result = await connected();
+
+    act(() =>
+      mockWs!.receive({
+        type: "git_status",
+        repos: [
+          { repo: "projA", branch: "main", ahead: 0, behind: 0 },
+          { repo: "projB", branch: "release", ahead: 2, behind: 0 },
+        ],
+        files: [
+          { path: "projA/a.ts", status: "modified" },
+          { path: "projB/b.ts", status: "untracked" },
+        ],
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.gitStatus?.files["projA/a.ts"]).toBe("modified"));
+    expect(result.current.state.gitStatus?.files["projB/b.ts"]).toBe("untracked");
+    expect(result.current.state.gitStatus?.repos.map((repo) => repo.branch)).toEqual(["main", "release"]);
+  });
+
+  it("lets a scoped answer replace one repository's slice and leave the rest standing", async () => {
+    const result = await connected();
+    act(() =>
+      mockWs!.receive({
+        type: "git_status",
+        repos: [
+          { repo: "projA", branch: "main", ahead: 0, behind: 0 },
+          { repo: "projB", branch: "release", ahead: 0, behind: 0 },
+        ],
+        files: [
+          { path: "projA/a.ts", status: "modified" },
+          { path: "projB/b.ts", status: "modified" },
+        ],
+      }),
+    );
+    await waitFor(() => expect(result.current.state.gitStatus?.files["projA/a.ts"]).toBe("modified"));
+
+    // projA is now clean and one commit ahead; projB was not asked about at all
+    act(() =>
+      mockWs!.receive({
+        type: "git_status",
+        repo: "projA",
+        repos: [{ repo: "projA", branch: "main", ahead: 1, behind: 0 }],
+        files: [],
+      }),
+    );
+
+    await waitFor(() => expect(result.current.state.gitStatus?.files["projA/a.ts"]).toBeUndefined());
+    expect(result.current.state.gitStatus?.files["projB/b.ts"]).toBe("modified");
+    expect(result.current.state.gitStatus?.repos).toEqual([
+      { repo: "projA", branch: "main", ahead: 1, behind: 0 },
+      { repo: "projB", branch: "release", ahead: 0, behind: 0 },
+    ]);
+  });
+
+  it("sweeps every repository when a turn ends, since bash can touch any of them", async () => {
+    await connected([], { gitAvailable: true });
+    // Connecting already asked once; settle it, or the next request coalesces into it
+    act(() => mockWs!.receive({ type: "git_status", repos: [], files: [] }));
+    const before = mockWs.sent.length;
+
+    act(() => mockWs!.receive({ type: "agent_end" }));
+
+    await waitFor(() => {
+      const statuses = mockWs.sent
+        .slice(before)
+        .map((raw) => JSON.parse(raw) as { type: string; repo?: string })
+        .filter((frame) => frame.type === "git_status");
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0].repo).toBeUndefined();
+    });
+  });
+
+  it("asks only the changed file's repository for a fresh status", async () => {
+    const result = await connected([], { gitAvailable: true });
+    act(() =>
+      mockWs!.receive({
+        type: "git_status",
+        repos: [
+          { repo: "projA", branch: "main", ahead: 0, behind: 0 },
+          { repo: "projB", branch: "release", ahead: 0, behind: 0 },
+        ],
+        files: [],
+      }),
+    );
+    await waitFor(() => expect(result.current.state.gitStatus?.repos).toHaveLength(2));
+
+    act(() => mockWs!.receive({ type: "file_changed", path: "projB/b.ts" }));
+
+    await waitFor(() => {
+      const statuses = mockWs!.sent
+        .map((raw) => JSON.parse(raw) as { type: string; repo?: string })
+        .filter((frame) => frame.type === "git_status");
+      expect(statuses.at(-1)?.repo).toBe("projB");
+    });
   });
 
   it("shows a diff failure in the diff pane, where the viewer covers the banner", async () => {
@@ -1713,8 +1811,8 @@ describe("commands on the wire", () => {
     ["forkSession", (api) => api.forkSession("e1"), { type: "fork_session", entryId: "e1" }],
     ["editPrompt", (api) => api.editPrompt("e1", "again"), { type: "edit_prompt", entryId: "e1", text: "again" }],
     ["compact", (api) => api.compact(), { type: "compact" }],
-    ["fetchGitLog", (api) => api.fetchGitLog(20), { type: "git_log", limit: 20 }],
-    ["fetchGitShow", (api) => api.fetchGitShow("abc1234"), { type: "git_show", sha: "abc1234" }],
+    ["fetchGitLog", (api) => api.fetchGitLog("projA", 20), { type: "git_log", repo: "projA", limit: 20 }],
+    ["fetchGitShow", (api) => api.fetchGitShow("projA", "abc1234"), { type: "git_show", repo: "projA", sha: "abc1234" }],
     ["setCredential", (api) => api.setCredential("openai", "sk-x"), { type: "set_credential", provider: "openai", apiKey: "sk-x" }],
     [
       "declareProvider",
@@ -1749,7 +1847,7 @@ describe("commands on the wire", () => {
 
   it("omits the limit when none was asked for", async () => {
     const result = await connected();
-    act(() => result.current.fetchGitLog());
+    act(() => result.current.fetchGitLog(""));
     expect(lastFrame()).not.toHaveProperty("limit");
   });
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { bootstrapToken, storedToken, storeToken } from "./authToken";
+import { repoForPath } from "./util/gitRepos";
 import type {
   Branding,
   ChatItem,
@@ -15,6 +16,7 @@ import type {
   GitFileLogEntry,
   GitFileState,
   GitLogEntry,
+  GitRepoStatus,
   GitRevision,
   ModelChoice,
   ProviderCompat,
@@ -99,10 +101,9 @@ export type SessionSearch = {
 
 /** Latest git working-tree status; null until the first git_status answer. */
 export interface GitStatusState {
-  branch: string;
-  ahead: number;
-  behind: number;
-  /** Browser-root-relative path → state. */
+  /** Every repository serving the workspace, each with its own branch. */
+  repos: GitRepoStatus[];
+  /** Browser-root-relative path → state, across all of them. */
   files: Record<string, GitFileState>;
 }
 
@@ -976,7 +977,18 @@ function reduce(state: AgentState, action: Action): AgentState {
     case "git_status": {
       const files: Record<string, GitFileState> = {};
       for (const file of message.files) files[file.path] = file.status;
-      return { ...state, gitStatus: { branch: message.branch, ahead: message.ahead, behind: message.behind, files } };
+      const previous = state.gitStatus;
+      // A full sweep is authoritative: it is also how a repository that appeared or
+      // vanished enters and leaves the list
+      if (message.repo === undefined || previous === null) return { ...state, gitStatus: { repos: message.repos, files } };
+      // A scoped answer speaks for one repository only — drop that repository's old
+      // files, keep everyone else's, and refresh its branch in place
+      const kept: Record<string, GitFileState> = {};
+      for (const [path, status] of Object.entries(previous.files)) {
+        if (repoForPath(previous.repos, path)?.repo !== message.repo) kept[path] = status;
+      }
+      const repos = previous.repos.map((repo) => message.repos.find((one) => one.repo === repo.repo) ?? repo);
+      return { ...state, gitStatus: { repos, files: { ...kept, ...files } } };
     }
     case "git_diff":
       return { ...state, gitDiff: { path: message.path, before: message.before, after: message.after } };
@@ -1140,26 +1152,43 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
   );
 
   // Git status refetches are event-driven (connect, file_changed, agent_end) and can
-  // burst — coalesce to one in flight with a single trailing rerun.
+  // burst — coalesce to one in flight with a single trailing rerun. Coalescing is per
+  // scope: a workspace holding thirty repositories would otherwise let one project's
+  // refresh swallow another's, and they are answers to different questions.
   const gitAvailableRef = useRef(false);
-  const gitStatusInFlight = useRef(false);
-  const gitStatusQueued = useRef(false);
-  const refreshGitStatus = useCallback(() => {
-    if (!gitAvailableRef.current) return;
-    if (gitStatusInFlight.current) {
-      gitStatusQueued.current = true;
-      return;
-    }
-    gitStatusInFlight.current = true;
-    sendMessage({ type: "git_status", requestId: `git:${crypto.randomUUID()}` });
-  }, [sendMessage]);
-  const gitStatusSettled = useCallback(() => {
-    gitStatusInFlight.current = false;
-    if (gitStatusQueued.current) {
-      gitStatusQueued.current = false;
-      refreshGitStatus();
-    }
-  }, [refreshGitStatus]);
+  /** The repository list as of the last status, for attributing a changed path. */
+  const gitReposRef = useRef<GitRepoStatus[]>([]);
+  useEffect(() => {
+    gitReposRef.current = state.gitStatus?.repos ?? [];
+  }, [state.gitStatus]);
+  const gitStatusInFlight = useRef(new Set<string>());
+  const gitStatusQueued = useRef(new Set<string>());
+  /** requestId → scope, so an error (which carries no repo) settles the right one. */
+  const gitStatusScopes = useRef(new Map<string, string>());
+  const refreshGitStatus = useCallback(
+    (repo?: string) => {
+      if (!gitAvailableRef.current) return;
+      const scope = repo ?? "";
+      if (gitStatusInFlight.current.has(scope)) {
+        gitStatusQueued.current.add(scope);
+        return;
+      }
+      gitStatusInFlight.current.add(scope);
+      const requestId = `git:${crypto.randomUUID()}`;
+      gitStatusScopes.current.set(requestId, scope);
+      sendMessage({ type: "git_status", ...(repo === undefined ? {} : { repo }), requestId });
+    },
+    [sendMessage],
+  );
+  const gitStatusSettled = useCallback(
+    (requestId: string) => {
+      const scope = gitStatusScopes.current.get(requestId) ?? "";
+      gitStatusScopes.current.delete(requestId);
+      gitStatusInFlight.current.delete(scope);
+      if (gitStatusQueued.current.delete(scope)) refreshGitStatus(scope === "" ? undefined : scope);
+    },
+    [refreshGitStatus],
+  );
 
   /**
    * Re-list a directory — but only one the tree is actually holding.
@@ -1294,7 +1323,9 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           if (gitDiffPathRef.current === message.path) {
             sendMessage({ type: "git_diff", path: message.path, requestId: `gitdiff:${crypto.randomUUID()}` });
           }
-          refreshGitStatus();
+          // One file moved: only its repository has anything new to say. Re-reading
+          // thirty of them to learn that is thirty processes for one fact.
+          refreshGitStatus(repoForPath(gitReposRef.current, message.path)?.repo);
           return;
         }
         if (message.type === "directory_changed") {
@@ -1327,7 +1358,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         // Bash commands can change git state without any file_changed broadcast
         if (message.type === "agent_end") refreshGitStatus();
         if (message.type === "git_status" || (message.type === "git_error" && message.requestId.startsWith("git:"))) {
-          gitStatusSettled();
+          gitStatusSettled(message.requestId);
         }
         if (message.type === "file_operation_result") {
           // `file_changed` notifications follow the acknowledgement immediately.
@@ -1352,8 +1383,9 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         if (socketRef.current !== socket) return;
         // An in-flight git_status will never be answered on this socket — clear the
         // coalescing flags or the branch chip/badges freeze until a page reload
-        gitStatusInFlight.current = false;
-        gitStatusQueued.current = false;
+        gitStatusInFlight.current.clear();
+        gitStatusQueued.current.clear();
+        gitStatusScopes.current.clear();
         // Same reasoning, but a stuck upload is worse than a stale badge: the
         // composer blocks submission while one is in flight, so an unanswered
         // promise would wedge the whole editor rather than one indicator.
@@ -1546,7 +1578,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     },
     clearFileSearch: () => dispatch({ type: "file_search_cleared" }),
     /** Manual git status refresh (event-driven refreshes are automatic). */
-    fetchGitStatus: refreshGitStatus,
+    fetchGitStatus: () => refreshGitStatus(),
     /** Worktree-vs-HEAD contents for one file (answers land in state.gitDiff). */
     fetchGitDiff: (path: string) => {
       const requestId = `gitdiff:${crypto.randomUUID()}`;
@@ -1554,8 +1586,9 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       sendMessage({ type: "git_diff", path, requestId });
     },
     clearGitDiff: () => dispatch({ type: "git_diff_cleared" }),
-    fetchGitLog: (limit?: number) => sendMessage({ type: "git_log", ...(limit ? { limit } : {}), requestId: `gitlog:${crypto.randomUUID()}` }),
-    fetchGitShow: (sha: string) => sendMessage({ type: "git_show", sha, requestId: `gitshow:${crypto.randomUUID()}` }),
+    fetchGitLog: (repo: string, limit?: number) =>
+      sendMessage({ type: "git_log", repo, ...(limit ? { limit } : {}), requestId: `gitlog:${crypto.randomUUID()}` }),
+    fetchGitShow: (repo: string, sha: string) => sendMessage({ type: "git_show", repo, sha, requestId: `gitshow:${crypto.randomUUID()}` }),
     clearGitShow: () => dispatch({ type: "git_show_cleared" }),
     /** Open the history pane for one file (answers land in state.gitFileHistory). */
     fetchGitFileHistory: (path: string, limit?: number) => {

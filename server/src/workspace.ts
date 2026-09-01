@@ -21,7 +21,7 @@ import type { AgentRuntime } from "./agentRuntime.ts";
 import type { SandboxConfig } from "./config.ts";
 import { type DirectoryWatcher, createDirectoryWatcher } from "./fileWatcher.ts";
 import { resolveBrowserRoot, resolveWritableRoot } from "./fileBrowser.ts";
-import { probeGit } from "./git.ts";
+import { discoverRepos, type GitRepo } from "./git.ts";
 import { ExtensionRenderer } from "./extensionRender.ts";
 import { createSandboxedTools } from "./sandbox.ts";
 import type { ExtensionUIRequest, WorkPlan } from "@pi-outpost/shared";
@@ -37,6 +37,13 @@ export interface WorkspaceSettings {
   cwd: string;
   sandbox?: SandboxConfig;
 }
+
+/**
+ * How long a burst of disk activity is collected before the repository set is
+ * scanned again. The window opens on the first change and is not extended: a clone
+ * writes continuously, and a resetting debounce would never fire while it did.
+ */
+const REPO_RESCAN_DEBOUNCE_MS = 500;
 
 /** Server-wide limits a workspace passes through when it builds its toolset. */
 export interface WorkspaceToolLimits {
@@ -113,7 +120,12 @@ export class Workspace {
 
   browserRoot: string;
   writableRoot: string | null | undefined;
-  git: { toplevel: string } | null;
+  /**
+   * Every repository serving this workspace, deepest-first. A set rather than one:
+   * a project directory may be inside a repository, hold several underneath it, or
+   * both, and a path is answered by whichever owns it.
+   */
+  repos: GitRepo[];
   fileWatcher: DirectoryWatcher | undefined;
   sandboxedTools: ToolDefinition[] | undefined;
 
@@ -181,6 +193,8 @@ export class Workspace {
   private _runtime: AgentRuntime | undefined;
 
   private readonly options: WorkspaceOptions;
+  /** Pending repository re-scan, if a debounce window is open. */
+  private repoRescan: NodeJS.Timeout | undefined;
   private stopped = false;
   /** Retired: session and watcher released, project still open. Cleared on rebuild. */
   retired = false;
@@ -196,7 +210,7 @@ export class Workspace {
     this.settings = options.settings;
     this.browserRoot = resources.browserRoot;
     this.writableRoot = resources.writableRoot;
-    this.git = resources.git;
+    this.repos = resources.repos;
     this.fileWatcher = resources.fileWatcher;
     this.sandboxedTools = resources.sandboxedTools;
     this.options = options;
@@ -274,9 +288,43 @@ export class Workspace {
     this.fileWatcher?.close();
     this.browserRoot = resources.browserRoot;
     this.writableRoot = resources.writableRoot;
-    this.git = resources.git;
+    this.repos = resources.repos;
     this.fileWatcher = resources.fileWatcher;
     this.sandboxedTools = resources.sandboxedTools;
+  }
+
+  /**
+   * A watched directory changed on disk.
+   *
+   * The repository set was discovered once, and a workspace whose whole purpose is
+   * holding many projects meets `git clone` and `git init` daily - so a set that
+   * only refreshes on restart is wrong within the hour. The watcher announces the
+   * DIRECTORY that changed, never the file, so a new repository shows up as a
+   * change to its parent: there is nothing finer to key on than "something moved",
+   * and the answer is to look again.
+   *
+   * Debounced because a clone writes thousands of files, and the whole scan is
+   * bounded and stops at every repository it finds - in the layout that motivates
+   * this, a handful of directories.
+   */
+  noteDirectoryChange(): void {
+    if (this.stopped || this.repoRescan !== undefined) return;
+    this.repoRescan = setTimeout(() => {
+      this.repoRescan = undefined;
+      void this.rediscoverRepos();
+    }, REPO_RESCAN_DEBOUNCE_MS);
+    this.repoRescan.unref?.();
+  }
+
+  /** Rebuild the repository set from disk. A failed scan leaves the old set in place. */
+  async rediscoverRepos(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      const repos = await discoverRepos(this.browserRoot);
+      if (!this.stopped) this.repos = repos;
+    } catch {
+      // A scan that cannot read the tree is not a reason to forget the repositories
+    }
   }
 
   /**
@@ -286,6 +334,8 @@ export class Workspace {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.repoRescan !== undefined) clearTimeout(this.repoRescan);
+    this.repoRescan = undefined;
     this.fileWatcher?.close();
     this.fileWatcher = undefined;
     this.renderer.configure(undefined);
@@ -321,7 +371,12 @@ export class Workspace {
 interface WorkspaceResources {
   browserRoot: string;
   writableRoot: string | null | undefined;
-  git: { toplevel: string } | null;
+  /**
+   * Every repository serving this workspace, deepest-first. A set rather than one:
+   * a project directory may be inside a repository, hold several underneath it, or
+   * both, and a path is answered by whichever owns it.
+   */
+  repos: GitRepo[];
   fileWatcher: DirectoryWatcher | undefined;
   sandboxedTools: ToolDefinition[] | undefined;
 }
@@ -330,7 +385,7 @@ async function buildResources(options: WorkspaceOptions): Promise<WorkspaceResou
   const { settings, limits } = options;
   const browserRoot = await resolveBrowserRoot(settings);
   const writableRoot = await resolveWritableRoot(settings, browserRoot);
-  const git = await probeGit(browserRoot);
+  const repos = await discoverRepos(browserRoot);
   const sandboxedTools = settings.sandbox
     ? [
         ...(await createSandboxedTools(
@@ -347,5 +402,5 @@ async function buildResources(options: WorkspaceOptions): Promise<WorkspaceResou
   const fileWatcher = options.watchFiles
     ? createDirectoryWatcher({ root: browserRoot, onChange: options.onDirectoryChanged })
     : undefined;
-  return { browserRoot, writableRoot, git, fileWatcher, sandboxedTools };
+  return { browserRoot, writableRoot, repos, fileWatcher, sandboxedTools };
 }

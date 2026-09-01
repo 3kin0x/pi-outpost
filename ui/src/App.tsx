@@ -7,6 +7,7 @@ import { ThemeContext } from "./theme/ThemeContext";
 import { useConversationJump } from "./useConversationJump";
 import { analyzeSession } from "./util/sessionAnalysis";
 import { sessionUsage } from "./util/sessionUsage";
+import { repoForPath } from "./util/gitRepos";
 import { ToolCard } from "./components/ToolCard";
 import { createActionDispatch } from "./presentations/actions";
 import { UserMessage } from "./components/UserMessage";
@@ -813,6 +814,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             onForkSession={forkSession}
             gitAvailable={state.gitAvailable}
             gitStatus={state.gitStatus}
+            gitSelectedPath={state.openFile?.path ?? null}
             gitLog={state.gitLog}
             extensionPaths={state.extensionPaths}
             configuredExtensionPaths={state.configuredExtensionPaths}
@@ -862,7 +864,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               gitDiff={state.gitDiff}
               onFetchGitDiff={fetchGitDiff}
               onClearGitDiff={clearGitDiff}
-              gitAvailable={state.gitAvailable}
+              inRepository={repoForPath(state.gitStatus?.repos ?? [], state.openFile.path) !== null}
               onOpenGitHistory={fetchGitFileHistory}
               onClose={closePreview}
               onReload={readFile}

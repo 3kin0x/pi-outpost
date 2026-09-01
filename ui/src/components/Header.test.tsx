@@ -122,7 +122,7 @@ describe("Header", () => {
     it("shows the branch chip only when git is available", () => {
       const { rerenderWith } = setup({ gitAvailable: false });
       expect(screen.queryByRole("button", { name: /⎇/ })).not.toBeInTheDocument();
-      rerenderWith({ gitAvailable: true, gitStatus: { branch: "main", ahead: 0, behind: 0, files: {} } });
+      rerenderWith({ gitAvailable: true, gitStatus: { repos: [{ repo: "", branch: "main", ahead: 0, behind: 0 }], files: {} } });
       expect(screen.getByRole("button", { name: /main/ })).toBeInTheDocument();
     });
 

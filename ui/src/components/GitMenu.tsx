@@ -1,13 +1,16 @@
-import { useState } from "react";
-import type { GitLogEntry } from "@pi-outpost/shared";
+import { useEffect, useState } from "react";
+import type { GitLogEntry, GitRepoStatus } from "@pi-outpost/shared";
 import type { GitStatusState } from "../useAgent";
 import { useClickOutside } from "../util/clickOutside";
+import { repoForPath } from "../util/gitRepos";
 
 interface GitMenuProps {
   status: GitStatusState | null;
+  /** Browser-root-relative path of what the user has open, or null when nothing is. */
+  selected: string | null;
   log: GitLogEntry[] | null;
-  onFetchLog: () => void;
-  onShowCommit: (sha: string) => void;
+  onFetchLog: (repo: string) => void;
+  onShowCommit: (repo: string, sha: string) => void;
 }
 
 function relativeDate(iso: string): string {
@@ -18,30 +21,59 @@ function relativeDate(iso: string): string {
   return `${Math.round(seconds / 86400)}d ago`;
 }
 
-/** Header branch chip; opens the recent-commit history, click a commit for its diff. */
-export function GitMenu({ status, log, onFetchLog, onShowCommit }: GitMenuProps) {
+/** Last path segment: what a person calls the project, rather than where it sits. */
+function repoName(repo: string): string {
+  return repo.slice(repo.lastIndexOf("/") + 1);
+}
+
+/**
+ * Header branch chip; opens that repository's recent commits, click one for its diff.
+ *
+ * A workspace holds a set of repositories, so there is no single branch to show and
+ * the chip follows the selection instead: opening a file in one project names that
+ * project's branch. No picker — the user already chose by clicking a file, and a
+ * control for choosing again would be asking twice.
+ */
+export function GitMenu({ status, selected, log, onFetchLog, onShowCommit }: GitMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useClickOutside(() => setOpen(false));
+  const repos = status?.repos ?? [];
+  const owner = selected === null ? null : repoForPath(repos, selected);
+
+  // A file under no repository — a loose note beside three projects — leaves the chip
+  // where it was rather than blanking it: it would flicker on every click into one.
+  const [sticky, setSticky] = useState<string | null>(null);
+  useEffect(() => {
+    if (owner !== null) setSticky(owner.repo);
+  }, [owner]);
+
+  const current: GitRepoStatus | null =
+    owner ?? repos.find((repo) => repo.repo === sticky) ?? (repos.length === 1 ? repos[0] : null);
   const counts =
-    status && (status.ahead > 0 || status.behind > 0)
-      ? ` ${status.ahead > 0 ? `↑${status.ahead}` : ""}${status.behind > 0 ? `↓${status.behind}` : ""}`
+    current && (current.ahead > 0 || current.behind > 0)
+      ? ` ${current.ahead > 0 ? `↑${current.ahead}` : ""}${current.behind > 0 ? `↓${current.behind}` : ""}`
       : "";
+  // Naming the project matters only when there is more than one to confuse it with
+  const prefix = repos.length > 1 && current !== null && current.repo !== "" ? `${repoName(current.repo)} ` : "";
+  const label = status === null ? "…" : (current?.branch ?? "—");
 
   return (
     <div className="relative" ref={ref}>
       <button
         type="button"
+        disabled={current === null}
         onClick={() => {
+          if (current === null) return;
           setOpen(!open);
-          if (!open) onFetchLog();
+          if (!open) onFetchLog(current.repo);
         }}
-        title="git history"
-        className="rounded-md border border-zinc-300 px-2 py-1 font-mono text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200"
+        title={current === null ? "no repository selected" : `git history — ${current.repo === "" ? "this project" : current.repo}`}
+        className="rounded-md border border-zinc-300 px-2 py-1 font-mono text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 disabled:cursor-default disabled:hover:border-zinc-300 disabled:hover:text-zinc-500 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200 dark:disabled:hover:border-zinc-800 dark:disabled:hover:text-zinc-400"
       >
-        ⎇ {status?.branch ?? "…"}
+        {prefix}⎇ {label}
         {counts}
       </button>
-      {open && (
+      {open && current !== null && (
         <div className="absolute left-0 top-full z-20 mt-1 max-h-96 w-[26rem] max-w-[80vw] overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
           {log === null && <div className="px-3 py-2 text-xs text-zinc-500">loading…</div>}
           {log?.length === 0 && <div className="px-3 py-2 text-xs text-zinc-500">no commits</div>}
@@ -50,7 +82,7 @@ export function GitMenu({ status, log, onFetchLog, onShowCommit }: GitMenuProps)
               key={entry.sha}
               type="button"
               onClick={() => {
-                onShowCommit(entry.sha);
+                onShowCommit(current.repo, entry.sha);
                 setOpen(false);
               }}
               className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"

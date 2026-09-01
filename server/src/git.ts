@@ -1,18 +1,35 @@
 /**
  * Read-only git backend for the UI: status, worktree file diff, history.
  *
- * SECURITY: every command is spawned without a shell, with a fixed argument
- * list, `cwd` at the browser root and a trailing pathspec — `-- .` for repo-scoped
- * reads, `-- <file>` for file-scoped ones — so git only ever reports content under
- * the browser root even when the repository's toplevel is an ancestor of it. The
- * `--` also stops git reading a path starting with a dash as an option or a
- * revision. Only rev-parse/status/log/show are used — nothing here can mutate the
- * repository.
+ * A workspace holds a SET of repositories, not one: the directory it is rooted at
+ * may be inside a repository, may hold several underneath it, or both. Every
+ * request naming a path is served by the repository owning that path (`repoFor`),
+ * and paths cross this module's boundary browser-root-relative in both directions.
+ *
+ * SECURITY: every command is spawned without a shell, with a fixed argument list,
+ * a trailing pathspec — `-- .` for repo-scoped reads, `-- <file>` for file-scoped
+ * ones — and `cwd` at either the browser root or a repository toplevel that has
+ * been realpath-resolved and checked to lie under that root. Both cases keep git
+ * reporting only content under the browser root: the second because the cwd is
+ * itself under it, the first because the pathspec bounds a repository whose
+ * toplevel is an ancestor. The `--` also stops git reading a path starting with a
+ * dash as an option or a revision. Only rev-parse/status/log/show are used —
+ * nothing here can mutate the repository.
  */
 import { execFile } from "node:child_process";
+import type { Dirent } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { WORKTREE_REVISION, type GitFileLogEntry, type GitFileState, type GitFileStatus, type GitLogEntry } from "@pi-outpost/shared";
+import { isWithin, realResolve } from "./sandbox.ts";
+import {
+  WORKTREE_REVISION,
+  type GitFileLogEntry,
+  type GitFileState,
+  type GitFileStatus,
+  type GitLogEntry,
+  type GitRepoStatus,
+} from "@pi-outpost/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,6 +67,111 @@ export async function probeGit(root: string): Promise<{ toplevel: string } | nul
 }
 
 /**
+ * One repository serving a workspace.
+ *
+ * `cwd` and `toplevel` part company only in the ancestor case: a repository whose
+ * toplevel lies ABOVE the browser root is still usable, but git must run from the
+ * browser root so the `-- .` pathspec keeps its output inside it. For a repository
+ * at or under the root the two are the same directory.
+ */
+export interface GitRepo {
+  /** Absolute toplevel of the work tree, as git reports it. */
+  toplevel: string;
+  /** Directory git commands run in - always the browser root, or a directory under it. */
+  cwd: string;
+  /** Identity on the wire: browser-root-relative posix path; "" for the root itself or an ancestor. */
+  id: string;
+}
+
+/**
+ * Directories discovery never enters. `.git` is absent on purpose: it is what
+ * discovery looks FOR, recognised by name rather than by descending into it.
+ */
+const DISCOVERY_IGNORED_NAMES = new Set(["node_modules", "dist", "build", ".next", ".turbo", "__pycache__"]);
+
+/**
+ * How far below the browser root a repository is still found. A directory of
+ * projects is depth 1, a directory of clients each holding projects is 2; four
+ * leaves room without turning discovery into a full tree walk.
+ */
+const MAX_DISCOVERY_DEPTH = 4;
+
+function repoAt(browserRoot: string, toplevel: string): GitRepo {
+  const id = isWithin(browserRoot, toplevel) ? path.relative(browserRoot, toplevel).split(path.sep).join("/") : "";
+  return { toplevel, cwd: id === "" ? browserRoot : toplevel, id };
+}
+
+/**
+ * Every repository serving a workspace: the one containing the browser root, when
+ * there is one, plus every repository whose work tree lies under it. Ordered
+ * deepest-first, which is what `repoFor` reads as "longest match".
+ *
+ * SECURITY: a discovered toplevel becomes a git `cwd`, so it is realpath-resolved
+ * and checked against the browser root before it may enter the set - a symlinked
+ * directory whose real repository lives outside the root is dropped, and no command
+ * is ever spawned in it. Symlinked directories are not descended into at all, as the
+ * file browser's own search already declines to.
+ */
+export async function discoverRepos(browserRoot: string): Promise<GitRepo[]> {
+  const repos: GitRepo[] = [];
+  const containing = await probeGit(browserRoot);
+  if (containing) repos.push(repoAt(browserRoot, containing.toplevel));
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // an unreadable directory is not a reason to fail the whole scan
+    }
+    // The marker can be a file rather than a directory - a linked work tree or a submodule
+    if (entries.some((entry) => entry.name === ".git")) {
+      const real = await realResolve(dir);
+      if (isWithin(browserRoot, real) && !repos.some((repo) => repo.toplevel === real)) {
+        repos.push(repoAt(browserRoot, real));
+      }
+      // Repositories inside a work tree are its submodules; it already accounts for them
+      return;
+    }
+    if (depth >= MAX_DISCOVERY_DEPTH) return;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      if (entry.name.startsWith(".") || DISCOVERY_IGNORED_NAMES.has(entry.name)) continue;
+      await walk(path.join(dir, entry.name), depth + 1);
+    }
+  };
+  await walk(browserRoot, 0);
+
+  repos.sort((a, b) => b.id.length - a.id.length);
+  return repos;
+}
+
+/**
+ * The repository owning a browser-root-relative path, or null when none does.
+ *
+ * Longest match wins, so a repository nested inside another answers for its own
+ * files. `repos` must be ordered deepest-first, as `discoverRepos` returns it: the
+ * root-or-ancestor repository has the empty id and therefore sorts last, where it
+ * acts as the fallback for everything no nested repository claims.
+ */
+export function repoFor(repos: readonly GitRepo[], relPath: string): GitRepo | null {
+  for (const repo of repos) {
+    if (repo.id === "" || relPath === repo.id || relPath.startsWith(`${repo.id}/`)) return repo;
+  }
+  return null;
+}
+
+/** Browser-root-relative path -> relative to the directory git runs in. */
+export function toRepoRelative(repo: GitRepo, relPath: string): string {
+  return repo.id === "" ? relPath : relPath.slice(repo.id.length + 1);
+}
+
+/** The inverse: what git reported, back in the browser-root terms the UI speaks. */
+export function toBrowserRelative(repo: GitRepo, repoRel: string): string {
+  return repo.id === "" ? repoRel : `${repo.id}/${repoRel}`;
+}
+
+/**
  * Undo git's C-style path quoting (core.quotePath quotes any non-ASCII byte as
  * \NNN octal — accented filenames are the everyday case, not the exception).
  */
@@ -81,33 +203,39 @@ function stateFromXY(xy: string): GitFileState {
 }
 
 export interface GitStatusResult {
-  branch: string;
-  ahead: number;
-  behind: number;
+  repos: GitRepoStatus[];
   files: GitFileStatus[];
 }
 
-export async function gitStatus(root: string): Promise<GitStatusResult> {
+/**
+ * One repository's working-tree state, with paths already expressed from the
+ * browser root so several repositories' answers merge without further translation.
+ *
+ * Also the unit of a scoped refresh: a file change names a path, and only the
+ * repository owning it has anything new to say.
+ */
+export async function gitStatusFor(repo: GitRepo): Promise<GitStatusResult> {
   // -uall lists untracked files individually (default -unormal collapses a brand-new
   // directory to one "dir/" entry, leaving the files inside without badges)
-  const out = await runGit(root, ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "--", "."]);
-  const result: GitStatusResult = { branch: "", ahead: 0, behind: 0, files: [] };
+  const out = await runGit(repo.cwd, ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "--", "."]);
+  const repoStatus: GitRepoStatus = { repo: repo.id, branch: "", ahead: 0, behind: 0 };
+  const result: GitStatusResult = { repos: [repoStatus], files: [] };
 
-  // status paths are cwd-relative (cwd = browser root); the `-- .` pathspec already
+  // status paths are relative to the directory git ran in; the `-- .` pathspec already
   // confines entries, the "../" guard is defense in depth
   const push = (gitPath: string, status: GitFileState) => {
     const rel = unquote(gitPath);
-    if (rel !== "" && !rel.startsWith("../")) result.files.push({ path: rel, status });
+    if (rel !== "" && !rel.startsWith("../")) result.files.push({ path: toBrowserRelative(repo, rel), status });
   };
 
   for (const line of out.split("\n")) {
     if (line.startsWith("# branch.head ")) {
-      result.branch = line.slice("# branch.head ".length);
+      repoStatus.branch = line.slice("# branch.head ".length);
     } else if (line.startsWith("# branch.ab ")) {
       const match = /\+(\d+) -(\d+)/.exec(line);
       if (match) {
-        result.ahead = Number(match[1]);
-        result.behind = Number(match[2]);
+        repoStatus.ahead = Number(match[1]);
+        repoStatus.behind = Number(match[2]);
       }
     } else if (line.startsWith("1 ")) {
       // 1 XY sub mH mI mW hH hI <path>
@@ -131,6 +259,53 @@ export async function gitStatus(root: string): Promise<GitStatusResult> {
   return result;
 }
 
+/** How many repositories are read at once. A directory of projects can hold dozens. */
+const STATUS_CONCURRENCY = 4;
+
+/**
+ * Working-tree state across every repository serving the workspace.
+ *
+ * A repository that fails to answer is dropped rather than failing the sweep: one
+ * project being mid-rebase, or having just stopped being a repository, is no reason
+ * to blank the badges of every other. If they ALL fail the first error surfaces, so
+ * a one-repository workspace still reports its errors exactly as it used to.
+ */
+export async function gitStatus(repos: readonly GitRepo[], scope?: GitRepo): Promise<GitStatusResult> {
+  // A scoped read answers "one file moved, whose repository is it in?" without
+  // asking the other twenty-nine repositories of a project directory the same thing
+  const read = scope === undefined ? repos : [scope];
+  const answers: (GitStatusResult | Error)[] = new Array(read.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next++;
+      const repo = read[index];
+      if (repo === undefined) return;
+      try {
+        answers[index] = await gitStatusFor(repo);
+      } catch (error) {
+        answers[index] = error as Error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STATUS_CONCURRENCY, read.length) }, worker));
+
+  const ok = answers.filter((answer): answer is GitStatusResult => !(answer instanceof Error));
+  if (ok.length === 0) {
+    const failure = answers.find((answer): answer is Error => answer instanceof Error);
+    if (failure) throw failure;
+  }
+
+  // A repository nested inside another appears twice: as itself, and as the single
+  // entry its container reports for it - a gitlink, or an untracked directory named
+  // with a trailing slash. The nested repository is the one with something to say.
+  const nested = new Set(repos.map((repo) => repo.id).filter((id) => id !== ""));
+  return {
+    repos: ok.flatMap((answer) => answer.repos),
+    files: ok.flatMap((answer) => answer.files).filter((file) => !nested.has(file.path.replace(/\/$/, ""))),
+  };
+}
+
 /** `<rev>:<path>` reads paths from the repository toplevel, not from cwd. */
 function toToplevelRelative(root: string, toplevel: string, relPath: string): string {
   const prefix = path.relative(toplevel, root).split(path.sep).join("/");
@@ -152,10 +327,10 @@ function toRootRelative(root: string, toplevel: string, toplevelRel: string): st
  * already confined `relPath`; size/binary limits are the caller's too — this
  * only refuses grossly oversized blobs via the exec buffer cap.
  */
-export async function gitHeadContent(root: string, toplevel: string, relPath: string): Promise<string> {
-  const toplevelRel = toToplevelRelative(root, toplevel, relPath);
+export async function gitHeadContent(repo: GitRepo, relPath: string): Promise<string> {
+  const toplevelRel = toToplevelRelative(repo.cwd, repo.toplevel, toRepoRelative(repo, relPath));
   try {
-    return await runGit(root, ["show", `HEAD:${toplevelRel}`]);
+    return await runGit(repo.cwd, ["show", `HEAD:${toplevelRel}`]);
   } catch (error) {
     // Only "not in HEAD" means an empty before-side (untracked/added, or an unborn
     // branch); anything else (timeout, output cap) must surface, not fake a full add
@@ -167,9 +342,9 @@ export async function gitHeadContent(root: string, toplevel: string, relPath: st
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
 
-export async function gitLog(root: string, limit: number): Promise<GitLogEntry[]> {
+export async function gitLog(repo: GitRepo, limit: number): Promise<GitLogEntry[]> {
   const n = Math.max(1, Math.min(100, Math.floor(limit)));
-  const out = await runGit(root, ["log", "--format=%H%x1f%an%x1f%aI%x1f%s", "-n", String(n), "--", "."]);
+  const out = await runGit(repo.cwd, ["log", "--format=%H%x1f%an%x1f%aI%x1f%s", "-n", String(n), "--", "."]);
   return out
     .split("\n")
     .filter((line) => line.includes("\x1f"))
@@ -312,27 +487,29 @@ async function renameSourceAt(root: string, toplevel: string, sha: string, relPa
  * one in log order — that is what joins the two sides of a seam, and what keeps a
  * limit-truncated tail connected.
  */
-export async function gitFileLog(root: string, toplevel: string, relPath: string, limit: number): Promise<GitFileLogEntry[]> {
+export async function gitFileLog(repo: GitRepo, relPath: string, limit: number): Promise<GitFileLogEntry[]> {
   const n = Math.max(1, Math.min(200, Math.floor(limit)));
   const raw: RawFileLogEntry[] = [];
   const seen = new Set<string>();
   let rev: string | null = null;
-  let currentPath = relPath;
+  // Paths stay relative to the directory git runs in for the whole walk - a pathspec
+  // is read from there - and return to browser-root terms only in the result below
+  let currentPath = toRepoRelative(repo, relPath);
 
   for (let stitch = 0; stitch <= MAX_STITCHES && raw.length < n; stitch++) {
-    const batch = await fullHistoryPass(root, rev, currentPath, n - raw.length);
+    const batch = await fullHistoryPass(repo.cwd, rev, currentPath, n - raw.length);
     for (const entry of batch) {
       if (seen.has(entry.sha)) continue;
       seen.add(entry.sha);
       // Normalise here, not at the end: git reports log paths from the repository
       // toplevel, while a pathspec — including the one the next stitch passes — is
       // read from cwd, i.e. the browser root
-      raw.push({ ...entry, path: entry.path === "" ? currentPath : toRootRelative(root, toplevel, entry.path) });
+      raw.push({ ...entry, path: entry.path === "" ? currentPath : toRootRelative(repo.cwd, repo.toplevel, entry.path) });
     }
     const tail = batch[batch.length - 1];
     // Nothing left, no parent to resume from, or the budget is spent
     if (tail === undefined || tail.parents.length === 0 || raw.length >= n) break;
-    const source = await renameSourceAt(root, toplevel, tail.sha, currentPath);
+    const source = await renameSourceAt(repo.cwd, repo.toplevel, tail.sha, currentPath);
     if (source === null) break;
     currentPath = source;
     rev = tail.parents[0];
@@ -348,7 +525,7 @@ export async function gitFileLog(root: string, toplevel: string, relPath: string
       date: entry.date,
       subject: entry.subject,
       parents: kept.length > 0 ? kept : next ? [next.sha] : [],
-      path: entry.path,
+      path: toBrowserRelative(repo, entry.path),
       added: entry.added,
       deleted: entry.deleted,
     };
@@ -363,13 +540,13 @@ export async function gitFileLog(root: string, toplevel: string, relPath: string
  * is refused before a process is spawned, so no revision expression (`HEAD@{…}`,
  * a branch name, an option-looking string) can be smuggled in.
  */
-export async function gitRevisionContent(root: string, toplevel: string, rev: string, relPath: string): Promise<string> {
+export async function gitRevisionContent(repo: GitRepo, rev: string, relPath: string): Promise<string> {
   if (rev === WORKTREE_REVISION) throw new GitError("The working tree is read from disk, not from git");
   if (!SHA_PATTERN.test(rev)) throw new GitError("Invalid commit id");
-  const toplevelRel = toToplevelRelative(root, toplevel, relPath);
+  const toplevelRel = toToplevelRelative(repo.cwd, repo.toplevel, toRepoRelative(repo, relPath));
   try {
     // ^{commit} peels annotated tags and makes git refuse blob/tree ids
-    return await runGit(root, ["show", `${rev}^{commit}:${toplevelRel}`]);
+    return await runGit(repo.cwd, ["show", `${rev}^{commit}:${toplevelRel}`]);
   } catch (error) {
     // The file simply not existing at that revision is an empty side, not a failure.
     // Everything else surfaces — notably "dereferences to blob type", which is
@@ -380,11 +557,11 @@ export async function gitRevisionContent(root: string, toplevel: string, rev: st
   }
 }
 
-export async function gitShow(root: string, sha: string): Promise<{ patch: string; truncated: boolean }> {
+export async function gitShow(repo: GitRepo, sha: string): Promise<{ patch: string; truncated: boolean }> {
   if (!SHA_PATTERN.test(sha)) throw new GitError("Invalid commit id");
   // SECURITY: ^{commit} peels annotated tags but makes git refuse blob/tree ids —
   // `show <blob> -- .` would ignore the pathspec and print content outside the root
-  const out = await runGit(root, ["show", "--format=%h %an %aI%n%s%n", "--patch", `${sha}^{commit}`, "--", "."]);
+  const out = await runGit(repo.cwd, ["show", "--format=%h %an %aI%n%s%n", "--patch", `${sha}^{commit}`, "--", "."]);
   const bytes = Buffer.from(out, "utf8");
   if (bytes.byteLength > MAX_PATCH_BYTES) {
     // Byte-accurate cap; strip the replacement char a split code point leaves behind

@@ -258,6 +258,22 @@ export interface GitFileStatus {
   status: GitFileState;
 }
 
+/**
+ * Branch state of one repository serving the workspace.
+ *
+ * A workspace holds a set of repositories - a directory of independently
+ * versioned projects has one per child - so there is no single branch to report.
+ * The client attributes a file to a repository by longest matching `repo`, the
+ * same rule the server resolves with.
+ */
+export interface GitRepoStatus {
+  /** Path from the browser root to the repository (posix); "" for the root itself or an ancestor. */
+  repo: string;
+  branch: string;
+  ahead: number;
+  behind: number;
+}
+
 export interface GitLogEntry {
   sha: string;
   author: string;
@@ -634,7 +650,12 @@ export type ServerMessage =
   | { type: "file_search_results"; requestId: string; query: string; results: FileSearchEntry[] }
   | { type: "tree"; roots: TreeNode[] }
   | { type: "editor_prefill"; text: string }
-  | { type: "git_status"; requestId: string; branch: string; ahead: number; behind: number; files: GitFileStatus[] }
+  /**
+   * `files` spans every repository in the workspace and `repos` carries each one's
+   * branch — unless `repo` echoes a scoped request, in which case both describe that
+   * repository alone and replace only its slice of what the client holds.
+   */
+  | { type: "git_status"; requestId: string; repo?: string; repos: GitRepoStatus[]; files: GitFileStatus[] }
   | { type: "git_diff"; requestId: string; path: string; before: string; after: string }
   | { type: "git_log"; requestId: string; entries: GitLogEntry[] }
   | { type: "git_show"; requestId: string; sha: string; patch: string; truncated: boolean }
@@ -760,10 +781,13 @@ export type ClientMessage =
    * (the old exchange stays reachable through the tree).
    */
   | { type: "edit_prompt"; entryId: string; text: string; images?: WireImage[] }
-  | { type: "git_status"; requestId: string }
-  | { type: "git_log"; limit?: number; requestId: string }
+  /** `repo` reads one repository instead of sweeping every one of them. */
+  | { type: "git_status"; repo?: string; requestId: string }
+  /** `repo` names which repository of the workspace to read, as `GitRepoStatus.repo` does. */
+  | { type: "git_log"; repo: string; limit?: number; requestId: string }
   | { type: "git_diff"; path: string; requestId: string }
-  | { type: "git_show"; sha: string; requestId: string }
+  /** `sha` is resolved only against `repo`; there is no fallback to another. */
+  | { type: "git_show"; repo: string; sha: string; requestId: string }
   /** Commits touching one file, renames followed; limit clamped to [1, 200] server-side. */
   | { type: "git_file_log"; path: string; limit?: number; requestId: string }
   | { type: "git_file_diff"; base: GitRevision; target: GitRevision; requestId: string }

@@ -188,6 +188,38 @@ describe("FileTree", () => {
       expect(within(dirToggle("src")).queryByTitle(/changed file/)).not.toBeInTheDocument();
       expect(within(dirToggle("src-gen")).getByTitle("1 changed file(s) inside")).toBeInTheDocument();
     });
+
+    describe("a workspace whose root is no repository and whose children are", () => {
+      /** Two projects side by side, each a repository, each with one change. */
+      const projects: Record<string, DirState> = {
+        "": [dir("projA"), dir("projB"), file("notes.md")],
+        projA: [file("a.ts")],
+        projB: [file("b.ts")],
+      };
+      const across: Record<string, GitFileState> = {
+        "projA/a.ts": "modified",
+        "projB/b.ts": "untracked",
+      };
+
+      it("badges files from both repositories, not just one", () => {
+        setup({ tree: projects, gitFiles: across });
+        fireEvent.click(dirToggle("projA"));
+        fireEvent.click(dirToggle("projB"));
+        expect(screen.getByRole("button", { name: "Show diff of a.ts" })).toHaveTextContent("M");
+        expect(screen.getByRole("button", { name: "Show diff of b.ts" })).toHaveTextContent("U");
+      });
+
+      it("puts a change count on each collapsed project", () => {
+        setup({ tree: projects, gitFiles: across });
+        expect(within(dirToggle("projA")).getByTitle("1 changed file(s) inside")).toBeInTheDocument();
+        expect(within(dirToggle("projB")).getByTitle("1 changed file(s) inside")).toBeInTheDocument();
+      });
+
+      it("leaves a file under no repository unbadged", () => {
+        setup({ tree: projects, gitFiles: across });
+        expect(screen.queryByRole("button", { name: "Show diff of notes.md" })).not.toBeInTheDocument();
+      });
+    });
   });
 
   describe("prompt references", () => {

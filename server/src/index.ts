@@ -100,7 +100,7 @@ import {
   uploadFileFromBrowser,
   writeFileFromBrowser,
 } from "./fileBrowser.ts";
-import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus } from "./git.ts";
+import { GitError, gitFileLog, gitHeadContent, gitLog, gitRevisionContent, gitShow, gitStatus, repoFor, type GitRepo } from "./git.ts";
 import { createDocxExtractToolDefinition } from "./docxTool.ts";
 import { createXlsxExtractToolDefinition } from "./xlsxTool.ts";
 import { createPptxExtractToolDefinition } from "./pptxTool.ts";
@@ -350,7 +350,10 @@ function workspaceOptions(settings: WorkspaceSettings): Omit<WorkspaceOptions, "
  */
 const workspace = await Workspace.create({
   ...workspaceOptions({ cwd: config.cwd, ...(config.sandbox ? { sandbox: config.sandbox } : {}) }),
-  onDirectoryChanged: (relPath) => broadcast(workspace, { type: "directory_changed", path: relPath }),
+  onDirectoryChanged: (relPath) => {
+    workspace.noteDirectoryChange();
+    broadcast(workspace, { type: "directory_changed", path: relPath });
+  },
   createRuntime: () => {
     throw new Error("the boot workspace's runtime is built in index.ts and attached");
   },
@@ -1036,7 +1039,10 @@ for (const root of config.openProjects) {
   try {
     const restored = await Workspace.create({
       ...workspaceOptions({ cwd: root }),
-      onDirectoryChanged: (relPath) => broadcast(restored, { type: "directory_changed", path: relPath }),
+      onDirectoryChanged: (relPath) => {
+        restored.noteDirectoryChange();
+        broadcast(restored, { type: "directory_changed", path: relPath });
+      },
       createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
     workspaces.add(restored);
@@ -1260,7 +1266,7 @@ function snapshot(workspace: Workspace): SessionSnapshot {
     // combine the new transcript/session id with the previous session's plan.
     workPlan: sameSessionFile(state.sessionFile, workspace.workPlanSessionFile) ? workspace.workPlan : null,
     writableRoot: workspace.writableRoot,
-    gitAvailable: workspace.git !== null,
+    gitAvailable: workspace.repos.length > 0,
     credentials: credentialStatus(workspace),
     // Omitted, not emptied, when the runtime cannot report an inventory: "none
     // loaded" and "this runtime never sees them" are different facts, and only one
@@ -1946,7 +1952,10 @@ async function handleOpenProject(socket: WebSocket, rawRoot: string): Promise<vo
     // the persisted set start the same way, and share the same in-flight guard.
     opened = await Workspace.create({
       ...workspaceOptions({ cwd: root }),
-      onDirectoryChanged: (relPath) => broadcast(opened, { type: "directory_changed", path: relPath }),
+      onDirectoryChanged: (relPath) => {
+        opened.noteDirectoryChange();
+        broadcast(opened, { type: "directory_changed", path: relPath });
+      },
       createRuntime: () => { throw new Error("unused: runtimes are built through ensureStarted"); },
     });
   } catch (error) {
@@ -2812,11 +2821,36 @@ function gitErrorMessage(error: unknown): string {
     : `Unexpected error: ${(error as Error).message}`;
 }
 
-async function handleGitStatus(workspace: Workspace, socket: WebSocket, requestId: string): Promise<void> {
-  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+/**
+ * The repository owning a path.
+ *
+ * A file under no repository is not an error of the client's making — a workspace
+ * can hold both versioned projects and loose notes — but it has no HEAD, no history
+ * and no branch, so a request naming one has nothing to answer with.
+ */
+function repoForPath(workspace: Workspace, relPath: string): GitRepo {
+  const repo = repoFor(workspace.repos, relPath);
+  if (repo === null) throw new GitError(`"${relPath}" is not in a git repository`);
+  return repo;
+}
+
+/**
+ * The repository a client named, by the same id `git_status` reported it under.
+ *
+ * Never falls back to another: a commit id from one repository resolved against a
+ * second would answer with somebody else's history, and silently.
+ */
+function repoById(workspace: Workspace, id: string): GitRepo {
+  const repo = workspace.repos.find((candidate) => candidate.id === id);
+  if (repo === undefined) throw new GitError(`No repository at "${id === "" ? "." : id}"`);
+  return repo;
+}
+
+async function handleGitStatus(workspace: Workspace, socket: WebSocket, scope: string | undefined, requestId: string): Promise<void> {
+  if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const { branch, ahead, behind, files } = await gitStatus(workspace.browserRoot);
-    send(socket, { type: "git_status", requestId, branch, ahead, behind, files });
+    const { repos, files } = await gitStatus(workspace.repos, scope === undefined ? undefined : repoById(workspace, scope));
+    send(socket, { type: "git_status", requestId, ...(scope === undefined ? {} : { repo: scope }), repos, files });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }
@@ -2824,7 +2858,7 @@ async function handleGitStatus(workspace: Workspace, socket: WebSocket, requestI
 
 /** Worktree-vs-HEAD contents of one file; missing sides (untracked/deleted) are "". */
 async function handleGitDiff(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
-  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     let after = "";
     try {
@@ -2833,7 +2867,7 @@ async function handleGitDiff(workspace: Workspace, socket: WebSocket, filePath: 
       // A deleted file legitimately has no worktree side; confinement/size/binary still refuse
       if (!(error instanceof FileBrowserError) || error.reason !== "not-found") throw error;
     }
-    const before = await gitHeadContent(workspace.browserRoot, workspace.git.toplevel, filePath);
+    const before = await gitHeadContent(repoForPath(workspace, filePath), filePath);
     if (before.includes("\0")) throw new FileBrowserError("binary", "Binary file — diff not supported");
     if (Buffer.byteLength(before, "utf8") > 1_048_576) {
       throw new FileBrowserError("too-large", "HEAD version is larger than the 1 MB limit");
@@ -2844,10 +2878,10 @@ async function handleGitDiff(workspace: Workspace, socket: WebSocket, filePath: 
   }
 }
 
-async function handleGitLog(workspace: Workspace, socket: WebSocket, limit: number, requestId: string): Promise<void> {
-  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+async function handleGitLog(workspace: Workspace, socket: WebSocket, repo: string, limit: number, requestId: string): Promise<void> {
+  if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    send(socket, { type: "git_log", requestId, entries: await gitLog(workspace.browserRoot, limit) });
+    send(socket, { type: "git_log", requestId, entries: await gitLog(repoById(workspace, repo), limit) });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }
@@ -2860,12 +2894,12 @@ function isGitRevision(value: unknown): value is GitRevision {
 
 /** Commits touching one file, for the history graph. */
 async function handleGitFileLog(workspace: Workspace, socket: WebSocket, filePath: string, limit: number, requestId: string): Promise<void> {
-  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
     // Confine before spawning: this path goes straight into a pathspec. Only
     // confinement applies — a deleted or oversized file still has a history.
     await assertWithinRoot(workspace.browserRoot, filePath);
-    const entries = await gitFileLog(workspace.browserRoot, workspace.git.toplevel, filePath, limit);
+    const entries = await gitFileLog(repoForPath(workspace, filePath), filePath, limit);
     send(socket, { type: "git_file_log", requestId, path: filePath, entries });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
@@ -2878,7 +2912,7 @@ async function handleGitFileLog(workspace: Workspace, socket: WebSocket, filePat
  * and its size and binary limits, so a pair can never smuggle out an oversized
  * blob or a path outside the browser root.
  */
-async function readRevisionSide(workspace: Workspace, revision: GitRevision, toplevel: string): Promise<string> {
+async function readRevisionSide(workspace: Workspace, revision: GitRevision): Promise<string> {
   if (revision.rev === WORKTREE_REVISION) {
     try {
       return (await readFileForPreview(workspace.browserRoot, revision.path)).content;
@@ -2890,7 +2924,7 @@ async function readRevisionSide(workspace: Workspace, revision: GitRevision, top
   }
   // Confine before spawning: the path becomes part of a `<rev>:<path>` argument
   await assertWithinRoot(workspace.browserRoot, revision.path);
-  const content = await gitRevisionContent(workspace.browserRoot, toplevel, revision.rev, revision.path);
+  const content = await gitRevisionContent(repoForPath(workspace, revision.path), revision.rev, revision.path);
   if (content.includes("\0")) throw new FileBrowserError("binary", "Binary file — diff not supported");
   if (Buffer.byteLength(content, "utf8") > MAX_PREVIEW_BYTES) {
     throw new FileBrowserError("too-large", `${revision.rev.slice(0, 7)} is larger than the 1 MB limit`);
@@ -2899,19 +2933,19 @@ async function readRevisionSide(workspace: Workspace, revision: GitRevision, top
 }
 
 async function handleGitFileDiff(workspace: Workspace, socket: WebSocket, base: GitRevision, target: GitRevision, requestId: string): Promise<void> {
-  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+  if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const [beforeText, afterText] = await Promise.all([readRevisionSide(workspace, base, workspace.git.toplevel), readRevisionSide(workspace, target, workspace.git.toplevel)]);
+    const [beforeText, afterText] = await Promise.all([readRevisionSide(workspace, base), readRevisionSide(workspace, target)]);
     send(socket, { type: "git_file_diff", requestId, base, target, beforeText, afterText });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
   }
 }
 
-async function handleGitShow(workspace: Workspace, socket: WebSocket, sha: string, requestId: string): Promise<void> {
-  if (workspace.git === null) return send(socket, { type: "git_error", requestId, message: "git is not available" });
+async function handleGitShow(workspace: Workspace, socket: WebSocket, repo: string, sha: string, requestId: string): Promise<void> {
+  if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
   try {
-    const { patch, truncated } = await gitShow(workspace.browserRoot, sha);
+    const { patch, truncated } = await gitShow(repoById(workspace, repo), sha);
     send(socket, { type: "git_show", requestId, sha, patch, truncated });
   } catch (error) {
     send(socket, { type: "git_error", requestId, message: gitErrorMessage(error) });
@@ -3219,20 +3253,22 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
     }
     case "git_status":
       if (typeof message.requestId !== "string") return;
-      handleGitStatus(workspace, socket, message.requestId).catch(reportError);
+      if (message.repo !== undefined && typeof message.repo !== "string") return;
+      handleGitStatus(workspace, socket, message.repo, message.requestId).catch(reportError);
       break;
     case "git_diff":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
       handleGitDiff(workspace, socket, message.path, message.requestId).catch(reportError);
       break;
     case "git_log":
-      if (typeof message.requestId !== "string") return;
+      if (typeof message.requestId !== "string" || typeof message.repo !== "string") return;
       if (message.limit !== undefined && typeof message.limit !== "number") return;
-      handleGitLog(workspace, socket, message.limit ?? 30, message.requestId).catch(reportError);
+      handleGitLog(workspace, socket, message.repo, message.limit ?? 30, message.requestId).catch(reportError);
       break;
     case "git_show":
       if (typeof message.sha !== "string" || typeof message.requestId !== "string") return;
-      handleGitShow(workspace, socket, message.sha, message.requestId).catch(reportError);
+      if (typeof message.repo !== "string") return;
+      handleGitShow(workspace, socket, message.repo, message.sha, message.requestId).catch(reportError);
       break;
     case "git_file_log":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;
