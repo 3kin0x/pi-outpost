@@ -186,7 +186,14 @@ export interface ContextUsage {
   percent: number | null;
 }
 
-export type { WorkPlan, WorkPlanResource, WorkPlanStatus, WorkPlanTask } from "./workPlan.ts";
+export type {
+  WorkPlan,
+  WorkPlanEvidence,
+  WorkPlanEvidenceResult,
+  WorkPlanResource,
+  WorkPlanStatus,
+  WorkPlanTask,
+} from "./workPlan.ts";
 import type { WorkPlan } from "./workPlan.ts";
 
 /**

@@ -671,10 +671,27 @@ switching to the project does not clear it: tell the agent what you accept or wh
 Accepted review tasks move to `done`; meaningful resumed work moves the relevant task back to
 an active state, so the project stops being ready until it reaches the review boundary again.
 
+Tasks can also carry agent-owned verification or supporting evidence. Each generic record has
+an `id`, a free-form `type`, a `result` (`passed`, `failed`, `inconclusive` or
+`informational`), and at least a concise `summary` or a resource `reference`. The agent replaces
+one task's complete evidence collection with `set_evidence`, preserving older failures when it
+wants to append another result:
+
+```json
+{"action":"set_evidence","taskId":"build","evidence":[{"id":"tests","type":"test","result":"passed","summary":"Focused tests passed"},{"id":"probe","type":"external-check","result":"failed","summary":"External probe failed"}]}
+```
+
+Evidence and status are deliberately independent: evidence never completes or blocks a task,
+and marking a task `done` never fabricates evidence. Pi Outpost does not automatically turn tool
+activity into evidence or add an Outcome/Review UI; agents record evidence explicitly through
+the structured tool.
+
 Each plan is stored beside its session file. It is restored on reconnect and session resume,
 replaced when the active session changes, copied when a conversation is forked, and
 independent thereafter. Compaction summarizes conversational context only: it never alters
-the plan. Sessions created before Work Plans open without a panel.
+the plan or its evidence. Existing version-1 plans and task inputs without evidence remain valid
+and normalize to empty evidence collections. Sessions created before Work Plans open without a
+panel.
 
 ## Development
 

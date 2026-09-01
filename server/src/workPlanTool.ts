@@ -1,6 +1,12 @@
 import { Type, type TSchema } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { WORK_PLAN_ACTIONS, WORK_PLAN_CREATE_MAX_DEPTH, WORK_PLAN_LIMITS, WORK_PLAN_STATUSES } from "@pi-outpost/shared/work-plan";
+import {
+  WORK_PLAN_ACTIONS,
+  WORK_PLAN_CREATE_MAX_DEPTH,
+  WORK_PLAN_EVIDENCE_RESULTS,
+  WORK_PLAN_LIMITS,
+  WORK_PLAN_STATUSES,
+} from "@pi-outpost/shared/work-plan";
 import { applyWorkPlanMutation } from "./workPlanStore.ts";
 
 const objectOptions = { additionalProperties: false } as const;
@@ -39,6 +45,19 @@ const resourceSchema = Type.Object({
 }, objectOptions);
 const resourcesSchema = Type.Array(resourceSchema, { maxItems: WORK_PLAN_LIMITS.resourcesPerTask });
 const dependenciesSchema = Type.Array(identifierSchema, { maxItems: WORK_PLAN_LIMITS.tasks, uniqueItems: true });
+const evidenceResultSchema = stringEnum(WORK_PLAN_EVIDENCE_RESULTS);
+const evidenceSchema = Type.Object({
+  id: identifierSchema,
+  type: boundedText(WORK_PLAN_LIMITS.evidenceType, "Free-form evidence kind or source, such as test, command, file, or external-check."),
+  result: evidenceResultSchema,
+  summary: Type.Optional(boundedText(WORK_PLAN_LIMITS.evidenceSummary)),
+  reference: Type.Optional(resourceSchema),
+}, {
+  ...objectOptions,
+  anyOf: [{ required: ["summary"] }, { required: ["reference"] }],
+  description: "One evidence record. Supply at least a summary or reference.",
+});
+const evidenceCollectionSchema = Type.Array(evidenceSchema, { maxItems: WORK_PLAN_LIMITS.evidencePerTask });
 
 const normalizedTaskSchema = Type.Object({
   id: identifierSchema,
@@ -48,6 +67,7 @@ const normalizedTaskSchema = Type.Object({
   parentId: Type.Optional(identifierSchema),
   dependsOn: Type.Optional(dependenciesSchema),
   resources: Type.Optional(resourcesSchema),
+  evidence: Type.Optional(evidenceCollectionSchema),
   statusReason: Type.Optional(reasonSchema),
 }, objectOptions);
 
@@ -69,6 +89,7 @@ const creationTaskSchema = (depth: number): TSchema => Type.Object({
   status: Type.Optional(statusSchema),
   statusReason: Type.Optional(reasonSchema),
   resources: Type.Optional(resourcesSchema),
+  evidence: Type.Optional(evidenceCollectionSchema),
   dependsOn: Type.Optional(Type.Array(identifierSchema, {
     maxItems: WORK_PLAN_LIMITS.tasks,
     uniqueItems: true,
@@ -116,7 +137,7 @@ export const workPlanParameters = Type.Object({
   })),
   plan: Type.Optional(Type.Object({ ...normalizedPlanSchema.properties }, { ...objectOptions, description: "A complete normalized plan (replace)." })),
   task: Type.Optional(Type.Object({ ...normalizedTaskSchema.properties }, { ...objectOptions, description: "One complete task, id and status included (add_task)." })),
-  taskId: Type.Optional(Type.String({ ...identifierSchema, description: "Which task to act on (update_task, move_task, remove_task, set_dependencies, set_resources)." })),
+  taskId: Type.Optional(Type.String({ ...identifierSchema, description: "Which task to act on (update_task, move_task, remove_task, set_dependencies, set_resources, set_evidence)." })),
   changes: Type.Optional(Type.Object({ ...taskChangesSchema.properties }, { ...objectOptions, description: "Fields to change (update_task). The same fields may be given here beside taskId instead." })),
   status: Type.Optional(stringEnum(WORK_PLAN_STATUSES, "New status (update_task, when no changes object is given).")),
   description: Type.Optional(Type.Union([descriptionSchema, Type.Null()], { description: "New description, or null to clear it (update_task, when no changes object is given)." })),
@@ -124,13 +145,17 @@ export const workPlanParameters = Type.Object({
   parentId: Type.Optional(Type.Union([identifierSchema, Type.Null()], { description: "New parent, or null for top level (move_task)." })),
   dependsOn: Type.Optional(Type.Array(identifierSchema, { maxItems: WORK_PLAN_LIMITS.tasks, uniqueItems: true, description: "Complete dependency set for taskId (set_dependencies)." })),
   resources: Type.Optional(Type.Array(resourceSchema, { maxItems: WORK_PLAN_LIMITS.resourcesPerTask, description: "Complete resource set for taskId (set_resources)." })),
+  evidence: Type.Optional(Type.Array(evidenceSchema, {
+    maxItems: WORK_PLAN_LIMITS.evidencePerTask,
+    description: "Complete evidence set for taskId (set_evidence). Replaces the prior collection; [] clears it and never changes task status.",
+  })),
 }, objectOptions);
 
 export function createWorkPlanToolDefinition(): ToolDefinition {
   return {
     name: "work_plan",
     label: "Work Plan",
-    description: "Read or atomically update the persistent Work Plan for this session. Use create for a compact two-level task hierarchy (500 tasks total, 64 KiB normalized plan) whose tasks need only a title, replace for a complete normalized version-1 document, and the task operations for precise later mutations.",
+    description: "Read or atomically update the persistent Work Plan for this session. Use create for a compact two-level task hierarchy (500 tasks total, 64 KiB normalized plan) whose tasks need only a title, set_evidence to replace one task's complete generic verification/support record collection, replace for a complete normalized version-1 document, and the other task operations for precise later mutations.",
     promptSnippet: "Create, inspect, and update the session's persistent Work Plan",
     // A worked call, because the schema alone left models repairing by guess. The
     // titles are deliberately meaningless: an example that reads like real work
@@ -140,6 +165,8 @@ export function createWorkPlanToolDefinition(): ToolDefinition {
       'Create the whole plan in one call, dependencies included: {"action":"create","title":"<plan title>","tasks":[{"id":"a","title":"<first task>"},{"id":"b","title":"<second task>","dependsOn":["a"],"subtasks":[{"title":"<a step of the second task>"}]}]}',
       "Give a task an explicit short id whenever something references it; ids are generated for the rest.",
       'Update one task with {"action":"update_task","taskId":"b","status":"in_progress"}. Statuses are todo, in_progress, done, blocked, needs_review.',
+      'Record verification explicitly with {"action":"set_evidence","taskId":"b","evidence":[{"id":"tests","type":"test","result":"passed","summary":"Focused tests passed"},{"id":"probe","type":"external-check","result":"failed","summary":"The external probe failed"}]}. Results are passed, failed, inconclusive, informational.',
+      "set_evidence replaces the complete evidence collection: include prior failures when appending a result, or use [] to clear it. Evidence never changes task status, and status changes never create evidence.",
       // Pointing a small model at `replace` for this was a trap: that action wants
       // a complete normalized document, down to a plan id and an updatedAt it
       // would have to invent. `clear` then `create` reaches the same state through

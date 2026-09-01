@@ -10,6 +10,8 @@ export const WEB_UI_CONTEXT = [
 
 export const WORK_PLAN_SYSTEM_GUIDANCE = [
   "Use work_plan as explicit working state for non-trivial multi-step work: create and maintain it as understanding or execution changes.",
+  "Record verification evidence deliberately, including failed or inconclusive checks; tool activity does not record evidence automatically.",
+  "Evidence and task status are independent: reconcile both explicitly, because evidence does not complete a task and completion does not fabricate evidence.",
   "Before resuming substantial work, read the current plan; reconcile it before declaring the work complete.",
   "When completed work needs human review, leave at least one task as needs_review and reconcile every other task to done or needs_review; acknowledge review by moving the applicable tasks to done, and move them back to an active state when meaningful work resumes.",
   "Skip a Work Plan for trivial interactions.",

@@ -9,13 +9,21 @@ const FAKE = fileURLToPath(new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url
 const REAL_PI = fileURLToPath(new URL("../../node_modules/@earendil-works/pi-coding-agent/dist/cli.js", import.meta.url));
 const WORK_PLAN_PROVIDER = fileURLToPath(new URL("./fixtures/work-plan-rpc-provider.mjs", import.meta.url));
 
-const plan = (status = "in_progress") => ({
+const evidence = () => [
+  { id: "focused-tests", type: "test", result: "passed", summary: "Focused tests passed" },
+  { id: "external-probe", type: "external-check", result: "failed", summary: "External probe failed" },
+];
+const replacementEvidence = () => [
+  { id: "release-check", type: "command", result: "inconclusive", summary: "Release check timed out" },
+];
+
+const plan = (status = "in_progress", taskEvidence = evidence()) => ({
   version: 1,
   id: "release",
   title: "Prepare release",
   updatedAt: "2026-08-23T00:00:00.000Z",
   tasks: [
-    { id: "build", title: "Build", status, dependsOn: [], resources: [] },
+    { id: "build", title: "Build", status, dependsOn: [], resources: [], evidence: taskEvidence },
   ],
 });
 
@@ -165,6 +173,18 @@ test("running server restores, forks, reconnects, and broadcasts authoritative W
         },
         prompt: [
           {
+            after: [{
+              type: "tool_execution_end",
+              toolCallId: "plan-get",
+              toolName: "work_plan",
+              result: {
+                content: [{ type: "text", text: `Work Plan \"Prepare release\": 1 tasks (0 done).\n${JSON.stringify(plan())}` }],
+                details: { type: "work_plan", sessionFile: target, plan: plan(), changed: false },
+              },
+              isError: false,
+            }],
+          },
+          {
             after: [
               { type: "agent_start" },
               { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "README.md" } },
@@ -173,14 +193,40 @@ test("running server restores, forks, reconnects, and broadcasts authoritative W
             ],
           },
           {
-            writes: [{ path: `${target}.work-plan.json`, content: `${JSON.stringify(plan("done"), null, 2)}\n` }],
+            after: [{
+              type: "tool_execution_end",
+              toolCallId: "plan-invalid",
+              toolName: "work_plan",
+              result: {
+                content: [{ type: "text", text: "Work Plan update refused: evidence[0] requires summary or reference" }],
+                details: undefined,
+                isError: true,
+              },
+              isError: true,
+            }],
+          },
+          {
+            writes: [{ path: `${target}.work-plan.json`, content: `${JSON.stringify(plan("in_progress", replacementEvidence()), null, 2)}\n` }],
+            after: [{
+              type: "tool_execution_end",
+              toolCallId: "plan-evidence",
+              toolName: "work_plan",
+              result: {
+                content: [{ type: "text", text: "Work Plan evidence replaced." }],
+                details: { type: "work_plan", sessionFile: target, plan: plan("in_progress", replacementEvidence()), changed: true },
+              },
+              isError: false,
+            }],
+          },
+          {
+            writes: [{ path: `${target}.work-plan.json`, content: `${JSON.stringify(plan("done", replacementEvidence()), null, 2)}\n` }],
             after: [{
               type: "tool_execution_end",
               toolCallId: "plan-1",
               toolName: "work_plan",
               result: {
                 content: [{ type: "text", text: "Work Plan updated." }],
-                details: { type: "work_plan", sessionFile: target, plan: plan("done"), changed: true },
+                details: { type: "work_plan", sessionFile: target, plan: plan("done", replacementEvidence()), changed: true },
               },
               isError: false,
             }],
@@ -203,6 +249,7 @@ test("running server restores, forks, reconnects, and broadcasts authoritative W
   let third;
   let postCompaction;
   let afterUnrelatedTool;
+  let invalidObserver;
   let concurrentFork;
   try {
     const hello = await first.waitFor("hello");
@@ -246,6 +293,10 @@ test("running server restores, forks, reconnects, and broadcasts authoritative W
     assert.equal(reconnected.sessionId, "fork");
     assert.deepEqual(reconnected.workPlan, plan(), "a reconnect receives the copied authoritative plan");
 
+    first.send({ type: "prompt", text: "Read the Work Plan after compaction" });
+    await first.waitFor((message) => message.type === "tool_end" && message.toolCallId === "plan-get");
+    assert.deepEqual(JSON.parse(await readFile(`${target}.work-plan.json`, "utf8")), plan(), "post-compaction get leaves complete evidence unchanged");
+
     first.send({ type: "prompt", text: "Inspect without changing the plan" });
     await first.waitFor((message) => message.type === "tool_end" && message.toolCallId === "read-1");
     afterUnrelatedTool = connect(server.wsUrl());
@@ -257,16 +308,43 @@ test("running server restores, forks, reconnects, and broadcasts authoritative W
     afterUnrelatedTool.close();
     afterUnrelatedTool = undefined;
 
+    const firstChanges = first.received.filter((message) => message.type === "work_plan_changed").length;
+    const secondChanges = second.received.filter((message) => message.type === "work_plan_changed").length;
+    first.send({ type: "prompt", text: "Record invalid evidence" });
+    await first.waitFor((message) => message.type === "tool_end" && message.toolCallId === "plan-invalid");
+    assert.equal(first.received.filter((message) => message.type === "work_plan_changed").length, firstChanges);
+    assert.equal(second.received.filter((message) => message.type === "work_plan_changed").length, secondChanges);
+    assert.deepEqual(JSON.parse(await readFile(`${target}.work-plan.json`, "utf8")), plan(), "invalid evidence leaves the sidecar unchanged");
+    invalidObserver = connect(server.wsUrl());
+    assert.deepEqual((await invalidObserver.waitFor("hello")).workPlan, plan(), "new clients still receive the prior authoritative evidence");
+    invalidObserver.close();
+    invalidObserver = undefined;
+
+    first.send({ type: "prompt", text: "Replace the task evidence" });
+    const evidenceChanged = (message) => message.type === "work_plan_changed"
+      && message.workPlan?.tasks[0]?.evidence?.[0]?.id === "release-check";
+    assert.deepEqual((await first.waitFor(evidenceChanged)).workPlan, plan("in_progress", replacementEvidence()));
+    assert.deepEqual(
+      (await second.waitFor(evidenceChanged)).workPlan,
+      plan("in_progress", replacementEvidence()),
+      "set_evidence immediately reaches every connected client",
+    );
+    assert.deepEqual(
+      JSON.parse(await readFile(`${target}.work-plan.json`, "utf8")),
+      plan("in_progress", replacementEvidence()),
+      "the evidence broadcast matches persisted authoritative state",
+    );
+
     first.send({ type: "prompt", text: "Finish the plan" });
     const finished = (message) => message.type === "work_plan_changed" && message.workPlan?.tasks[0]?.status === "done";
-    assert.deepEqual((await first.waitFor(finished)).workPlan, plan("done"));
-    assert.deepEqual((await second.waitFor(finished)).workPlan, plan("done"), "all clients receive one authoritative update");
+    assert.deepEqual((await first.waitFor(finished)).workPlan, plan("done", replacementEvidence()));
+    assert.deepEqual((await second.waitFor(finished)).workPlan, plan("done", replacementEvidence()), "all clients receive one authoritative update");
 
     // There is deliberately no client-side mutation message in the protocol.
     // An unsolicited server-shaped frame is ignored and cannot replace state.
     first.send({ type: "work_plan_changed", workPlan: plan("blocked") });
     third = connect(server.wsUrl());
-    assert.deepEqual((await third.waitFor("hello")).workPlan, plan("done"));
+    assert.deepEqual((await third.waitFor("hello")).workPlan, plan("done", replacementEvidence()));
     assert.deepEqual(JSON.parse(await readFile(`${source}.work-plan.json`, "utf8")), plan(), "fork changes stay isolated");
   } finally {
     first.close();
@@ -274,6 +352,7 @@ test("running server restores, forks, reconnects, and broadcasts authoritative W
     third?.close();
     postCompaction?.close();
     afterUnrelatedTool?.close();
+    invalidObserver?.close();
     concurrentFork?.close();
     await server.stop();
   }
@@ -305,12 +384,14 @@ test("a real Pi RPC child executes work_plan and synchronizes its persisted resu
       (message) => message.type === "work_plan_changed"
         && message.workPlan?.title === "RPC release"
         && message.workPlan?.tasks.length === 2
-        && message.workPlan.tasks[0].status === "done",
+        && message.workPlan.tasks[0].status === "done"
+        && message.workPlan.tasks[0].evidence?.length === 2,
       30_000,
     );
     assert.equal(changed.workPlan.tasks[0].status, "done");
+    assert.deepEqual(changed.workPlan.tasks[0].evidence, evidence());
     assert.equal(changed.workPlan.tasks[1].id, "release-note");
-    await client.waitFor("agent_end", 30_000); // emitted only after the provider receives the fourth (`get`) result
+    await client.waitFor("agent_end", 30_000); // emitted only after the provider receives the fifth (`get`) result
     const sidecars = (await readdir(root, { recursive: true }))
       .filter((entry) => entry.endsWith(".work-plan.json"));
     assert.equal(sidecars.length, 1, "the real child persisted exactly one Work Plan sidecar");
@@ -338,10 +419,12 @@ test("the embedded SDK provider receives the same fully typed work_plan schema",
       (message) => message.type === "work_plan_changed"
         && message.workPlan?.title === "RPC release"
         && message.workPlan?.tasks.length === 2
-        && message.workPlan.tasks[0].status === "done",
+        && message.workPlan.tasks[0].status === "done"
+        && message.workPlan.tasks[0].evidence?.length === 2,
       30_000,
     );
     assert.equal(changed.workPlan.tasks[0].status, "done");
+    assert.deepEqual(changed.workPlan.tasks[0].evidence, evidence());
     assert.equal(changed.workPlan.tasks[1].id, "release-note");
     await client.waitFor("agent_end", 30_000);
   } finally {
