@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
 import { isWorkPlanReadyForReview, mutateWorkPlan, normalizeWorkPlanDraft, validateWorkPlan, WORK_PLAN_LIMITS, type WorkPlan } from "@pi-outpost/shared/work-plan";
 import { applyWorkPlanMutation, copyWorkPlan, deleteWorkPlan, loadWorkPlan, sameSessionFile, workPlanPath } from "../src/workPlanStore.ts";
+import { WORK_PLAN_SYSTEM_GUIDANCE } from "../src/systemPrompt.ts";
 import { createWorkPlanToolDefinition } from "../src/workPlanTool.ts";
 
 const base = (): WorkPlan => ({
@@ -14,10 +15,20 @@ const base = (): WorkPlan => ({
   title: "Deliver the change",
   updatedAt: "2026-08-23T00:00:00.000Z",
   tasks: [
-    { id: "analyse", title: "Analyse", status: "done", dependsOn: [], resources: [] },
-    { id: "build", title: "Build", status: "in_progress", dependsOn: ["analyse"], resources: [{ uri: "workspace:src/index.ts" }] },
+    { id: "analyse", title: "Analyse", status: "done", dependsOn: [], resources: [], evidence: [] },
+    { id: "build", title: "Build", status: "in_progress", dependsOn: ["analyse"], resources: [{ uri: "workspace:src/index.ts" }], evidence: [] },
   ],
 });
+
+const legacyBase = (): Record<string, unknown> => ({
+  ...base(),
+  tasks: base().tasks.map(({ evidence: _evidence, ...task }) => task),
+});
+
+const verificationEvidence = () => [
+  { id: "tests", type: "test", result: "failed" as const, summary: "One regression remains" },
+  { id: "report", type: "file", result: "informational" as const, reference: { uri: "workspace:reports/check.json" } },
+];
 
 describe("Work Plan contract", () => {
   it("derives review readiness only from a fully reconciled authoritative plan", () => {
@@ -58,8 +69,8 @@ describe("Work Plan contract", () => {
       title: "Ship safely",
       updatedAt: "2026-08-23T12:00:00.000Z",
       tasks: [
-        { id: "task-one", title: "Build", status: "todo", dependsOn: [], resources: [] },
-        { id: "task-two", title: "Verify", status: "todo", dependsOn: [], resources: [] },
+        { id: "task-one", title: "Build", status: "todo", dependsOn: [], resources: [], evidence: [] },
+        { id: "task-two", title: "Verify", status: "todo", dependsOn: [], resources: [], evidence: [] },
       ],
     });
   });
@@ -93,6 +104,7 @@ describe("Work Plan contract", () => {
       statusReason: "Waiting for review",
       dependsOn: [],
       resources: [{ uri: "workspace:src/index.ts", label: "Entry point" }],
+      evidence: [],
     });
   });
 
@@ -174,6 +186,71 @@ describe("Work Plan contract", () => {
     );
   });
 
+  it("preserves generic successful, unsuccessful, and supporting evidence", () => {
+    const plan = validateWorkPlan({
+      ...base(),
+      tasks: [{
+        ...base().tasks[0],
+        evidence: [
+          { id: "unit", type: "test", result: "passed", summary: "Unit tests passed" },
+          { id: "lint", type: "command", result: "failed", summary: "Lint found an error" },
+          { id: "probe", type: "external-check", result: "inconclusive", summary: "Service timed out" },
+          { id: "report", type: "file", result: "informational", reference: { uri: "workspace:reports/check.json", label: "Check report" } },
+        ],
+      }],
+    });
+
+    assert.deepEqual(plan.tasks[0].evidence, [
+      { id: "unit", type: "test", result: "passed", summary: "Unit tests passed" },
+      { id: "lint", type: "command", result: "failed", summary: "Lint found an error" },
+      { id: "probe", type: "external-check", result: "inconclusive", summary: "Service timed out" },
+      { id: "report", type: "file", result: "informational", reference: { uri: "workspace:reports/check.json", label: "Check report" } },
+    ]);
+  });
+
+  it("rejects invalid or duplicate evidence atomically", () => {
+    const planWith = (evidence: unknown[]) => ({
+      ...base(),
+      tasks: [{ ...base().tasks[0], evidence }],
+    });
+
+    for (const [evidence, message] of [
+      [[{ id: "bad", type: "test", result: "unknown", summary: "No" }], /evidence\[0\]\.result must be one of/],
+      [[{ id: "bad", type: " ", result: "passed", summary: "No" }], /evidence\[0\]\.type must be a non-empty string/],
+      [[{ id: "bad", type: "test", result: "passed" }], /evidence\[0\] requires summary or reference/],
+      [[
+        { id: "same", type: "test", result: "failed", summary: "First" },
+        { id: "same", type: "test", result: "passed", summary: "Second" },
+      ], /duplicate evidence id: same/],
+    ] as const) {
+      assert.throws(() => validateWorkPlan(planWith(evidence as unknown[])), message);
+    }
+  });
+
+  it("enforces evidence collection and field limits before the whole-plan limit", () => {
+    const planWith = (evidence: unknown[]) => ({
+      ...base(),
+      tasks: [{ ...base().tasks[0], evidence }],
+    });
+    assert.throws(
+      () => validateWorkPlan(planWith(Array.from({ length: 101 }, (_, index) => ({
+        id: `e-${index}`,
+        type: "test",
+        result: "passed",
+        summary: "ok",
+      })) )),
+      /at most 100 evidence records/,
+    );
+    assert.throws(
+      () => validateWorkPlan(planWith([{ id: "type", type: "x".repeat(101), result: "passed", summary: "ok" }])),
+      /evidence\[0\]\.type is longer than 100 characters/,
+    );
+    assert.throws(
+      () => validateWorkPlan(planWith([{ id: "summary", type: "test", result: "passed", summary: "x".repeat(2_001) }])),
+      /evidence\[0\]\.summary is longer than 2000 characters/,
+    );
+  });
+
   it("accepts changed fields beside the task identifier", () => {
     const plan = normalizeWorkPlanDraft({ title: "P", tasks: [{ id: "a", title: "First" }] });
     const updated = mutateWorkPlan(plan, { action: "update_task", taskId: "a", status: "in_progress" } as never);
@@ -194,6 +271,111 @@ describe("Work Plan contract", () => {
     );
   });
 
+  it("keeps legacy creation, task addition, and replacement compatible", () => {
+    const legacy = validateWorkPlan(legacyBase());
+    assert.deepEqual(legacy.tasks.map((task) => task.evidence), [[], []]);
+
+    const created = normalizeWorkPlanDraft({ title: "Legacy create", tasks: [{ id: "old", title: "No evidence" }] });
+    assert.deepEqual(created.tasks[0].evidence, []);
+
+    const added = mutateWorkPlan(created, {
+      action: "add_task",
+      task: { id: "also-old", title: "Still no evidence", status: "todo", dependsOn: [], resources: [] },
+    });
+    assert.deepEqual(added?.tasks[1].evidence, []);
+
+    const replaced = mutateWorkPlan(null, { action: "replace", plan: legacyBase() });
+    assert.equal(replaced?.version, 1);
+    assert.deepEqual(replaced?.tasks.map((task) => task.evidence), [[], []]);
+  });
+
+  it("replaces and clears evidence without inferring task status", () => {
+    const original = base();
+    const recorded = mutateWorkPlan(original, {
+      action: "set_evidence",
+      taskId: "build",
+      evidence: verificationEvidence(),
+    });
+    assert.equal(recorded?.tasks[1].status, "in_progress", "failed evidence does not block the task");
+    assert.deepEqual(recorded?.tasks[1].evidence, verificationEvidence());
+    assert.deepEqual(original, base(), "the input plan remains immutable");
+
+    const passed = mutateWorkPlan(recorded, {
+      action: "set_evidence",
+      taskId: "build",
+      evidence: [{ id: "tests", type: "test", result: "passed", summary: "All tests passed" }],
+    });
+    assert.equal(passed?.tasks[1].status, "in_progress", "passing evidence does not complete the task");
+
+    const cleared = mutateWorkPlan(recorded, { action: "set_evidence", taskId: "build", evidence: [] });
+    assert.deepEqual(cleared?.tasks[1].evidence, []);
+    assert.equal(cleared?.tasks[1].status, "in_progress");
+
+    const completed = mutateWorkPlan(base(), {
+      action: "update_task",
+      taskId: "build",
+      changes: { status: "done" },
+    });
+    assert.deepEqual(completed?.tasks[1].evidence, [], "completion does not fabricate evidence");
+  });
+
+  it("refuses missing or invalid evidence replacements without altering prior evidence", () => {
+    const plan = mutateWorkPlan(base(), {
+      action: "set_evidence",
+      taskId: "build",
+      evidence: verificationEvidence(),
+    })!;
+    assert.throws(
+      () => mutateWorkPlan(plan, { action: "set_evidence", evidence: [] } as never),
+      /action=set_evidence requires taskId/,
+    );
+    assert.throws(
+      () => mutateWorkPlan(plan, { action: "set_evidence", taskId: "build" } as never),
+      /action=set_evidence requires evidence/,
+    );
+    assert.throws(
+      () => mutateWorkPlan(plan, {
+        action: "update_task",
+        taskId: "build",
+        changes: { evidence: [] },
+      } as never),
+      /evidence cannot be changed through update_task; use action=set_evidence/,
+    );
+    assert.throws(
+      () => mutateWorkPlan(plan, {
+        action: "set_evidence",
+        taskId: "build",
+        evidence: [
+          ...verificationEvidence(),
+          { id: "invalid", type: "test", result: "failed" },
+        ],
+      }),
+      /evidence\[2\] requires summary or reference/,
+    );
+    assert.deepEqual(plan.tasks[1].evidence, verificationEvidence());
+  });
+
+  it("preserves evidence through every unrelated task mutation", () => {
+    const plan = mutateWorkPlan(base(), {
+      action: "set_evidence",
+      taskId: "build",
+      evidence: verificationEvidence(),
+    })!;
+    const expected = JSON.stringify(plan.tasks[1].evidence);
+    const mutations = [
+      { action: "update_task", taskId: "build", changes: { title: "Build carefully", status: "blocked", statusReason: "Waiting" } },
+      { action: "move_task", taskId: "build", parentId: "analyse" },
+      { action: "set_dependencies", taskId: "build", dependsOn: [] },
+      { action: "set_resources", taskId: "build", resources: [{ uri: "workspace:src/other.ts" }] },
+      { action: "add_task", task: { id: "verify", title: "Verify", status: "todo", dependsOn: [], resources: [] } },
+      { action: "remove_task", taskId: "analyse" },
+    ] as const;
+    for (const mutation of mutations) {
+      const next = mutateWorkPlan(plan, mutation as never);
+      assert.equal(JSON.stringify(next?.tasks.find((task) => task.id === "build")?.evidence), expected, JSON.stringify(mutation));
+    }
+  });
+
   it("refuses an action whose own argument is missing, by name", () => {
     // The published schema makes every per-action argument optional, so that a
     // wrong property is answered by naming it rather than by ten branch
@@ -206,6 +388,7 @@ describe("Work Plan contract", () => {
       [{ action: "move_task", parentId: "a" }, /action=move_task requires taskId/],
       [{ action: "set_dependencies", dependsOn: ["a"] }, /action=set_dependencies requires taskId/],
       [{ action: "set_resources", resources: [] }, /action=set_resources requires taskId/],
+      [{ action: "set_evidence", evidence: [] }, /action=set_evidence requires taskId/],
       [{ action: "update_task", status: "done" }, /action=update_task requires taskId/],
       [{ action: "add_task" }, /action=add_task requires task/],
       [{ action: "update_task", taskId: "a" }, /requires at least one changed field/],
@@ -381,18 +564,55 @@ describe("Work Plan persistence", () => {
     }
   });
 
+  it("loads a legacy version-1 sidecar with empty canonical evidence", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-outpost-work-plan-legacy-"));
+    try {
+      const sessionFile = path.join(root, "legacy.jsonl");
+      await fs.writeFile(workPlanPath(sessionFile), `${JSON.stringify(legacyBase(), null, 2)}\n`);
+      const restored = await loadWorkPlan(sessionFile);
+      assert.equal(restored?.version, 1);
+      assert.deepEqual(restored?.tasks.map((task) => task.evidence), [[], []]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("loads absence, persists atomically, copies forks, and deletes with the session", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-outpost-work-plan-"));
     try {
       const source = path.join(root, "source.jsonl");
       const fork = path.join(root, "fork.jsonl");
+      const sourcePlan = mutateWorkPlan(base(), {
+        action: "set_evidence",
+        taskId: "build",
+        evidence: verificationEvidence(),
+      })!;
       assert.equal(await loadWorkPlan(source), null);
-      await applyWorkPlanMutation(source, { action: "replace", plan: base() });
-      assert.deepEqual(await loadWorkPlan(source), base());
+      await applyWorkPlanMutation(source, { action: "replace", plan: sourcePlan });
+      assert.deepEqual((await loadWorkPlan(source))?.tasks[1].evidence, verificationEvidence());
       await copyWorkPlan(source, fork);
-      await applyWorkPlanMutation(fork, { action: "update_task", taskId: "build", changes: { status: "done" } });
-      assert.equal((await loadWorkPlan(source))?.tasks[1].status, "in_progress");
-      assert.equal((await loadWorkPlan(fork))?.tasks[1].status, "done");
+      const forkEvidence = [{ id: "probe", type: "external-check", result: "inconclusive" as const, summary: "Timed out" }];
+      await applyWorkPlanMutation(fork, { action: "set_evidence", taskId: "build", evidence: forkEvidence });
+      assert.deepEqual((await loadWorkPlan(source))?.tasks[1].evidence, verificationEvidence(), "fork evidence stays isolated from source");
+      assert.deepEqual((await loadWorkPlan(fork))?.tasks[1].evidence, forkEvidence);
+
+      const sourceEvidence = [{ id: "tests", type: "test", result: "passed" as const, summary: "All pass" }];
+      await applyWorkPlanMutation(source, { action: "set_evidence", taskId: "build", evidence: sourceEvidence });
+      assert.deepEqual((await loadWorkPlan(source))?.tasks[1].evidence, sourceEvidence);
+      assert.deepEqual((await loadWorkPlan(fork))?.tasks[1].evidence, forkEvidence, "source evidence stays isolated from fork");
+
+      const beforeRefusal = await fs.readFile(workPlanPath(source), "utf8");
+      await assert.rejects(
+        applyWorkPlanMutation(source, {
+          action: "set_evidence",
+          taskId: "build",
+          evidence: [...sourceEvidence, { id: "invalid", type: "test", result: "failed" }],
+        }),
+        /evidence\[1\] requires summary or reference/,
+      );
+      assert.equal(await fs.readFile(workPlanPath(source), "utf8"), beforeRefusal, "invalid evidence does not rewrite the sidecar");
+      assert.deepEqual((await loadWorkPlan(source))?.tasks[1].evidence, sourceEvidence);
+
       await deleteWorkPlan(source);
       assert.equal(await loadWorkPlan(source), null);
       assert.equal(await fs.stat(workPlanPath(source)).catch(() => null), null);
@@ -450,7 +670,7 @@ describe("work_plan tool", () => {
     const properties = schema.properties as Record<string, Record<string, unknown>>;
     assert.deepEqual(
       properties.action.enum,
-      ["get", "create", "replace", "add_task", "update_task", "move_task", "remove_task", "set_dependencies", "set_resources", "clear"],
+      ["get", "create", "replace", "add_task", "update_task", "move_task", "remove_task", "set_dependencies", "set_resources", "set_evidence", "clear"],
       "every action is one enum node, so an unknown action fails once",
     );
     // Each operation-specific argument says which actions use it, since the
@@ -458,7 +678,7 @@ describe("work_plan tool", () => {
     for (const [field, action] of [
       ["title", /create/], ["tasks", /create/], ["plan", /replace/], ["task", /add_task/],
       ["taskId", /update_task/], ["changes", /update_task/], ["parentId", /move_task/],
-      ["dependsOn", /set_dependencies/], ["resources", /set_resources/],
+      ["dependsOn", /set_dependencies/], ["resources", /set_resources/], ["evidence", /set_evidence/],
     ] as const) {
       assert.match(String(properties[field].description), action, `${field} names the action that uses it`);
     }
@@ -471,6 +691,8 @@ describe("work_plan tool", () => {
       assert.deepEqual(draft.required, ["title"]);
       const taskProperties = draft.properties as Record<string, Record<string, unknown>>;
       assert.deepEqual(taskProperties.status.enum, ["todo", "in_progress", "done", "blocked", "needs_review"]);
+      assert.equal(taskProperties.evidence.type, "array");
+      assert.equal(taskProperties.evidence.maxItems, WORK_PLAN_LIMITS.evidencePerTask);
       // A plan that has dependencies says so where it is written, in one call.
       assert.equal(taskProperties.dependsOn.type, "array");
       assert.match(String(taskProperties.dependsOn.description), /same call/);
@@ -485,6 +707,34 @@ describe("work_plan tool", () => {
         `${field} declares JSON null clearing`,
       );
     }
+  });
+
+  it("publishes finite evidence schemas for creation, replacement, addition, and mutation", () => {
+    const schema = createWorkPlanToolDefinition().parameters as unknown as Record<string, unknown>;
+    const properties = schema.properties as Record<string, Record<string, unknown>>;
+    const creationEvidence = ((properties.tasks.items as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).evidence;
+    const completeEvidence = (((properties.task.properties as Record<string, Record<string, unknown>>).evidence));
+    for (const evidence of [creationEvidence, completeEvidence, properties.evidence]) {
+      assert.equal(evidence.type, "array");
+      assert.equal(evidence.maxItems, WORK_PLAN_LIMITS.evidencePerTask);
+      const record = evidence.items as Record<string, unknown>;
+      assert.equal(record.additionalProperties, false);
+      assert.deepEqual(record.required, ["id", "type", "result"]);
+      const recordProperties = record.properties as Record<string, Record<string, unknown>>;
+      assert.deepEqual(recordProperties.result.enum, ["passed", "failed", "inconclusive", "informational"]);
+      assert.equal(recordProperties.result.anyOf, undefined, "results use one enum node");
+      assert.equal(recordProperties.type.maxLength, WORK_PLAN_LIMITS.evidenceType);
+      assert.equal(recordProperties.summary.maxLength, WORK_PLAN_LIMITS.evidenceSummary);
+      assert.equal((recordProperties.reference as Record<string, unknown>).additionalProperties, false);
+    }
+
+    const validator = Compile(createWorkPlanToolDefinition().parameters as never);
+    const summaryOnly = { id: "tests", type: "test", result: "passed", summary: "All pass" };
+    const referenceOnly = { id: "report", type: "file", result: "informational", reference: { uri: "workspace:report.json" } };
+    assert.equal(validator.Check({ action: "create", title: "Evidence", tasks: [{ title: "Verify", evidence: [summaryOnly, referenceOnly] }] }), true);
+    assert.equal(validator.Check({ action: "set_evidence", taskId: "verify", evidence: [summaryOnly, referenceOnly] }), true);
+    assert.equal(validator.Check({ action: "set_evidence", taskId: "verify", evidence: [{ id: "empty", type: "test", result: "passed" }] }), false);
+    assert.equal(validator.Check({ action: "set_evidence", taskId: "verify", evidence: [{ ...summaryOnly, provider: "openlore" }] }), false);
   });
 
   it("anchors every pattern, so a provider can generate a parser for the schema", () => {
@@ -570,6 +820,27 @@ describe("work_plan tool", () => {
     const plan = normalizeWorkPlanDraft({ title: call.title, tasks: call.tasks });
     assert.equal(plan.tasks.filter((task) => task.dependsOn.length > 0).length, 1, "the example shows a dependency");
     assert.equal(plan.tasks.filter((task) => task.parentId !== undefined).length, 1, "the example shows a subtask");
+  });
+
+  it("ships valid evidence guidance with explicit replacement and status independence", () => {
+    const tool = createWorkPlanToolDefinition();
+    const example = (tool.promptGuidelines ?? []).find((line) => line.includes('"action":"set_evidence"'));
+    assert.ok(example, "the guidelines carry a literal evidence call");
+    const call = JSON.parse(example.slice(example.indexOf("{"), example.lastIndexOf("}") + 1));
+    const validator = Compile(tool.parameters as never);
+    assert.equal(validator.Check(call), true, "the evidence example passes the published schema");
+    assert.deepEqual(call.evidence.map((record: { result: string }) => record.result), ["passed", "failed"]);
+
+    const guidance = (tool.promptGuidelines ?? []).join(" ");
+    assert.match(guidance, /replaces the complete evidence collection/i);
+    assert.match(guidance, /include prior failures/i);
+    assert.match(guidance, /Evidence never changes task status/i);
+    assert.match(guidance, /status changes never create evidence/i);
+
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /failed or inconclusive checks/i);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /does not record evidence automatically/i);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /Evidence and task status are independent/i);
+    assert.match(WORK_PLAN_SYSTEM_GUIDANCE, /completion does not fabricate evidence/i);
   });
 
   it("keeps behavioral selection guidance out of the mechanical tool contract", () => {

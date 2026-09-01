@@ -1,6 +1,9 @@
 export const WORK_PLAN_STATUSES = ["todo", "in_progress", "done", "blocked", "needs_review"] as const;
 export type WorkPlanStatus = (typeof WORK_PLAN_STATUSES)[number];
 
+export const WORK_PLAN_EVIDENCE_RESULTS = ["passed", "failed", "inconclusive", "informational"] as const;
+export type WorkPlanEvidenceResult = (typeof WORK_PLAN_EVIDENCE_RESULTS)[number];
+
 /** Every operation the tool accepts; the tool schema publishes this list verbatim. */
 export const WORK_PLAN_ACTIONS = [
   "get",
@@ -12,6 +15,7 @@ export const WORK_PLAN_ACTIONS = [
   "remove_task",
   "set_dependencies",
   "set_resources",
+  "set_evidence",
   "clear",
 ] as const;
 export type WorkPlanAction = (typeof WORK_PLAN_ACTIONS)[number];
@@ -22,6 +26,15 @@ export interface WorkPlanResource {
   label?: string;
 }
 
+export interface WorkPlanEvidence {
+  id: string;
+  /** Free-form evidence kind or source, such as test, command, file, or external-check. */
+  type: string;
+  result: WorkPlanEvidenceResult;
+  summary?: string;
+  reference?: WorkPlanResource;
+}
+
 export interface WorkPlanTask {
   id: string;
   title: string;
@@ -30,6 +43,7 @@ export interface WorkPlanTask {
   parentId?: string;
   dependsOn: string[];
   resources: WorkPlanResource[];
+  evidence: WorkPlanEvidence[];
   statusReason?: string;
 }
 
@@ -63,6 +77,9 @@ export const WORK_PLAN_LIMITS = {
   description: 4_000,
   reason: 2_000,
   resourcesPerTask: 50,
+  evidencePerTask: 100,
+  evidenceType: 100,
+  evidenceSummary: 2_000,
   uri: 2_000,
 } as const;
 
@@ -77,6 +94,7 @@ export interface WorkPlanDraftTask {
   status?: WorkPlanStatus;
   statusReason?: string;
   resources?: WorkPlanResource[];
+  evidence?: WorkPlanEvidence[];
   /** Ids of other tasks in the same draft; resolved once the whole tree is read. */
   dependsOn?: string[];
   subtasks?: WorkPlanDraftTask[];
@@ -103,7 +121,8 @@ export type WorkPlanMutation =
   | { action: "move_task"; taskId: string; parentId?: string | null }
   | { action: "remove_task"; taskId: string }
   | { action: "set_dependencies"; taskId: string; dependsOn: unknown }
-  | { action: "set_resources"; taskId: string; resources: unknown };
+  | { action: "set_resources"; taskId: string; resources: unknown }
+  | { action: "set_evidence"; taskId: string; evidence: unknown };
 
 function object(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("must be an object");
@@ -151,6 +170,49 @@ function resources(value: unknown): WorkPlanResource[] {
   return result;
 }
 
+function evidenceRecords(value: unknown): WorkPlanEvidence[] {
+  if (!Array.isArray(value)) throw new Error("evidence must be an array");
+  if (value.length > WORK_PLAN_LIMITS.evidencePerTask) {
+    throw new Error(`a task may contain at most ${WORK_PLAN_LIMITS.evidencePerTask} evidence records`);
+  }
+  const result = value.map((item, index) => {
+    const field = `evidence[${index}]`;
+    const raw = object(item);
+    onlyFields(raw, ["id", "type", "result", "summary", "reference"], field);
+    if (typeof raw.result !== "string" || !WORK_PLAN_EVIDENCE_RESULTS.includes(raw.result as WorkPlanEvidenceResult)) {
+      throw new Error(`${field}.result must be one of ${WORK_PLAN_EVIDENCE_RESULTS.join(", ")}`);
+    }
+    const summary = raw.summary === undefined
+      ? undefined
+      : text(raw.summary, `${field}.summary`, WORK_PLAN_LIMITS.evidenceSummary);
+    let reference: WorkPlanResource | undefined;
+    if (raw.reference !== undefined) {
+      const referenceRaw = object(raw.reference);
+      onlyFields(referenceRaw, ["uri", "label"], `${field}.reference`);
+      reference = {
+        uri: text(referenceRaw.uri, `${field}.reference.uri`, WORK_PLAN_LIMITS.uri),
+        ...(referenceRaw.label === undefined
+          ? {}
+          : { label: text(referenceRaw.label, `${field}.reference.label`, WORK_PLAN_LIMITS.title) }),
+      };
+    }
+    if (summary === undefined && reference === undefined) throw new Error(`${field} requires summary or reference`);
+    return {
+      id: text(raw.id, `${field}.id`, WORK_PLAN_LIMITS.title),
+      type: text(raw.type, `${field}.type`, WORK_PLAN_LIMITS.evidenceType),
+      result: raw.result as WorkPlanEvidenceResult,
+      ...(summary === undefined ? {} : { summary }),
+      ...(reference === undefined ? {} : { reference }),
+    };
+  });
+  const seen = new Set<string>();
+  for (const record of result) {
+    if (seen.has(record.id)) throw new Error(`duplicate evidence id: ${record.id}`);
+    seen.add(record.id);
+  }
+  return result;
+}
+
 function task(value: unknown): WorkPlanTask {
   const raw = object(value);
   const status = raw.status;
@@ -167,6 +229,7 @@ function task(value: unknown): WorkPlanTask {
       : { parentId: text(raw.parentId, "task.parentId", WORK_PLAN_LIMITS.title) }),
     dependsOn: raw.dependsOn === undefined ? [] : ids(raw.dependsOn, "task.dependsOn"),
     resources: raw.resources === undefined ? [] : resources(raw.resources),
+    evidence: raw.evidence === undefined ? [] : evidenceRecords(raw.evidence),
     ...(raw.statusReason === undefined ? {} : { statusReason: optionalText(raw.statusReason, "task.statusReason", WORK_PLAN_LIMITS.reason) }),
   };
 }
@@ -274,7 +337,7 @@ export function normalizeWorkPlanDraft(
     }
     for (const [index, item] of items.entries()) {
       const draft = object(item);
-      onlyFields(draft, ["id", "title", "description", "status", "statusReason", "resources", "dependsOn", "subtasks"], `tasks[${index}]`);
+      onlyFields(draft, ["id", "title", "description", "status", "statusReason", "resources", "evidence", "dependsOn", "subtasks"], `tasks[${index}]`);
       const status = draft.status ?? "todo";
       if (typeof status !== "string" || !WORK_PLAN_STATUSES.includes(status as WorkPlanStatus)) {
         throw new Error(`status must be one of ${WORK_PLAN_STATUSES.join(", ")}`);
@@ -292,6 +355,7 @@ export function normalizeWorkPlanDraft(
         // reading order, so a task may depend on one declared further down.
         dependsOn: draft.dependsOn === undefined ? [] : ids(draft.dependsOn, `tasks[${index}].dependsOn`),
         resources: draft.resources === undefined ? [] : resources(draft.resources),
+        evidence: draft.evidence === undefined ? [] : evidenceRecords(draft.evidence),
         ...(draft.statusReason === undefined
           ? {}
           : { statusReason: text(draft.statusReason, "task.statusReason", WORK_PLAN_LIMITS.reason) }),
@@ -352,6 +416,7 @@ const REQUIRED_ARGUMENTS: Partial<Record<WorkPlanAction, readonly string[]>> = {
   remove_task: ["taskId"],
   set_dependencies: ["taskId", "dependsOn"],
   set_resources: ["taskId", "resources"],
+  set_evidence: ["taskId", "evidence"],
 };
 
 function assertRequiredArguments(mutation: Record<string, unknown>): void {
@@ -372,7 +437,15 @@ export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutat
   }
   if (mutation.action === "replace") return validateWorkPlan(mutation.plan);
   if (current === null) throw new Error("create a plan with action=create or action=replace before mutating tasks");
-  let tasks = current.tasks.map((item) => ({ ...item, dependsOn: [...item.dependsOn], resources: item.resources.map((resource) => ({ ...resource })) }));
+  let tasks = current.tasks.map((item) => ({
+    ...item,
+    dependsOn: [...item.dependsOn],
+    resources: item.resources.map((resource) => ({ ...resource })),
+    evidence: item.evidence.map((record) => ({
+      ...record,
+      ...(record.reference === undefined ? {} : { reference: { ...record.reference } }),
+    })),
+  }));
   const index = "taskId" in mutation ? tasks.findIndex((item) => item.id === mutation.taskId) : -1;
   if ("taskId" in mutation && index < 0) throw new Error(`unknown task: ${mutation.taskId}`);
   switch (mutation.action) {
@@ -382,6 +455,9 @@ export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutat
     case "update_task": {
       const changes = object(mutation.changes ?? loosenedChanges(mutation));
       if (changes.id !== undefined) throw new Error("task identity cannot be changed");
+      if (Object.hasOwn(changes, "evidence")) {
+        throw new Error("task evidence cannot be changed through update_task; use action=set_evidence");
+      }
       if (Object.keys(changes).length === 0) {
         throw new Error("action=update_task requires at least one changed field, in changes or beside taskId");
       }
@@ -411,6 +487,9 @@ export function mutateWorkPlan(current: WorkPlan | null, mutation: WorkPlanMutat
       break;
     case "set_resources":
       tasks[index] = { ...tasks[index], resources: resources(mutation.resources) };
+      break;
+    case "set_evidence":
+      tasks[index] = { ...tasks[index], evidence: evidenceRecords(mutation.evidence) };
       break;
   }
   return validateWorkPlan({ ...current, tasks, updatedAt: new Date().toISOString() });
