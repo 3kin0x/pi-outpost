@@ -94,6 +94,25 @@ and report the fallback.
 - ALWAYS use `rg` (ripgrep) instead of `grep` for code search and file inspection.
 - NEVER run recursive `grep -r` commands. `rg` is faster and respects `.gitignore`.
 
+## Documentation impact before every PR
+
+Before opening or updating any pull request:
+
+1. Inspect the diff for changes that affect documented behaviour: user flows, CLI
+   commands and flags, configuration keys/defaults, environment variables, APIs,
+   UI behaviour, deployment, compatibility, prerequisites, or developer workflows.
+2. Search every relevant user and developer document (`README.md`, `docs/`, package
+   READMEs, examples, and operational guides) for the affected concepts.
+3. Compare affected claims, examples, and commands against the implementation,
+   schemas, CLI help, package scripts, and tests. Update stale documentation in the
+   same PR.
+4. Validate changed documentation proportionately: local links and anchors, fenced
+   JSON, documented commands, and externally referenced facts where applicable.
+5. Add a `Documentation impact` note to the PR description. List the files updated,
+   or state `None` with a brief reason when the diff has no documentation impact.
+
+This is an impact review, not a mandatory full reread of unrelated documentation.
+
 ## Spec scenario coverage
 
 Before calling a feature complete, prove that every applicable OpenSpec scenario
