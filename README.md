@@ -363,6 +363,7 @@ in [`pi-outpost.config.example.json`](pi-outpost.config.example.json).
 | `userSkillPaths` | Skill directories added from Settings, loaded after `skillPaths` |
 | `noPromptTemplates` / `promptPaths` | Same for prompt templates (`agentDir` and the project's `cwd/.pi/prompts`) |
 | `allowedModels` | Restrict the model switcher to these `{ "provider", "id" }` pairs. Without it, every built-in model whose provider has auth is listed — often more variants than a deployment actually serves |
+| `thinkingLevels` | Declare what thinking levels a model accepts, for one the runtime cannot describe. See [Thinking levels](#thinking-levels) |
 | `systemPrompt` / `systemPromptFile` | Replace pi's built-in system prompt entirely (mutually exclusive). Project context files, skills and `appendSystemPrompt` still layer on top |
 | `appendSystemPrompt` | Extra paragraphs appended after the system prompt |
 | `webContext` | Tell the agent its replies render in this interface — markdown, inline images, file links (default `true`) |
@@ -414,6 +415,32 @@ would answer questions about the wrong installation.
 When git features are missing, **Settings says why**: the executable could not be run, this
 project is not in a repository, or git refused it — with git's own message, which for the
 common "detected dubious ownership" names both the directory and the remedy.
+
+### Thinking levels
+
+The thinking-level control offers only the levels the current model accepts — which the
+runtime normally reports. For a model declared against your own endpoint it cannot: the
+SDK does not recognise the name, the control falls back to offering everything, and a
+model that cannot think at all gets a slider that goes to `xhigh` and snaps back.
+
+Declare the answer instead:
+
+```json
+"thinkingLevels": [
+  { "provider": "maison", "levels": ["off"] },
+  { "provider": "maison", "id": "big", "levels": ["off", "low", "medium"] }
+]
+```
+
+An entry without `id` covers every model of that provider; where both could apply, the one
+naming the model wins. Levels are normalised as a runtime-reported list is — unknown names
+dropped, canonical order, `off` always available — and an entry naming no usable level
+fails startup rather than leaving a model nothing can be asked of.
+
+A declaration is **authoritative**: it replaces what the runtime reports, because the
+setting exists precisely for the models the runtime is guessing about. A `set_thinking`
+naming a level outside a declared set is refused rather than forwarded, whichever client
+sends it.
 
 ### Theming
 

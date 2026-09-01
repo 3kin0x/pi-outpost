@@ -5,7 +5,9 @@
 Defines the reusable React presentation and interaction layer in `ui/src/components`. These
 components render application state supplied by their consumers and report user intent through
 callbacks; server communication and persistent state remain outside this domain.
+
 ## Requirements
+
 ### Requirement: ConversationItemRendering
 
 The component layer SHALL provide dedicated renderers for assistant, user, tool, and custom
@@ -239,6 +241,12 @@ skill paths separately from built-in skills, SHALL NOT present the configuration
 as editable, and SHALL offer server-directory exploration controls for every path-valued setting it
 edits.
 
+`ModelBar`'s thinking-level control SHALL offer only the levels supplied for the current model, in
+the order supplied, and SHALL present a set with gaps as that many ordered stops rather than a
+continuous range — every stop it shows SHALL be a level the model accepts, so a selection never
+snaps back. Where no such list is supplied it SHALL fall back to the full set of known levels, which
+is the behaviour before this control was made model-aware.
+
 `SettingsMenu` SHALL offer the same controls for the user's own extension paths that it offers for
 skill paths — server-directory exploration, per-entry removal, and reporting the result through its
 update callback — and SHALL NOT present the configuration file's extension paths as editable.
@@ -258,6 +266,17 @@ the server happened to report.
 - **GIVEN** model choices and thinking state supplied to `ModelBar`
 - **WHEN** the user selects a model or thinking level
 - **THEN** the corresponding callback is invoked with the requested value
+
+#### Scenario: TheThinkingControlOffersOnlyTheModelsLevels
+- **GIVEN** `ModelBar` is supplied with a current model that accepts `low`, `medium` and `xhigh` but not `high`
+- **WHEN** the thinking control is opened
+- **THEN** it presents `off`, `low`, `medium` and `xhigh` as ordered stops and no `high`
+- **AND** selecting the last stop reports `xhigh` through the callback
+
+#### Scenario: TheThinkingControlFallsBackWithoutAList
+- **GIVEN** `ModelBar` is supplied with no accepted-levels list for the current model
+- **WHEN** the thinking control is opened
+- **THEN** it offers the full set of known levels, as it did before
 
 #### Scenario: PresentSandboxSettings
 - **GIVEN** sandbox, extension-path, and version state supplied to `SettingsMenu`

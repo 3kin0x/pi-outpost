@@ -154,6 +154,98 @@ test("RPC server fails readiness closed and refuses a later prompt after child e
   }
 });
 
+// openlore: scenario=ADeclaredSetAnswersForAModelTheRuntimeCannot spec=api
+test("a declared set answers even when the runtime has nothing to say", async () => {
+  const root = await makeWorkspace();
+  const fakeConfig = path.join(root, "fake-rpc.json");
+  await writeFile(
+    fakeConfig,
+    JSON.stringify({
+      state: { sessionId: "declared-2", model: { provider: "maison", id: "house", name: "House", reasoning: true } },
+      // No get_available_thinking_levels at all: the dialect has no command for it, and
+      // the client would fall back to offering everything
+      commands_: {
+        get_available_models: {
+          data: { models: [{ provider: "maison", id: "house", name: "House", reasoning: true }] },
+        },
+      },
+    }),
+  );
+
+  const server = await startServer(
+    root,
+    {
+      sandbox: undefined,
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [FAKE], startupTimeoutMs: 5_000 },
+      thinkingLevels: [{ provider: "maison", id: "house", levels: ["off", "low"] }],
+    },
+    { env: { FAKE_PI_RPC_CONFIG: fakeConfig } },
+  );
+  const client = connect(server.wsUrl());
+  try {
+    const hello = await client.waitFor("hello");
+    assert.deepEqual(hello.thinkingLevels, ["off", "low"], "the operator answers where the runtime cannot");
+
+    // openlore: scenario=ADeclaredLevelIsAccepted spec=api
+    client.send({ type: "set_thinking", level: "low" });
+    const changed = await client.waitFor("thinking_changed", 20_000);
+    assert.equal(changed.level, "low", "a declared level is set, not refused");
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});
+
+// openlore: scenario=ADeclaredSetOverridesTheRuntime spec=api
+test("a declared set answers for the model, whatever the runtime reports", async () => {
+  const root = await makeWorkspace();
+  const fakeConfig = path.join(root, "fake-rpc.json");
+  await writeFile(
+    fakeConfig,
+    JSON.stringify({
+      state: { sessionId: "declared-1", model: { provider: "maison", id: "house", name: "House", reasoning: true } },
+      commands_: {
+        // The runtime is guessing about a model it does not know: it says everything
+        get_available_thinking_levels: { data: { levels: ["off", "low", "medium", "high", "xhigh"] } },
+        get_available_models: {
+          data: { models: [{ provider: "maison", id: "house", name: "House", reasoning: true }] },
+        },
+      },
+    }),
+  );
+
+  const server = await startServer(
+    root,
+    {
+      sandbox: undefined,
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [FAKE], startupTimeoutMs: 5_000 },
+      thinkingLevels: [{ provider: "maison", levels: ["off"] }],
+    },
+    { env: { FAKE_PI_RPC_CONFIG: fakeConfig } },
+  );
+  const client = connect(server.wsUrl());
+  try {
+    const hello = await client.waitFor("hello");
+    assert.deepEqual(hello.thinkingLevels, ["off"], "the operator's statement beats the runtime's guess");
+
+    // openlore: scenario=AnExcludedLevelIsRefused spec=api
+    client.send({ type: "set_thinking", level: "high" });
+    // A refusal broadcasts nothing, so there is nothing to wait for. Send one the
+    // deployment DOES allow and wait for that: anything the refusal produced would
+    // have arrived first.
+    client.send({ type: "set_thinking", level: "off" });
+    await client.waitFor("thinking_changed", 20_000);
+    assert.equal(
+      client.received.some((m) => m.type === "thinking_changed" && m.level === "high"),
+      false,
+      "a level the deployment excluded must not reach the model",
+    );
+  } finally {
+    client.close();
+    await server.stop();
+  }
+});
+
 test("the snapshot carries the model's accepted thinking levels, and they follow a model change", async () => {
   const root = await makeWorkspace();
   const fakeConfig = path.join(root, "fake-rpc.json");
