@@ -17,10 +17,10 @@
 ## 4. Documentation
 
 - [x] 4.1 Document the setting beside `allowedModels`, with the in-house-endpoint case that motivates it; verify the documented shape matches `config.ts`
-- [ ] 4.2 Prepare the `Documentation impact` note for the PR description per AGENTS.md; verify every affected document is listed
+- [x] 4.2 Prepare the `Documentation impact` note for the PR description per AGENTS.md; verify every affected document is listed
 
 ## 5. Verification
 
-- [ ] 5.1 Produce the scenario-to-test matrix over every `#### Scenario:` in the `config` and `api` deltas, classifying each covered/partial/uncovered with its test file and name; verify the list with `rg '^#### Scenario:' openspec/changes/declare-what-thinking-a-model-accepts/specs/`
-- [ ] 5.2 Drive it in the running app, including the destructive pass AGENTS.md requires — a declared `off`-only model, the slider it produces, and a `set_thinking` sent past it; verify the observed DOM
-- [ ] 5.3 Run `openspec validate declare-what-thinking-a-model-accepts --strict` and the server, shared and UI suites; verify all pass
+- [x] 5.1 Produce the scenario-to-test matrix over every `#### Scenario:` in the `config` and `api` deltas, classifying each covered/partial/uncovered with its test file and name; verify the list with `rg '^#### Scenario:' openspec/changes/declare-what-thinking-a-model-accepts/specs/`
+- [x] 5.2 Drive it in the running app, including the destructive pass AGENTS.md requires — a declared `off`-only model, the slider it produces, and a `set_thinking` sent past it; verify the observed DOM
+- [x] 5.3 Run `openspec validate declare-what-thinking-a-model-accepts --strict` and the server, shared and UI suites; verify all pass
