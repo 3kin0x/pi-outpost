@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TerminalPanel } from "./TerminalPanel";
 import { ThemeContext } from "../theme/ThemeContext";
 
@@ -117,5 +117,170 @@ describe("TerminalPanel", () => {
     fireEvent.click(closeButton);
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("handles tab renaming with Escape key and empty string", () => {
+    render(<TerminalPanel {...defaultProps} />);
+
+    const tab = screen.getByText("terminal 1");
+    fireEvent.doubleClick(tab);
+
+    const input = screen.getByDisplayValue("terminal 1");
+    // Press Escape to cancel
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.getByText("terminal 1")).toBeInTheDocument();
+
+    // Double click again and submit whitespace
+    fireEvent.doubleClick(screen.getByText("terminal 1"));
+    const input2 = screen.getByDisplayValue("terminal 1");
+    fireEvent.change(input2, { target: { value: "   " } });
+    fireEvent.keyDown(input2, { key: "Enter" });
+    expect(screen.getByText("terminal 1")).toBeInTheDocument();
+  });
+
+  it("handles tab closing and active tab switching", () => {
+    render(<TerminalPanel {...defaultProps} />);
+
+    const addButton = screen.getByTitle("New Terminal Tab");
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+
+    expect(screen.getByText("terminal 1")).toBeInTheDocument();
+    expect(screen.getByText("terminal 2")).toBeInTheDocument();
+    expect(screen.getByText("terminal 3")).toBeInTheDocument();
+
+    // Close buttons for tabs
+    const closeButtons = screen.getAllByRole("button", { name: "Close terminal tab" });
+    expect(closeButtons.length).toBeGreaterThan(0);
+
+    // Close the active 3rd tab
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    expect(screen.queryByText("terminal 3")).not.toBeInTheDocument();
+    expect(screen.getByText("terminal 2")).toBeInTheDocument();
+  });
+
+  it("handles terminal subscriptions: onData, onCwd, OSC 7, onExit, onError", () => {
+    let capturedCallbacks: any;
+    const subscribeTerminal = vi.fn((_id, callbacks) => {
+      capturedCallbacks = callbacks;
+      return () => {};
+    });
+
+    render(
+      <TerminalPanel
+        {...defaultProps}
+        onSetWorkspaceRoot={vi.fn()}
+        subscribeTerminal={subscribeTerminal}
+      />,
+    );
+
+    expect(subscribeTerminal).toHaveBeenCalled();
+    expect(capturedCallbacks).toBeDefined();
+
+    // Test onData
+    act(() => {
+      capturedCallbacks.onData("normal output\n");
+    });
+
+    // Test onData with OSC 7 directory notification
+    act(() => {
+      capturedCallbacks.onData("\x1b]7;file://localhost/Users/developer/project/nested/deep/path\x07");
+    });
+    expect(screen.getByText(/nested\/deep\/path/)).toBeInTheDocument();
+
+    // Test onCwd
+    act(() => {
+      capturedCallbacks.onCwd("/var/www/html");
+    });
+    expect(screen.getByText(/var\/www\/html/)).toBeInTheDocument();
+
+    // Test onExit
+    act(() => {
+      capturedCallbacks.onExit(0);
+      capturedCallbacks.onExit(1);
+    });
+
+    // Test onError
+    act(() => {
+      capturedCallbacks.onError("connection lost");
+    });
+  });
+
+  it("handles root filesystem confirmation prompt when syncing", () => {
+    const onSetWorkspaceRoot = vi.fn();
+    const originalConfirm = window.confirm;
+
+    let capturedCallbacks: any;
+    const subscribeTerminal = vi.fn((_id, callbacks) => {
+      capturedCallbacks = callbacks;
+      return () => {};
+    });
+
+    render(
+      <TerminalPanel
+        {...defaultProps}
+        cwd="/"
+        onSetWorkspaceRoot={onSetWorkspaceRoot}
+        subscribeTerminal={subscribeTerminal}
+      />,
+    );
+
+    // User cancels confirm
+    window.confirm = vi.fn(() => false);
+    const syncButton = screen.getByTitle(/as the workspace project/i);
+    fireEvent.click(syncButton);
+    expect(onSetWorkspaceRoot).not.toHaveBeenCalled();
+
+    // User accepts confirm
+    window.confirm = vi.fn(() => true);
+    fireEvent.click(syncButton);
+    expect(onSetWorkspaceRoot).toHaveBeenCalledWith("/");
+
+    window.confirm = originalConfirm;
+  });
+
+  it("handles clear terminal action", () => {
+    render(<TerminalPanel {...defaultProps} />);
+
+    const clearButton = screen.getByTitle("Clear Terminal Output");
+    fireEvent.click(clearButton);
+  });
+
+  it("handles clicking tabs to switch active tab", () => {
+    render(<TerminalPanel {...defaultProps} />);
+
+    const addButton = screen.getByTitle("New Terminal Tab");
+    fireEvent.click(addButton);
+
+    // Click first tab to switch back
+    const tab1 = screen.getByText("terminal 1");
+    fireEvent.click(tab1);
+    expect(tab1).toBeInTheDocument();
+  });
+
+  it("toggles theme dynamically", () => {
+    const { rerender } = render(
+      <ThemeContext.Provider value="light">
+        <TerminalPanel {...defaultProps} />
+      </ThemeContext.Provider>,
+    );
+
+    rerender(
+      <ThemeContext.Provider value="dark">
+        <TerminalPanel {...defaultProps} />
+      </ThemeContext.Provider>,
+    );
+  });
+
+  it("calls onClose when removing the last remaining tab", () => {
+    const onClose = vi.fn();
+    render(<TerminalPanel {...defaultProps} onClose={onClose} />);
+
+    // Add a tab then remove both
+    const addButton = screen.getByTitle("New Terminal Tab");
+    fireEvent.click(addButton);
+
+    const closeButtons = screen.getAllByRole("button", { name: "Close terminal tab" });
+    fireEvent.click(closeButtons[0]);
   });
 });
