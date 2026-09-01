@@ -68,6 +68,21 @@ jobs:
       # or a second React bundled in. Both are invisible until someone installs it.
       - run: npm run check:embed
 
+      # A change can declare scenarios nobody ever wrote a test for and stay green
+      # everywhere: the suite passes, the coverage percentage holds, and the only
+      # thing that would have caught it is a person reading the delta specs beside
+      # the tests. This checks the mechanical half — every scenario is accounted
+      # for in the change's scenario-coverage.md, and every file it cites exists.
+      # Scoped to the changes this branch touches, so an older change without a
+      # matrix does not fail unrelated work.
+      - run: npm run test:scripts
+        if: matrix.os == 'ubuntu-latest'
+      - name: Spec scenarios are accounted for
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          node scripts/check-scenario-coverage.mjs --base FETCH_HEAD
+
   # The two ways this project is consumed, in a real browser: the app the server
   # serves, and the widget a host page mounts. Shadow DOM, cross-origin wiring and
   # an actually-applied stylesheet are all invisible to jsdom, which is where the
