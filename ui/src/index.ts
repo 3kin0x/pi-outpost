@@ -72,3 +72,4 @@ export { SettingsMenu } from "./components/SettingsMenu";
 export { Sidebar } from "./components/Sidebar";
 export { TokenGate } from "./components/TokenGate";
 export { TreeMenu } from "./components/TreeMenu";
+export { TerminalPanel } from "./components/TerminalPanel";

@@ -61,6 +61,7 @@ import { pathToFileURL } from "node:url";
 import { CliError, helpText, parseCli, readSecret, runInit } from "./cli.ts";
 import { bindFailureMessage, holdConsoleIfOwned } from "./startupFailure.ts";
 import { BuildExeError, buildExecutable } from "./buildExe.ts";
+import { TerminalManager } from "./terminalManager.ts";
 import { browsableUrl, openBrowser, shouldOpenBrowser } from "./openBrowser.ts";
 import { runStartupUpdateNotice, runUpdateCommand, updateCheckEnabled, whyCheckingDisabled } from "./update.ts";
 import {
@@ -1399,6 +1400,7 @@ function snapshot(workspace: Workspace): SessionSnapshot {
  * client bound elsewhere is the failure this map exists to make unstatable.
  */
 const clients = new Map<WebSocket, Workspace>();
+const terminalManager = new TerminalManager();
 
 const WS_LOG_PATH = process.env.WS_LOG_PATH ? path.resolve(process.env.WS_LOG_PATH) : undefined;
 
@@ -3446,6 +3448,61 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       }).catch(reportError);
       break;
     }
+    case "terminal_open": {
+      if (typeof message.terminalId !== "string") return;
+      const allowBash = workspace.settings.sandbox ? workspace.settings.sandbox.allowBash : true;
+      if (!allowBash) {
+        send(socket, {
+          type: "terminal_error",
+          terminalId: message.terminalId,
+          message: "Terminal access is disabled in the current sandbox. Set sandbox.allowBash: true to enable terminal.",
+        });
+        return;
+      }
+      const termCwd = message.cwd && typeof message.cwd === "string" ? message.cwd : workspace.settings.cwd;
+      try {
+        terminalManager.open(
+          socket,
+          message.terminalId,
+          termCwd,
+          message.cols ?? 80,
+          message.rows ?? 24,
+          (termId, data) => send(socket, { type: "terminal_data", terminalId: termId, data }),
+          (termId, exitCode) => send(socket, { type: "terminal_exit", terminalId: termId, exitCode }),
+        );
+      } catch (error) {
+        send(socket, {
+          type: "terminal_error",
+          terminalId: message.terminalId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      break;
+    }
+    case "terminal_input": {
+      if (typeof message.terminalId !== "string" || typeof message.data !== "string") return;
+      terminalManager.write(message.terminalId, message.data);
+      break;
+    }
+    case "terminal_resize": {
+      if (typeof message.terminalId !== "string" || typeof message.cols !== "number" || typeof message.rows !== "number") return;
+      terminalManager.resize(message.terminalId, message.cols, message.rows);
+      break;
+    }
+    case "terminal_get_cwd": {
+      if (typeof message.terminalId !== "string") return;
+      terminalManager.getCwd(message.terminalId).then((cwd) => {
+        if (cwd) {
+          send(socket, { type: "terminal_cwd", terminalId: message.terminalId, cwd });
+        }
+      }).catch(() => {});
+      break;
+    }
+    case "terminal_close": {
+      if (typeof message.terminalId !== "string") return;
+      terminalManager.close(message.terminalId);
+      break;
+    }
   }
 }
 
@@ -3464,6 +3521,7 @@ handleWsConnection = (socket, workspaceRoot) => {
     });
   socket.on("message", (data: Buffer) => handleClientMessage(socket, data.toString()));
   socket.on("close", () => {
+    terminalManager.closeAllForSocket(socket);
     const bound = clients.get(socket);
     clients.delete(socket);
     // The idle clock starts when the last watcher leaves, not at the next sweep.

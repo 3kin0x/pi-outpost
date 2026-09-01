@@ -721,6 +721,10 @@ export type ServerMessage =
    */
   | ({ type: "workspace_switched" } & SessionSnapshot)
   | { type: "workspace_error"; message: string }
+  | { type: "terminal_data"; terminalId: string; data: string }
+  | { type: "terminal_cwd"; terminalId: string; cwd: string }
+  | { type: "terminal_exit"; terminalId: string; exitCode?: number }
+  | { type: "terminal_error"; terminalId: string; message: string }
   | ExtensionUIRequest;
 
 /** Client -> server */
@@ -852,6 +856,11 @@ export type ClientMessage =
        */
       userExtensionPaths?: string[];
     }
+  | { type: "terminal_open"; terminalId: string; cwd?: string; cols?: number; rows?: number }
+  | { type: "terminal_input"; terminalId: string; data: string }
+  | { type: "terminal_resize"; terminalId: string; cols: number; rows: number }
+  | { type: "terminal_get_cwd"; terminalId: string }
+  | { type: "terminal_close"; terminalId: string }
   | ExtensionUIResponse;
 
 /**

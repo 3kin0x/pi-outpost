@@ -39,6 +39,7 @@ import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TokenGate } from "./components/TokenGate";
 import { WorkPlanPanel } from "./components/WorkPlanPanel";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { useAgent } from "./useAgent";
 
 export interface AppHandle {
@@ -133,6 +134,12 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     switchWorkspace,
     openProject,
     closeProject,
+    openTerminal,
+    sendTerminalInput,
+    getTerminalCwd,
+    resizeTerminal,
+    closeTerminal,
+    subscribeTerminal,
   } = useAgent(serverUrl, token, embedded, workspace);
   useWorkspaceNotifications(state.workspaces, state.workspace?.root ?? null);
   /**
@@ -220,6 +227,18 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
   // Session analysis drawer: closed until asked for, from the model bar's usage indicator.
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [workPlanOpen, setWorkPlanOpen] = useState(true);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "`") {
+        event.preventDefault();
+        setTerminalOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
   function toggleAnalysis() {
     const next = !analysisOpen;
     setAnalysisOpen(next);
@@ -845,6 +864,8 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             onUpdateConfig={updateConfig}
             onFetchGitLog={fetchGitLog}
             onShowCommit={fetchGitShow}
+            terminalOpen={terminalOpen}
+            onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
           />
 
           {/* `z-0` makes this a stacking context, so everything inside it (the file
@@ -1080,6 +1101,32 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
           )}
           </div>
           </div>
+
+          <TerminalPanel
+            open={terminalOpen}
+            onClose={() => setTerminalOpen(false)}
+            cwd={state.workspace?.root}
+            onSetWorkspaceRoot={(newRoot) => {
+              if (openProject && !embedded) {
+                openProject(newRoot);
+              } else {
+                updateConfig({
+                  sandbox: {
+                    root: newRoot,
+                    allowWrite: state.sandbox?.allowWrite ?? false,
+                    allowBash: state.sandbox?.allowBash ?? false,
+                    ...(state.sandbox?.writableRoot ? { writableRoot: state.sandbox.writableRoot } : {}),
+                  },
+                });
+              }
+            }}
+            openTerminal={openTerminal}
+            sendTerminalInput={sendTerminalInput}
+            getTerminalCwd={getTerminalCwd}
+            resizeTerminal={resizeTerminal}
+            closeTerminal={closeTerminal}
+            subscribeTerminal={subscribeTerminal}
+          />
 
           <footer className="border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
             <div className="mx-auto max-w-3xl">
