@@ -17,6 +17,7 @@ final source edit.
 | `npm run build` | `done: pi-outpost 0.18.0` |
 | `npm run build:e2e-host` | built |
 | `npx playwright test --config e2e/playwright.config.ts outcome` | 5 passed |
+| `npx playwright test --config e2e/playwright.config.ts` (whole suite) | 63 passed |
 | `check-scenario-coverage.mjs --all` | `✓ add-workspace-outcome-view: 22 scenario(s), all covered with existing citations` |
 
 The scenario gate ships on `main` (PR #148); this branch predates that merge, so it
