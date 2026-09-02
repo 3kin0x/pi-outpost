@@ -324,6 +324,8 @@ function stateFromXY(xy: string): GitFileState {
 export interface GitStatusResult {
   repos: GitRepoStatus[];
   files: GitFileStatus[];
+  /** Safe per-repository diagnostics retained when a multi-repository sweep is partial. */
+  failures: { repo: string; message: string }[];
   /**
    * Repositories in the set that could not answer, by id.
    *
@@ -347,7 +349,7 @@ export async function gitStatusFor(repo: GitRepo): Promise<GitStatusResult> {
   // directory to one "dir/" entry, leaving the files inside without badges)
   const out = await runGit(repo.cwd, ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "--", "."]);
   const repoStatus: GitRepoStatus = { repo: repo.id, branch: "", ahead: 0, behind: 0 };
-  const result: GitStatusResult = { repos: [repoStatus], files: [], missing: [] };
+  const result: GitStatusResult = { repos: [repoStatus], files: [], missing: [], failures: [] };
 
   // status paths are relative to the directory git ran in; the `-- .` pathspec already
   // confines entries, the "../" guard is defense in depth
@@ -424,6 +426,10 @@ export async function gitStatus(repos: readonly GitRepo[], scope?: GitRepo): Pro
     if (failure) throw failure;
   }
   const missing = read.filter((_, index) => answers[index] instanceof Error).map((repo) => repo.id);
+  const failures = read.flatMap((repo, index) => {
+    const answer = answers[index];
+    return answer instanceof Error ? [{ repo: repo.id, message: answer.message }] : [];
+  });
 
   // A repository nested inside another appears twice: as itself, and as the single
   // entry its container reports for it - a gitlink, or an untracked directory named
@@ -433,6 +439,7 @@ export async function gitStatus(repos: readonly GitRepo[], scope?: GitRepo): Pro
     repos: ok.flatMap((answer) => answer.repos),
     files: ok.flatMap((answer) => answer.files).filter((file) => !nested.has(file.path.replace(/\/$/, ""))),
     missing,
+    failures,
   };
 }
 

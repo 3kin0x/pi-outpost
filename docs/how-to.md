@@ -85,6 +85,13 @@ is ready for review, but never includes plan or workspace content. Switching to 
 project does not clear the state; acknowledge the result in the conversation, or ask
 for meaningful follow-up work.
 
+Use **Outcome** in the header to review the selected project's recorded result without
+reconstructing it from the conversation. It shows Work Plan progress, explicit evidence, and
+changed files for that project only. A partial repository read or missing verification stays
+visible as partial, unavailable, or not recorded; it is never upgraded to success. Task and file
+entries open their existing detail views. Switching projects closes the drawer and discards the
+old project's response; reopening Outcome asks the project now selected.
+
 Two knobs, if the defaults do not suit:
 
 ```json

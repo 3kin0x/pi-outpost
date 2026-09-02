@@ -39,6 +39,7 @@ export type {
   GitStatusState,
   GitDiffState,
   GitShowState,
+  OutcomeState,
   ExtensionNotification,
   ExtensionWidget,
 } from "./useAgent";
@@ -68,6 +69,7 @@ export { GitMenu } from "./components/GitMenu";
 export { Header } from "./components/Header";
 export { ModelBar } from "./components/ModelBar";
 export { Onboarding } from "./components/Onboarding";
+export { OutcomePanel } from "./components/OutcomePanel";
 export { SettingsMenu } from "./components/SettingsMenu";
 export { Sidebar } from "./components/Sidebar";
 export { TokenGate } from "./components/TokenGate";

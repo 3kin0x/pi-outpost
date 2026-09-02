@@ -276,6 +276,9 @@ describe("status across several repositories", () => {
       status.repos.some((repo) => repo.repo === "gone"),
       false,
     );
+    assert.deepEqual(status.missing, ["gone"]);
+    assert.equal(status.failures[0].repo, "gone");
+    assert.match(status.failures[0].message, /gone|directory|git/i);
   });
 
   test("but a workspace where every repository fails still surfaces the error", async () => {

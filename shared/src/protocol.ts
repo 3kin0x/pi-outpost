@@ -5,6 +5,19 @@
  */
 
 /** Image attachment on the wire (raw base64, no data: prefix). */
+export type {
+  OutcomeAvailability,
+  OutcomeEntry,
+  OutcomeSection,
+  OutcomeStatus,
+  OutcomeTarget,
+  OutcomeVerification,
+  WorkspaceOutcome,
+  WorkPlanProgress,
+} from "./outcome.ts";
+export { outcomeVerification, workPlanProgress } from "./outcome.ts";
+import type { WorkspaceOutcome } from "./outcome.ts";
+
 export interface WireImage {
   data: string;
   mimeType: string;
@@ -612,6 +625,7 @@ export type ServerMessage =
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "context_usage"; usage: ContextUsage }
   | { type: "work_plan_changed"; workPlan: WorkPlan | null }
+  | { type: "workspace_outcome"; requestId: string; outcome: WorkspaceOutcome }
   | { type: "compaction_start" }
   | { type: "compaction_end"; errorMessage?: string }
   | { type: "error"; message: string }
@@ -817,6 +831,7 @@ export type ClientMessage =
    * (the old exchange stays reachable through the tree).
    */
   | { type: "edit_prompt"; entryId: string; text: string; images?: WireImage[] }
+  | { type: "get_outcome"; requestId: string }
   /** `repo` reads one repository instead of sweeping every one of them. */
   | { type: "git_status"; repo?: string; requestId: string }
   /** `repo` names which repository of the workspace to read, as `GitRepoStatus.repo` does. */

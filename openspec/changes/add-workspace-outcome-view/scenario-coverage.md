@@ -1,0 +1,37 @@
+# Scenario coverage
+
+Generated after enumerating scenarios with:
+
+```sh
+rg '^#### Scenario:' openspec/
+```
+
+Coalescing itself is not a spec scenario; it is asserted in `ui/src/useAgent.test.ts` (one request in flight, one trailing refresh) and in `server/test/outcome-server.test.mjs` (“filesystem bursts stay on the existing broadcasts”), and exercised end to end by `e2e/outcome.spec.ts`. Recovery of an open drawer after a dropped connection is likewise not a scenario; it is asserted in `ui/src/useAgent.test.ts` ("asks again for an open Outcome once the connection comes back") and exercised in `e2e/outcome.spec.ts`.
+
+All scenarios added or modified by this change are covered. The three pre-existing workspace-isolation scenarios remain covered by the existing real-server suite and are repeated here because their requirement is modified by this delta.
+
+| Spec scenario | State | Test and contract assertion |
+|---|---|---|
+| `multi-project-workspaces / EventsDoNotCrossWorkspaces` | covered | `server/test/multiProjectWorkspaces.test.mjs` — “a client hears about another project's activity, and none of its content” asserts the broadcast has only `type,workspaces`; `server/test/outcome-server.test.mjs` asserts Outcome goes only to its requester. |
+| `multi-project-workspaces / SandboxIsPerWorkspace` | covered | `server/test/multiProjectWorkspaces.test.mjs` — workspace file read/write confinement tests exercise both roots and reject cross-root access. |
+| `multi-project-workspaces / RepositoriesArePerWorkspace` | covered | `server/test/multiProjectWorkspaces.test.mjs` — repository-status isolation assertions keep each root's paths separate; `outcome-server.test.mjs` additionally switches roots and proves each Outcome contains only that root's modified file. |
+| `multi-project-workspaces / OutcomeIsPerWorkspace` | covered | `server/test/outcome-server.test.mjs` — two real workspaces have different plans, evidence, sessions, and modified files; after switching, assertions reject the other workspace's task and file. `e2e/outcome.spec.ts` — “switching project drops the previous Outcome rather than carrying it over” switches in the running app and asserts the reopened panel holds the new workspace's empty plan and none of the previous project's tasks or files. |
+| `multi-project-workspaces / Workspace switch rejects stale Outcome` | covered | `ui/src/useAgent.test.ts` — “discards stale request, session, and workspace responses” switches from `/a` to `/b`, delivers A's old response, and asserts Outcome remains absent; “drops a loaded Outcome when the workspace or the session it describes is replaced” covers the result already on screen, for both replacements. |
+| `workspace-outcome / Outcome uses recorded structured state` | covered | `server/test/outcome-server.test.mjs` asserts exact task, evidence, and git entries from persisted structured state; `server/test/outcome.test.ts` covers the three contributors directly. |
+| `workspace-outcome / Conversation claims do not become outcome facts` | covered | `server/test/outcome.test.ts` — “ignores conversation claims…” supplies a successful prose claim outside the contributor contract and asserts it is absent while verification remains not recorded. |
+| `workspace-outcome / Stable ordering` | covered | `server/test/outcome.test.ts` — “orders contributors stably…” and “preserves plan status reasons and deterministic evidence” compare repeated values and exact contributor/entry order. |
+| `workspace-outcome / Blocked and failed work remains prominent` | covered | `ui/src/components/OutcomePanel.test.tsx` — “shows adverse…” asserts blocked reason and failed label are visible and no synthetic completion copy exists; `e2e/outcome.spec.ts` — “Outcome reports recorded plan, verification and changed files without claiming success” asserts the same against the real server, including the absence of any completion claim in the rendered panel. |
+| `workspace-outcome / Incomplete work is not completed` | covered | `server/test/outcome-shared.test.ts` counts `todo` and `in_progress` independently; `OutcomePanel.test.tsx` asserts both labels render. |
+| `workspace-outcome / Review-ready work still needs review` | covered | `OutcomePanel.test.tsx` asserts “Needs review”; `Header.test.tsx` asserts the ready-for-review Outcome emphasis without changing task state. |
+| `workspace-outcome / Informational evidence does not verify work` | covered | `server/test/outcome-shared.test.ts` asserts informational-only evidence aggregates to `not-recorded`; `OutcomePanel.test.tsx` keeps the informational record visible. |
+| `workspace-outcome / Mixed verification has conservative precedence` | covered | `server/test/outcome-shared.test.ts` asserts `failed > inconclusive > passed > not-recorded` across mixed evidence. |
+| `workspace-outcome / Changes from multiple repositories are visible` | covered | `server/test/outcome.test.ts` — “attributes and sorts every file state across repositories” asserts repository group, path, state, and deterministic order for both repos; `e2e/outcome.spec.ts` reads both repositories' entries and their states back out of the DOM, on two real repositories under one workspace. |
+| `workspace-outcome / Partial repository result is not clean` | covered | `server/test/outcome.test.ts` — “distinguishes clean…” asserts partial availability plus an unavailable-repository entry while preserving the successful file; `OutcomePanel.test.tsx` asserts the partial label. |
+| `workspace-outcome / Open a task from Outcome` | covered | `ui/src/App.test.tsx` — “switches from it to the requested Work Plan task” asserts Outcome closes and the target tree item is selected; `WorkPlanPanel.test.tsx` asserts a removed target is reported; `e2e/outcome.spec.ts` — “Outcome entries open the source they name” clicks the entry and reads the task's blocked reason back from the Work Plan drawer. |
+| `workspace-outcome / Open a changed file from Outcome` | covered | `ui/src/App.test.tsx` asserts a changed-file target calls the existing `readFile` route; `OutcomePanel.test.tsx` separately asserts diff and untracked file target shapes; `e2e/outcome.spec.ts` clicks the entry and asserts the confined viewer shows that file's real content. |
+| `workspace-outcome / Unsupported evidence reference remains legible` | covered | `server/test/outcome.test.ts` rejects unsafe/unsupported target schemes; `OutcomePanel.test.tsx` asserts the opaque reference remains text and is not inside a button or link; `e2e/outcome.spec.ts` asserts a `mailto:` reference renders with no link in the running app. |
+| `workspace-outcome / Existing session has no Work Plan` | covered | `server/test/outcome.test.ts` asserts the legacy plan section is empty with explicit no-plan copy; `OutcomePanel.test.tsx` asserts it renders. |
+| `workspace-outcome / Existing Work Plan has no evidence` | covered | `server/test/outcome.test.ts` and `outcome-shared.test.ts` assert `not-recorded`; `OutcomePanel.test.tsx` asserts “Verification not recorded.” |
+| `workspace-outcome / One contributor is unavailable` | covered | `server/test/outcome.test.ts` isolates a thrown contributor as unavailable; `ui/src/useAgent.test.ts` asserts an available section remains beside it. |
+| `workspace-outcome / Future contributor preserves existing sections` | covered | `server/test/outcome.test.ts` — “preserves existing sections…” deep-compares the original section after registering a later contributor. |
+

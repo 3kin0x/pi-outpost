@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import type { Theme, WireImage } from "@pi-outpost/shared";
+import type { OutcomeTarget, Theme, WireImage } from "@pi-outpost/shared";
 import { AssistantMessage } from "./components/AssistantMessage";
 import { CustomMessageCard } from "./components/CustomMessageCard";
 import { SessionAnalysisPanel } from "./components/SessionAnalysis";
@@ -39,6 +39,7 @@ import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TokenGate } from "./components/TokenGate";
 import { WorkPlanPanel } from "./components/WorkPlanPanel";
+import { OutcomePanel } from "./components/OutcomePanel";
 import { useAgent } from "./useAgent";
 
 export interface AppHandle {
@@ -133,6 +134,8 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
     switchWorkspace,
     openProject,
     closeProject,
+    setOutcomeActive,
+    refreshOutcome,
   } = useAgent(serverUrl, token, embedded, workspace);
   useWorkspaceNotifications(state.workspaces, state.workspace?.root ?? null);
   /**
@@ -220,16 +223,32 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
   // Session analysis drawer: closed until asked for, from the model bar's usage indicator.
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [workPlanOpen, setWorkPlanOpen] = useState(true);
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
+  const clearRequestedTask = useCallback(() => setRequestedTaskId(null), []);
   function toggleAnalysis() {
     const next = !analysisOpen;
     setAnalysisOpen(next);
-    if (next) setWorkPlanOpen(false);
+    if (next) { setWorkPlanOpen(false); setOutcomeOpen(false); }
   }
   function toggleWorkPlan() {
     const next = !workPlanOpen;
     setWorkPlanOpen(next);
-    if (next) setAnalysisOpen(false);
+    if (next) { setAnalysisOpen(false); setOutcomeOpen(false); }
   }
+  function toggleOutcome() {
+    const next = !outcomeOpen;
+    setOutcomeOpen(next);
+    if (next) { setAnalysisOpen(false); setWorkPlanOpen(false); }
+  }
+  useEffect(() => {
+    setOutcomeActive(outcomeOpen);
+    return () => setOutcomeActive(false);
+  }, [outcomeOpen, setOutcomeActive, state.sessionId, state.workspace?.root]);
+  useEffect(() => {
+    setOutcomeOpen(false);
+    setRequestedTaskId(null);
+  }, [boundRoot]);
   const [attachmentErrors, setAttachmentErrors] = useState<string[]>([]);
   // Files being copied into the workspace right now — the composer shows one chip
   // each and refuses to send while any of them is outstanding.
@@ -808,8 +827,10 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
             showThemeToggle={state.branding.allowThemeToggle !== false}
             statuses={state.statuses}
             sidebarOpen={sidebarOpen}
+            outcomeOpen={outcomeOpen}
             hideTools={hideTools}
             onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+            onToggleOutcome={toggleOutcome}
             onToggleHideTools={toggleHideTools}
             onToggleTheme={toggleTheme}
             onNewSession={newSession}
@@ -859,6 +880,29 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               onOpenWorkspace={(path) => {
                 setDiffOnOpen(false);
                 readFile(path);
+              }}
+              requestedTaskId={requestedTaskId}
+              onTaskRequestHandled={clearRequestedTask}
+            />
+          )}
+          {outcomeOpen && (
+            <OutcomePanel
+              state={state.outcome}
+              onClose={() => setOutcomeOpen(false)}
+              onRefresh={refreshOutcome}
+              onTarget={(target: OutcomeTarget) => {
+                if (target.kind === "work-plan-task") {
+                  setRequestedTaskId(target.taskId);
+                  setOutcomeOpen(false);
+                  setAnalysisOpen(false);
+                  setWorkPlanOpen(true);
+                } else if (target.kind === "workspace-file") {
+                  setDiffOnOpen(false);
+                  readFile(target.path);
+                } else if (target.kind === "workspace-diff") {
+                  setDiffOnOpen(true);
+                  readFile(target.path);
+                }
               }}
             />
           )}
@@ -1065,7 +1109,7 @@ const App = forwardRef<AppHandle, AppProps>(function App({ serverUrl = "", rootE
               drawer, so the button centres on the conversation the reader can
               see rather than on the region the drawer is sitting in. */}
           <div
-            className={`pointer-events-none absolute inset-x-0 bottom-4 z-0 flex justify-center ${analysisOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
+            className={`pointer-events-none absolute inset-x-0 bottom-4 z-0 flex justify-center ${analysisOpen || outcomeOpen ? "md:pr-[26rem]" : state.workPlan && workPlanOpen ? "md:pr-[23rem]" : ""}`}
           >
           {!atBottom && (
             <button

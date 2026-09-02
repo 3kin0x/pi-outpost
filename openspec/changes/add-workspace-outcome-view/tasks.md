@@ -1,0 +1,42 @@
+## 1. Shared Outcome Contract
+
+- [x] 1.1 Add the closed `WorkspaceOutcome`, section, entry, availability, semantic status, and navigation-target types to the shared package; verify TypeScript rejects unknown target/action shapes and shared typecheck passes.
+- [x] 1.2 Implement pure deterministic plan-progress and verification aggregation, including failed/inconclusive/passed/not-recorded precedence and informational evidence; verify focused shared tests cover every evidence combination and all Work Plan statuses.
+- [x] 1.3 Extend repository status results with safe repository-specific failure information while preserving existing callers; verify git tests distinguish clean, no repository, globally unavailable, and partially unavailable multi-repository states.
+
+## 2. Server Composition and Protocol
+
+- [x] 2.1 Implement the server-side Outcome contributor contract and composer with stable ordering and per-contributor failure isolation; verify unit tests cover successful, empty, partial, unavailable, and unknown-contributor cases without executable/render payloads.
+- [x] 2.2 Implement Work Plan progress and evidence contributors from the synchronized current-session plan; verify tests prove transcript prose is ignored, legacy plans remain readable, status reasons are preserved, and equal input yields equal output.
+- [x] 2.3 Implement the repository-changes contributor across the workspace repository set; verify tests cover multi-repository attribution, all file states, deterministic ordering, clean results, no-repository results, and partial failure.
+- [x] 2.4 Add correlated `get_outcome` and `workspace_outcome` protocol messages and the workspace-bound server handler, waiting for Work Plan synchronization before capture; verify protocol and server tests prove the response echoes request/workspace/session identity and is sent only to the requesting workspace connection.
+- [x] 2.5 Coalesce Outcome invalidations from Work Plan, session, repository-set, and watched-file changes without changing cross-workspace activity payloads. Implemented client-side over the existing broadcasts (`work_plan_changed`, `file_changed`, `directory_changed`, `git_repositories_changed`, `agent_end`): one request in flight, one queued trailing refresh, no new server broadcast and no Outcome content in workspace summaries.
+  - Server side asserted in `server/test/outcome-server.test.mjs` — "filesystem bursts stay on the existing broadcasts": eight writes into a listed directory produce the existing change broadcasts, no `workspace_outcome` is ever pushed unrequested, no other payload carries outcome content, and a refresh after the burst sees all eight files. The one-in-flight/one-trailing rule itself is asserted in the hook (`ui/src/useAgent.test.ts`) and exercised end to end by `e2e/outcome.spec.ts`.
+
+## 3. Client State and Outcome View
+
+- [x] 3.1 Add Outcome request/loading/result/error state and refresh correlation to `useAgent`; verify hook tests discard responses after request, session, or workspace identity changes and retain available sections when another contributor is unavailable.
+- [x] 3.2 Add an always-available header Outcome control and mutually exclusive `OutcomePanel`, Work Plan, and analysis drawer state; verify component/App tests cover open, close, ready-for-review emphasis, legacy availability, keyboard access, narrow layout, and drawer switching.
+- [x] 3.3 Render plan progress, verification, changed files, source labels, status reasons, and explicit empty/partial/unavailable states without a synthetic success claim; verify UI tests assert blocked, active, review-ready, failed, inconclusive, informational, no-evidence, clean, no-repository, and unavailable copy and accessible names.
+- [x] 3.4 Connect task targets to a controlled Work Plan task selection and file/diff targets to the existing confined viewer routes; verify integration tests cover a removed task, tracked and untracked files, safe HTTP(S) evidence links, confined workspace references, and unsupported reference schemes without dead controls.
+- [x] 3.5 Refresh an open Outcome after relevant source invalidation with in-flight coalescing; verify hook/App tests simulate rapid plan and filesystem events and prove stale content never renders under a new workspace or session.
+  - `applySnapshot` clears `outcome`, so a loaded result never survives into the session or workspace the snapshot brings. Asserted by `ui/src/useAgent.test.ts` — "drops a loaded Outcome when the workspace or the session it describes is replaced" — for `workspace_switched` and `session_replaced` alike; removing the line makes that test fail (checked by mutation).
+  - Correction to an earlier note in this file: there was **no** stale-render-under-the-new-project's-name defect. Switching project already closes every drawer (`ui/src/App.tsx`, the `boundRoot` effect), so the panel unmounts with the project it described. The e2e spec that "found a defect" had simply assumed the panel stays open and refreshes in place; it now asserts the real contract — the drawer closes, and reopening shows the new workspace's own state with none of the previous one's. The clear still earns its place: without it, reopening after a switch, and `session_replaced` in place (where no drawer closes), would render the previous result until the refresh landed.
+
+## 4. Acceptance and Documentation
+
+- [x] 4.1 Enumerate every applicable main and delta `#### Scenario:` with `rg '^#### Scenario:' openspec/`, create the scenario-to-test matrix, and verify each Outcome and workspace-isolation scenario is covered by an assertion that would fail when its GIVEN/WHEN/THEN contract breaks.
+  - `scenario-coverage.md` covers all 22 declared scenarios, and the citations were re-read after the 3.5 work: `e2e/outcome.spec.ts` is now cited on the seven rows where the running app is the strongest evidence (per-workspace Outcome, stale rejection, adverse-state prominence, multi-repository attribution, both navigation rows, unresolvable reference). The gate passes: `✓ add-workspace-outcome-view: 22 scenario(s), all covered with existing citations`.
+- [x] 4.2 Update the relevant README and developer/API documentation for the Outcome entry point, source semantics, conservative verification labels, navigation, and legacy/partial states; verify links, documented message shapes, and commands against the implementation. (`README.md`, `docs/how-to.md`, `docs/development.md`.)
+- [x] 4.3 Run focused shared, server, hook, and Outcome UI tests, then `npm run typecheck`, the relevant workspace test suites, `npm run build`, and `openspec validate add-workspace-outcome-view --strict`; record exact commands and results in the change verification artifact.
+  - Re-run after every source edit and recorded in `verification.md` with exact commands and results.
+- [x] 4.4 Exercise the running app with Playwright using structured plans/evidence and multiple repositories, read back the DOM and opened file/diff state, then adversarially switch workspace/session mid-refresh, burst file changes, remove a task/file/repository underneath the view, and rapidly toggle drawers; verify no stale, optimistic, stuck-loading, or cross-workspace Outcome is rendered.
+  - Done and green: `e2e/outcome.spec.ts` — a dedicated server in `e2e/global-setup.ts` with two real git repositories, a plan carrying passed/failed/informational evidence, and a second project. Three specs pass: recorded state without a success claim; navigation to the Work Plan task and to the confined file view; and the adversarial pass (burst of eight writes, deletion underneath the view, drawer thrashing).
+  - The fourth spec — switching project with the drawer open — now asserts the real contract (drawer closes with its project; reopening shows the new workspace's state and none of the previous one's). `npx playwright test --config e2e/playwright.config.ts outcome` → 4 passed.
+- [x] 4.5 Inspect `git diff HEAD`, run the required code review with the task diff, address every CRITICAL/HIGH finding, and record the verdict plus any remaining MEDIUM/LOW findings before reporting implementation complete.
+
+  - `codex-review --uncommitted`: no P0/P1; two P2 findings, both verified at the cited lines and fixed (Outcome not re-requested after a reconnect; a Work Plan task request replayed over later selections). Verdict and mutation checks recorded in `verification.md`.
+
+## Remaining
+
+Nothing. After merge, archive from `main` only.
