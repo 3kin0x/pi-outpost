@@ -3480,7 +3480,7 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
         message.rows ?? 24,
         (termId, data) => send(socket, { type: "terminal_data", terminalId: termId, data }),
         (termId, exitCode) => send(socket, { type: "terminal_exit", terminalId: termId, exitCode }),
-        config.terminal,
+        { ...config.terminal, gitPath: config.gitPath },
       ).catch((error) => {
         send(socket, {
           type: "terminal_error",

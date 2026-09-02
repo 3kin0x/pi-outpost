@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { TerminalManager } from "../src/terminalManager.ts";
+import { TerminalManager, findWindowsGitBash } from "../src/terminalManager.ts";
 import type { WebSocket } from "ws";
 
 describe("TerminalManager", () => {
@@ -20,6 +20,13 @@ describe("TerminalManager", () => {
     const custom = manager.getDefaultShell({ shell: "/bin/sh", shellArgs: ["-e"] });
     assert.equal(custom.shell, "/bin/sh");
     assert.deepEqual(custom.args, ["-e"]);
+  });
+
+  test("findWindowsGitBash handles non-win32 platforms or configured gitPath", () => {
+    if (process.platform !== "win32") {
+      assert.equal(findWindowsGitBash(), undefined);
+      assert.equal(findWindowsGitBash("/nonexistent/git"), undefined);
+    }
   });
 
   test("open, write, resize, and close terminal lifecycle", async () => {

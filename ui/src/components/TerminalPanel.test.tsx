@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TerminalPanel } from "./TerminalPanel";
 import { ThemeContext } from "../theme/ThemeContext";
+import { Terminal } from "@xterm/xterm";
 
 describe("TerminalPanel", () => {
   const defaultProps = {
@@ -166,6 +167,8 @@ describe("TerminalPanel", () => {
       return () => {};
     });
 
+    const writelnSpy = vi.spyOn(Terminal.prototype, "writeln");
+
     render(
       <TerminalPanel
         {...defaultProps}
@@ -194,16 +197,24 @@ describe("TerminalPanel", () => {
     });
     expect(screen.getByText(/var\/www\/html/)).toBeInTheDocument();
 
-    // Test onExit
+    // Test onExit: contract is to output formatted exit message to the terminal
     act(() => {
       capturedCallbacks.onExit(0);
+    });
+    expect(writelnSpy).toHaveBeenCalledWith(expect.stringContaining("[Process completed (exit code 0)]"));
+
+    act(() => {
       capturedCallbacks.onExit(1);
     });
+    expect(writelnSpy).toHaveBeenCalledWith(expect.stringContaining("[Process completed (exit code 1)]"));
 
-    // Test onError
+    // Test onError: contract is to output red error notice to the terminal
     act(() => {
       capturedCallbacks.onError("connection lost");
     });
+    expect(writelnSpy).toHaveBeenCalledWith(expect.stringContaining("[Terminal error: connection lost]"));
+
+    writelnSpy.mockRestore();
   });
 
   it("handles root filesystem confirmation prompt when syncing", () => {
@@ -240,10 +251,14 @@ describe("TerminalPanel", () => {
   });
 
   it("handles clear terminal action", () => {
+    const clearSpy = vi.spyOn(Terminal.prototype, "clear");
     render(<TerminalPanel {...defaultProps} />);
 
     const clearButton = screen.getByTitle("Clear Terminal Output");
     fireEvent.click(clearButton);
+
+    expect(clearSpy).toHaveBeenCalled();
+    clearSpy.mockRestore();
   });
 
   it("handles clicking tabs to switch active tab", () => {
@@ -252,35 +267,161 @@ describe("TerminalPanel", () => {
     const addButton = screen.getByTitle("New Terminal Tab");
     fireEvent.click(addButton);
 
-    // Click first tab to switch back
+    // Tab 2 is active initially; Tab 1 is inactive
     const tab1 = screen.getByText("terminal 1");
+    const tab2 = screen.getByText("terminal 2");
+    const tab1Container = tab1.closest("[title='Double-click to rename tab']");
+    const tab2Container = tab2.closest("[title='Double-click to rename tab']");
+
+    expect(tab2Container).toHaveClass("font-medium");
+    expect(tab1Container).not.toHaveClass("font-medium");
+
+    // Click tab 1 to switch back
     fireEvent.click(tab1);
-    expect(tab1).toBeInTheDocument();
+
+    expect(tab1Container).toHaveClass("font-medium");
+    expect(tab2Container).not.toHaveClass("font-medium");
   });
 
   it("toggles theme dynamically", () => {
+    let capturedTerminal: any;
+    const origOpen = Terminal.prototype.open;
+    const openSpy = vi.spyOn(Terminal.prototype, "open").mockImplementation(function (this: any, el: HTMLElement) {
+      capturedTerminal = this;
+      return origOpen.call(this, el);
+    });
+
     const { rerender } = render(
       <ThemeContext.Provider value="light">
         <TerminalPanel {...defaultProps} />
       </ThemeContext.Provider>,
     );
 
+    expect(capturedTerminal).toBeDefined();
+    expect(capturedTerminal.options.theme?.background).toBe("#ffffff");
+
     rerender(
       <ThemeContext.Provider value="dark">
         <TerminalPanel {...defaultProps} />
       </ThemeContext.Provider>,
     );
+
+    expect(capturedTerminal.options.theme?.background).toBe("#09090b");
+    openSpy.mockRestore();
   });
 
   it("calls onClose when removing the last remaining tab", () => {
     const onClose = vi.fn();
     render(<TerminalPanel {...defaultProps} onClose={onClose} />);
 
-    // Add a tab then remove both
-    const addButton = screen.getByTitle("New Terminal Tab");
-    fireEvent.click(addButton);
-
+    // Removing the only remaining tab invokes onClose()
     const closeButtons = screen.getAllByRole("button", { name: "Close terminal tab" });
+    expect(closeButtons).toHaveLength(1);
     fireEvent.click(closeButtons[0]);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes typed keystrokes to sendTerminalInput and throttles cwd requests on Enter", () => {
+    vi.useFakeTimers();
+    let capturedOnData: ((data: string) => void) | undefined;
+    const origOpen = Terminal.prototype.open;
+    const openSpy = vi.spyOn(Terminal.prototype, "open").mockImplementation(function (this: any, el: HTMLElement) {
+      Object.defineProperty(this, "onData", {
+        value: (cb: (data: string) => void) => {
+          capturedOnData = cb;
+          return { dispose: vi.fn() };
+        },
+        configurable: true,
+      });
+      return origOpen.call(this, el);
+    });
+
+    const sendTerminalInput = vi.fn();
+    const getTerminalCwd = vi.fn();
+
+    render(
+      <TerminalPanel
+        {...defaultProps}
+        sendTerminalInput={sendTerminalInput}
+        getTerminalCwd={getTerminalCwd}
+      />,
+    );
+
+    expect(capturedOnData).toBeDefined();
+    // Mount effect requests cwd once; clear to isolate keystroke behavior
+    expect(getTerminalCwd).toHaveBeenCalledTimes(1);
+    getTerminalCwd.mockClear();
+
+    // 1. Regular keystroke without Enter
+    act(() => {
+      capturedOnData!("echo hello");
+    });
+    expect(sendTerminalInput).toHaveBeenCalledWith("term-1", "echo hello");
+    expect(getTerminalCwd).not.toHaveBeenCalled();
+
+    // 2. Press Enter (\r): forwards keystroke and immediately requests cwd
+    act(() => {
+      capturedOnData!("\r");
+    });
+    expect(sendTerminalInput).toHaveBeenCalledWith("term-1", "\r");
+    expect(getTerminalCwd).toHaveBeenCalledTimes(1);
+    expect(getTerminalCwd).toHaveBeenCalledWith("term-1");
+
+    // 3. Press Enter again immediately (<1000ms): keystroke is forwarded, cwd query is throttled
+    act(() => {
+      capturedOnData!("\r");
+    });
+    expect(sendTerminalInput).toHaveBeenLastCalledWith("term-1", "\r");
+    expect(getTerminalCwd).toHaveBeenCalledTimes(1);
+
+    // Another Enter while debounce timer is already pending: does not spawn duplicate timer
+    act(() => {
+      capturedOnData!("\n");
+    });
+    expect(getTerminalCwd).toHaveBeenCalledTimes(1);
+
+    // 4. Advance time by 1000ms: catch-up timer fires cwd query
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(getTerminalCwd).toHaveBeenCalledTimes(2);
+
+    openSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("refits and calls resizeTerminal when ResizeObserver triggers", () => {
+    let capturedResizeCallback: (() => void) | undefined;
+    class TestResizeObserver {
+      constructor(cb: () => void) {
+        capturedResizeCallback = cb;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+
+    const resizeTerminal = vi.fn();
+    const { container } = render(
+      <TerminalPanel {...defaultProps} resizeTerminal={resizeTerminal} />,
+    );
+
+    expect(capturedResizeCallback).toBeDefined();
+
+    const termContainer = container.querySelector(".flex-1.min-h-0.relative");
+    const innerContainer = termContainer?.querySelector("div");
+    if (innerContainer) {
+      Object.defineProperty(innerContainer, "clientWidth", { value: 640, configurable: true });
+      Object.defineProperty(innerContainer, "clientHeight", { value: 480, configurable: true });
+    }
+
+    act(() => {
+      capturedResizeCallback!();
+    });
+
+    expect(resizeTerminal).toHaveBeenCalledWith("term-1", expect.any(Number), expect.any(Number));
+    vi.unstubAllGlobals();
   });
 });

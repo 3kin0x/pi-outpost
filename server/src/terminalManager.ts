@@ -7,7 +7,7 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { createRequire } from "node:module";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -64,8 +64,30 @@ async function getPty(): Promise<typeof pty> {
   }
 }
 
-function findWindowsGitBash(): string | undefined {
+function answersAsBash(candidate: string): boolean {
+  try {
+    const res = spawnSync(candidate, ["--version"], { timeout: 3000, encoding: "utf8" });
+    return !res.error && typeof res.stdout === "string" && /GNU bash/i.test(res.stdout);
+  } catch {
+    return false;
+  }
+}
+
+export function findWindowsGitBash(configuredGitPath?: string): string | undefined {
   if (process.platform !== "win32") return undefined;
+  const candidates: string[] = [];
+
+  if (configuredGitPath) {
+    const gitDir = path.dirname(configuredGitPath);
+    candidates.push(
+      path.join(gitDir, "..", "bin", "bash.exe"),
+      path.join(gitDir, "..", "usr", "bin", "bash.exe"),
+      path.join(gitDir, "bash.exe"),
+      path.join(configuredGitPath, "bin", "bash.exe"),
+      path.join(configuredGitPath, "usr", "bin", "bash.exe"),
+    );
+  }
+
   const env = (name: string) => process.env[name];
   const bases = [env("ProgramFiles"), env("ProgramW6432"), env("ProgramFiles(x86)")].filter(
     (b): b is string => !!b,
@@ -74,12 +96,16 @@ function findWindowsGitBash(): string | undefined {
     bases.push(path.join(env("LOCALAPPDATA")!, "Programs"));
   }
   for (const base of bases) {
-    const candidates = [
+    candidates.push(
       path.join(base, "Git", "bin", "bash.exe"),
       path.join(base, "Git", "usr", "bin", "bash.exe"),
-    ];
-    for (const candidate of candidates) {
-      if (fsSync.existsSync(candidate)) return candidate;
+    );
+  }
+  candidates.push("bash.exe");
+
+  for (const candidate of candidates) {
+    if (candidate === "bash.exe" || fsSync.existsSync(candidate)) {
+      if (answersAsBash(candidate)) return candidate;
     }
   }
   return undefined;
@@ -118,8 +144,10 @@ export class TerminalManager {
 
   /**
    * Determine the default shell for the host platform.
+   * On Windows: Git Bash -> PowerShell -> cmd.
+   * On Unix: $SHELL (or /bin/zsh on macOS, /bin/bash on Linux) with login shell args ["-l"].
    */
-  getDefaultShell(options?: { shell?: string; shellArgs?: string[] }): { shell: string; args: string[] } {
+  getDefaultShell(options?: { shell?: string; shellArgs?: string[]; gitPath?: string }): { shell: string; args: string[] } {
     if (options?.shell) {
       return {
         shell: options.shell,
@@ -128,11 +156,26 @@ export class TerminalManager {
     }
 
     if (process.platform === "win32") {
-      const gitBash = findWindowsGitBash();
+      const gitBash = findWindowsGitBash(options?.gitPath);
       if (gitBash) {
         return { shell: gitBash, args: ["-l"] };
       }
-      return { shell: "powershell.exe", args: [] };
+
+      // 2. PowerShell
+      const systemRoot = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+      const powershellCandidates = [
+        "powershell.exe",
+        path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ];
+      for (const candidate of powershellCandidates) {
+        if (candidate === "powershell.exe" || fsSync.existsSync(candidate)) {
+          return { shell: candidate, args: [] };
+        }
+      }
+
+      // 3. cmd as last resort
+      const comspec = process.env.COMSPEC || path.join(systemRoot, "System32", "cmd.exe");
+      return { shell: comspec, args: [] };
     }
 
     const shell = process.env.SHELL || (os.platform() === "darwin" ? "/bin/zsh" : "/bin/bash");
@@ -151,7 +194,7 @@ export class TerminalManager {
     rows = 24,
     onData: (terminalId: string, data: string) => void,
     onExit: (terminalId: string, exitCode?: number) => void,
-    shellOptions?: { shell?: string; shellArgs?: string[] },
+    shellOptions?: { shell?: string; shellArgs?: string[]; gitPath?: string },
   ): Promise<TerminalSession> {
     let socketInFlight = this.inFlightOpens.get(socket);
     if (!socketInFlight) {
