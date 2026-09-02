@@ -22,10 +22,21 @@ describe("TerminalManager", () => {
     assert.deepEqual(custom.args, ["-e"]);
   });
 
-  test("findWindowsGitBash handles non-win32 platforms or configured gitPath", () => {
+  test("findWindowsGitBash and Windows shell fallback resolution", () => {
+    const manager = new TerminalManager();
     if (process.platform !== "win32") {
       assert.equal(findWindowsGitBash(), undefined);
       assert.equal(findWindowsGitBash("/nonexistent/git"), undefined);
+    } else {
+      const defaultShell = manager.getDefaultShell();
+      assert.ok(typeof defaultShell.shell === "string" && defaultShell.shell.length > 0);
+      assert.ok(
+        defaultShell.shell.toLowerCase().endsWith("bash.exe") ||
+        defaultShell.shell.toLowerCase().endsWith("powershell.exe") ||
+        defaultShell.shell.toLowerCase().endsWith("cmd.exe"),
+      );
+      const bash = findWindowsGitBash("C:\\nonexistent\\path\\to\\git.exe");
+      assert.ok(bash === undefined || typeof bash === "string");
     }
   });
 

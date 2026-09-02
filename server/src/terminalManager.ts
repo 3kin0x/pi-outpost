@@ -66,15 +66,30 @@ async function getPty(): Promise<typeof pty> {
 
 function answersAsBash(candidate: string): boolean {
   try {
-    const res = spawnSync(candidate, ["--version"], { timeout: 3000, encoding: "utf8" });
+    const res = spawnSync(candidate, ["--version"], {
+      timeout: 3000,
+      encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "" },
+    });
     return !res.error && typeof res.stdout === "string" && /GNU bash/i.test(res.stdout);
   } catch {
     return false;
   }
 }
 
+const gitBashCache = new Map<string, string | undefined>();
+
+export function resetGitBashCache(): void {
+  gitBashCache.clear();
+}
+
 export function findWindowsGitBash(configuredGitPath?: string): string | undefined {
   if (process.platform !== "win32") return undefined;
+  const cacheKey = configuredGitPath ?? "";
+  if (gitBashCache.has(cacheKey)) {
+    return gitBashCache.get(cacheKey);
+  }
+
   const candidates: string[] = [];
 
   if (configuredGitPath) {
@@ -103,12 +118,17 @@ export function findWindowsGitBash(configuredGitPath?: string): string | undefin
   }
   candidates.push("bash.exe");
 
+  let result: string | undefined;
   for (const candidate of candidates) {
     if (candidate === "bash.exe" || fsSync.existsSync(candidate)) {
-      if (answersAsBash(candidate)) return candidate;
+      if (answersAsBash(candidate)) {
+        result = candidate;
+        break;
+      }
     }
   }
-  return undefined;
+  gitBashCache.set(cacheKey, result);
+  return result;
 }
 
 export interface TerminalSession {
@@ -161,16 +181,11 @@ export class TerminalManager {
         return { shell: gitBash, args: ["-l"] };
       }
 
-      // 2. PowerShell
+      // 2. PowerShell: check standard Windows installation
       const systemRoot = process.env.SystemRoot || process.env.windir || "C:\\Windows";
-      const powershellCandidates = [
-        "powershell.exe",
-        path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-      ];
-      for (const candidate of powershellCandidates) {
-        if (candidate === "powershell.exe" || fsSync.existsSync(candidate)) {
-          return { shell: candidate, args: [] };
-        }
+      const powershellPath = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+      if (fsSync.existsSync(powershellPath)) {
+        return { shell: powershellPath, args: [] };
       }
 
       // 3. cmd as last resort
@@ -233,6 +248,7 @@ export class TerminalManager {
         ...process.env,
         TERM: "xterm-256color",
         COLORTERM: "truecolor",
+        NODE_V8_COVERAGE: "",
       };
 
       ensureSpawnHelperExecutable();

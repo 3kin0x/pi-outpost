@@ -28,3 +28,8 @@ All terminal operations SHALL be scoped to the socket connection that created th
 ### Requirement: Session snapshot carries terminal availability
 
 The `SessionSnapshot` message SHALL carry `terminal: { enabled: boolean, locked?: boolean }` describing whether the terminal feature is enabled and whether runtime changes are locked.
+
+#### Scenario: Session snapshot reports terminal settings
+- **GIVEN** a server configured with terminal settings and sandbox locks
+- **WHEN** a client connects and receives the initial session snapshot
+- **THEN** the snapshot carries `terminal: { enabled: boolean, locked?: boolean }`

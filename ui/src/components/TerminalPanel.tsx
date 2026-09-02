@@ -449,17 +449,19 @@ export function TerminalPanel({
                   ) : (
                     <span>{tab.title}</span>
                   )}
-                  <span
-                    onClick={(e) => removeTab(tab.id, e)}
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Close terminal tab"
-                    className="ml-1 hover:text-red-500 rounded p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </span>
+                  {tabs.length > 1 && (
+                    <span
+                      onClick={(e) => removeTab(tab.id, e)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close terminal tab"
+                      className="ml-1 hover:text-red-500 rounded p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </span>
+                  )}
                 </div>
               );
             })}

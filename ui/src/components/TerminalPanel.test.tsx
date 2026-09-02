@@ -310,16 +310,9 @@ describe("TerminalPanel", () => {
     openSpy.mockRestore();
   });
 
-  it("calls onClose when removing the last remaining tab", () => {
-    const onClose = vi.fn();
-    render(<TerminalPanel {...defaultProps} onClose={onClose} />);
-
-    // Removing the only remaining tab invokes onClose()
-    const closeButtons = screen.getAllByRole("button", { name: "Close terminal tab" });
-    expect(closeButtons).toHaveLength(1);
-    fireEvent.click(closeButtons[0]);
-
-    expect(onClose).toHaveBeenCalledTimes(1);
+  it("does not render a close button when only one tab exists", () => {
+    render(<TerminalPanel {...defaultProps} />);
+    expect(screen.queryByRole("button", { name: "Close terminal tab" })).not.toBeInTheDocument();
   });
 
   it("routes typed keystrokes to sendTerminalInput and throttles cwd requests on Enter", () => {
