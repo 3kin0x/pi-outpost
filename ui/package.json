@@ -9,6 +9,7 @@
     "./util/*": "./src/util/*"
   },
   "scripts": {
+    "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.thresholds.lines=91 --coverage.thresholds.branches=85 --coverage.thresholds.functions=93"
@@ -36,6 +37,7 @@
     "@testing-library/react": "^16.3.2",
     "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^30.0.0",
+    "oxlint": "^1.71.0",
     "vitest": "^4.1.10"
   }
 }

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { access, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -537,6 +538,91 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: reviewReadyFakeConfig } },
   );
 
+  // The Outcome view reads three authoritative sources at once, and two of them
+  // cannot be faked at the protocol level: a workspace holding SEVERAL git
+  // repositories, and a Work Plan sidecar carrying evidence. So this server gets
+  // real repositories with real working-tree changes, and a plan whose statuses
+  // and evidence results cover every label the panel can draw.
+  const outcomeRoot = await realpath(await makeWorkspace({ "readme.md": "# outcome workspace\n" }));
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+  const makeRepo = (dir: string) => {
+    git(dir, "init");
+    git(dir, "branch", "-M", "main");
+    git(dir, "config", "user.email", "test@test");
+    git(dir, "config", "user.name", "Test");
+    git(dir, "config", "commit.gpgsign", "false");
+    git(dir, "add", ".");
+    git(dir, "commit", "-m", "initial");
+  };
+  const alpha = path.join(outcomeRoot, "alpha");
+  const beta = path.join(outcomeRoot, "beta");
+  await mkdir(alpha, { recursive: true });
+  await mkdir(beta, { recursive: true });
+  await writeFile(path.join(alpha, "committed.md"), "# alpha\n");
+  await writeFile(path.join(beta, "committed.md"), "# beta\n");
+  makeRepo(alpha);
+  makeRepo(beta);
+  // One repository is modified, the other gains an untracked file: the section has
+  // to attribute each path to its own repository and keep both states.
+  await writeFile(path.join(alpha, "committed.md"), "# alpha, edited\n");
+  await writeFile(path.join(beta, "untracked.md"), "# beta addition\n");
+
+  const outcomeSession = path.join(outcomeRoot, "outcome.jsonl");
+  await writeFile(outcomeSession, "");
+  const outcomePlan = {
+    version: 1,
+    id: "outcome-plan",
+    title: "Release readiness",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [
+      {
+        id: "ship", title: "Ship the release", status: "done", dependsOn: [], resources: [],
+        evidence: [{ id: "suite", type: "test", result: "passed", summary: "Full suite green" }],
+      },
+      {
+        id: "probe", title: "Probe the staging host", status: "in_progress", dependsOn: [], resources: [],
+        evidence: [
+          { id: "http", type: "external-check", result: "failed", summary: "Staging probe returned 503" },
+          { id: "note", type: "observation", result: "informational", summary: "Provider status page mentions maintenance" },
+        ],
+      },
+      {
+        id: "sign", title: "Await signing key", status: "blocked", statusReason: "The signing key has not been issued", dependsOn: [], resources: [],
+        evidence: [],
+      },
+      {
+        id: "docs", title: "Review the release notes", status: "needs_review", dependsOn: [], resources: [],
+        evidence: [{ id: "link", type: "reference", result: "informational", summary: "Draft notes", reference: { uri: "mailto:release@example.test", label: "Mail the release desk" } }],
+      },
+    ],
+  };
+  await writeFile(`${outcomeSession}.work-plan.json`, `${JSON.stringify(outcomePlan, null, 2)}\n`);
+  const outcomeFakeConfig = path.join(outcomeRoot, "fake-rpc.json");
+  await writeFile(outcomeFakeConfig, JSON.stringify({
+    state: { sessionId: "outcome-1", sessionFile: outcomeSession, isStreaming: false },
+  }));
+  // A second project on the same server, with no plan of its own: switching to it
+  // must replace the Outcome rather than leave the first workspace's tasks on
+  // screen under another project's name.
+  const outcomeSecond = await realpath(await makeWorkspace({ "other.md": "# other workspace\n" }));
+  const outcomeSecondSession = path.join(outcomeSecond, "other.jsonl");
+  await writeFile(outcomeSecondSession, "");
+  await writeFile(outcomeFakeConfig, JSON.stringify({
+    stateByCwd: {
+      [outcomeRoot]: { sessionId: "outcome-1", sessionFile: outcomeSession, isStreaming: false },
+      [outcomeSecond]: { sessionId: "outcome-2", sessionFile: outcomeSecondSession, isStreaming: false },
+    },
+  }));
+  const outcome = await startServer(
+    outcomeRoot,
+    {
+      openProjects: [outcomeSecond],
+      agentRuntime: { mode: "rpc", executable: process.execPath, args: [path.join(REPO, "server/test/fixtures/fake-pi-rpc.mjs")], startupTimeoutMs: 20_000 },
+      sandbox: undefined,
+    },
+    { env: { ...onlyOneFakeProvider(), FAKE_PI_RPC_CONFIG: outcomeFakeConfig } },
+  );
+
   process.env.PI_E2E_HOST_URL = host.url;
   process.env.PI_E2E_SERVER_URL = server.base;
   process.env.PI_E2E_PRIMARY_PROJECT = await realpath(root);
@@ -552,6 +638,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.PI_E2E_NOTIFY_URL = notifications.base;
   process.env.PI_E2E_PROGRESS_URL = progress.base;
   process.env.PI_E2E_THINKING_URL = thinking.base;
+  process.env.PI_E2E_OUTCOME_URL = outcome.base;
+  process.env.PI_E2E_OUTCOME_WORKSPACE = outcomeRoot;
+  process.env.PI_E2E_OUTCOME_SECOND = outcomeSecond;
   process.env.PI_E2E_REVIEW_READY_URL = reviewReady.base;
   process.env.PI_E2E_REVIEW_READY_PRIMARY = reviewReadyRoot;
   process.env.PI_E2E_REVIEW_READY_SECOND = reviewReadySecond;
@@ -564,6 +653,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   return async () => {
     await terminalServer.stop();
+    await outcome.stop();
     await reviewReady.stop();
     await thinking.stop();
     await progress.stop();
@@ -579,6 +669,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await rm(secondRoot, { recursive: true, force: true });
     await rm(projectsSecondRoot, { recursive: true, force: true });
     await rm(reviewReadySecond, { recursive: true, force: true });
+    await rm(outcomeSecond, { recursive: true, force: true });
     await host.close();
   };
 }

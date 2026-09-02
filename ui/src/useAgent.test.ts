@@ -115,6 +115,124 @@ function lastRequestId() {
 
 const userItem = (text: string) => ({ kind: "user", text });
 
+const outcome = (workspaceRoot = "/a", sessionId = "sess_1") => ({
+  workspaceRoot,
+  sessionId,
+  sections: [
+    { id: "work-plan", title: "Work Plan", order: 10, availability: "available", entries: [] },
+    { id: "future", title: "Future", order: 20, availability: "unavailable", summary: "offline", entries: [] },
+  ],
+});
+
+describe("workspace Outcome", () => {
+  it("correlates a result and retains available sections beside an unavailable contributor", async () => {
+    const result = await connected([], { workspace: { root: "/a", name: "a", activity: "idle" } });
+    act(() => result.current.setOutcomeActive(true));
+    const requestId = lastRequestId();
+    expect(JSON.parse(mockWs!.sent.at(-1)!).type).toBe("get_outcome");
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId, outcome: outcome() }));
+    await waitFor(() => expect(result.current.state.outcome?.status).toBe("loaded"));
+    const state = result.current.state.outcome;
+    expect(state?.status === "loaded" && state.outcome.sections.map((section) => section.availability)).toEqual(["available", "unavailable"]);
+  });
+
+  it("discards stale request, session, and workspace responses", async () => {
+    const result = await connected([], { workspace: { root: "/a", name: "a", activity: "idle" } });
+    act(() => result.current.setOutcomeActive(true));
+    const requestId = lastRequestId();
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId: "older", outcome: outcome() }));
+    expect(result.current.state.outcome?.status).toBe("loading");
+    act(() => mockWs!.receive({
+      type: "workspace_switched",
+      sessionId: "sess_2",
+      workspace: { root: "/b", name: "b", activity: "idle" },
+      workspaces: [], branding: {}, model: "", thinkingLevel: "off", models: [], commands: [], isStreaming: false, items: [],
+    }));
+    expect(result.current.state.outcome).toBeNull();
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId, outcome: outcome("/a", "sess_1") }));
+    expect(result.current.state.outcome).toBeNull();
+  });
+
+  it("drops a loaded Outcome when the workspace or the session it describes is replaced", async () => {
+    // Correlation only discards late answers. A result already on screen has to
+    // go too: it is a claim about one workspace and one session, and the drawer
+    // would otherwise render it under whichever comes next until a refresh lands.
+    for (const replacement of [
+      {
+        type: "workspace_switched",
+        sessionId: "sess_2",
+        workspace: { root: "/b", name: "b", activity: "idle" },
+        workspaces: [], branding: {}, model: "", thinkingLevel: "off", models: [], commands: [], isStreaming: false, items: [],
+      },
+      {
+        type: "session_replaced",
+        sessionId: "sess_3",
+        workspace: { root: "/a", name: "a", activity: "idle" },
+        workspaces: [], branding: {}, model: "", thinkingLevel: "off", models: [], commands: [], isStreaming: false, items: [],
+      },
+    ]) {
+      const result = await connected([], { workspace: { root: "/a", name: "a", activity: "idle" } });
+      act(() => result.current.setOutcomeActive(true));
+      act(() => mockWs!.receive({ type: "workspace_outcome", requestId: lastRequestId(), outcome: outcome() }));
+      await waitFor(() => expect(result.current.state.outcome?.status).toBe("loaded"));
+
+      act(() => mockWs!.receive(replacement));
+      expect(result.current.state.outcome).toBeNull();
+    }
+  });
+
+  it("asks again for an open Outcome once the connection comes back", async () => {
+    // The socket that owed the answer is gone and the close handler dropped what
+    // was in flight. With nobody asking again the panel renders its loading state
+    // for as long as the drawer stays open.
+    const result = await connected([], { workspace: { root: "/a", name: "a", activity: "idle" } });
+    act(() => result.current.setOutcomeActive(true));
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId: lastRequestId(), outcome: outcome() }));
+    await waitFor(() => expect(result.current.state.outcome?.status).toBe("loaded"));
+
+    act(() => mockWs!.disconnect(1006));
+    // The hook retries on a timer; wait for the socket it opens next.
+    const dropped = mockWs;
+    await waitFor(() => expect(mockWs).not.toBe(dropped), { timeout: 4_000 });
+    const before = mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome").length;
+    act(() => mockWs!.open());
+    await waitFor(() => expect(mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome")).toHaveLength(before + 1));
+  });
+
+  it("coalesces a burst into one trailing refresh while Outcome is open", async () => {
+    const result = await connected([], { workspace: { root: "/a", name: "a", activity: "idle" } });
+    act(() => result.current.setOutcomeActive(true));
+    const firstId = lastRequestId();
+    const before = mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome").length;
+    act(() => {
+      mockWs!.receive({ type: "directory_changed", path: "src" });
+      mockWs!.receive({ type: "work_plan_changed", workPlan: null });
+      mockWs!.receive({ type: "agent_end" });
+    });
+    expect(mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome")).toHaveLength(before);
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId: firstId, outcome: outcome() }));
+    await waitFor(() => expect(mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome")).toHaveLength(before + 1));
+  });
+
+  it("settles queued refreshes across rapid drawer toggles and remains manually refreshable", async () => {
+    const result = await connected([], { workspace: { root: "/a", name: "a", activity: "idle" } });
+    act(() => result.current.setOutcomeActive(true));
+    const firstId = lastRequestId();
+    act(() => {
+      result.current.setOutcomeActive(false);
+      result.current.setOutcomeActive(true);
+      result.current.setOutcomeActive(false);
+      result.current.setOutcomeActive(true);
+    });
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId: firstId, outcome: outcome() }));
+    await waitFor(() => expect(mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome")).toHaveLength(2));
+    const trailingId = lastRequestId();
+    act(() => mockWs!.receive({ type: "workspace_outcome", requestId: trailingId, outcome: outcome() }));
+    act(() => result.current.refreshOutcome());
+    await waitFor(() => expect(mockWs!.sent.filter((frame) => JSON.parse(frame).type === "get_outcome")).toHaveLength(3));
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Connect lifecycle
 // ---------------------------------------------------------------------------

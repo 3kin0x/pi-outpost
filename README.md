@@ -33,6 +33,7 @@ once — each with its own sandbox, history and agent — and a sandbox you deci
 - [Installing it as an app](#installing-it-as-an-app)
 - [Embedding](#embedding)
 - [Work Plans](#work-plans)
+- [Workspace Outcome](#workspace-outcome)
 - [Development](#development)
 
 ## Start in 5 minutes
@@ -188,6 +189,8 @@ one needs, the command that proves it works, and the caution that goes with it.
   self-contained SVG. See [`docs/structured-exchange.md`](docs/structured-exchange.md)
 - [Work Plans](#work-plans): for non-trivial work the agent keeps an explicit hierarchy of
   objectives, dependencies and verification state beside the conversation
+- [Workspace Outcome](#workspace-outcome): review plan progress, recorded verification, and
+  changed files from one deterministic workspace view
 
 ### Setting it up and shipping it
 
@@ -685,10 +688,56 @@ switching to the project does not clear it: tell the agent what you accept or wh
 Accepted review tasks move to `done`; meaningful resumed work moves the relevant task back to
 an active state, so the project stops being ready until it reaches the review boundary again.
 
+Tasks can also carry agent-owned verification or supporting evidence. Each generic record has
+an `id`, a free-form `type`, a `result` (`passed`, `failed`, `inconclusive` or
+`informational`), and at least a concise `summary` or a resource `reference`. The agent replaces
+one task's complete evidence collection with `set_evidence`, preserving older failures when it
+wants to append another result:
+
+```json
+{"action":"set_evidence","taskId":"build","evidence":[{"id":"tests","type":"test","result":"passed","summary":"Focused tests passed"},{"id":"probe","type":"external-check","result":"failed","summary":"External probe failed"}]}
+```
+
+Evidence and status are deliberately independent: evidence never completes or blocks a task,
+and marking a task `done` never fabricates evidence. Pi Outpost does not automatically turn tool
+activity or conversation claims into evidence; agents record evidence explicitly through the
+structured tool.
+
 Each plan is stored beside its session file. It is restored on reconnect and session resume,
 replaced when the active session changes, copied when a conversation is forked, and
 independent thereafter. Compaction summarizes conversational context only: it never alters
-the plan. Sessions created before Work Plans open without a panel.
+the plan or its evidence. Existing version-1 plans and task inputs without evidence remain valid
+and normalize to empty evidence collections. Sessions created before Work Plans open without a
+panel.
+
+## Workspace Outcome
+
+The **Outcome** control in the header opens a concise review of the current workspace. It is
+available even for older sessions without a Work Plan. The view is assembled directly from
+structured state already owned by Pi Outpost: current Work Plan tasks, their recorded evidence,
+and current git working-tree status across every repository in the workspace. Opening or
+refreshing it does not ask a model to write a summary and does not approve the work.
+
+Plan progress and verification are deliberately separate. Tasks keep their exact status and
+reason. Verification is conservative: any failed evidence yields **failed**; otherwise any
+inconclusive evidence yields **inconclusive**; otherwise passing evidence yields **passed**.
+Informational evidence remains visible but does not prove verification, and no evidence is shown
+as **not recorded**. A completed task is therefore not automatically a verified task.
+
+Changed files retain their repository, workspace-relative path, and git state. A clean
+repository, no repository, a partially unavailable repository set, and globally unavailable git
+status are distinct states—none is presented as successful completion. Select a task to open it
+in Work Plan, or select a changed file to open the existing confined file/diff viewer. Safe
+HTTP(S) evidence links open externally; unsupported references remain readable text without a
+dead control.
+
+Outcome data never crosses workspace boundaries. Refreshes are correlated with the current
+workspace and session, so an older response is discarded after a project or session switch, and a
+result already on screen is dropped rather than carried into the next one. Switching project
+closes the drawer with the project it described; reopening it asks the workspace now bound. An
+Outcome left open across a dropped connection is asked for again once the connection is back. The
+section contract is extensible: future structured sources can add sections without changing the
+existing plan, verification, or changed-file sections.
 
 ## Development
 

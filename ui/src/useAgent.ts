@@ -27,6 +27,7 @@ import type {
   ThinkingLevel,
   TreeNode,
   WorkspaceInfo,
+  WorkspaceOutcome,
   WireImage,
   WorkPlan,
 } from "@pi-outpost/shared";
@@ -131,6 +132,11 @@ export interface GitStatusState {
   /** Browser-root-relative path → state, across all of them. */
   files: Record<string, GitFileState>;
 }
+
+export type OutcomeState =
+  | { status: "loading"; requestId: string; workspaceRoot: string | null; sessionId: string }
+  | { status: "loaded"; requestId: string; workspaceRoot: string | null; sessionId: string; outcome: WorkspaceOutcome }
+  | { status: "error"; requestId: string; workspaceRoot: string | null; sessionId: string; message: string };
 
 export type GitDiffState =
   | { path: string; before: string; after: string }
@@ -252,6 +258,8 @@ export interface AgentState {
    */
   pendingPrompt: { text: string; images?: WireImage[] } | null;
   workPlan: WorkPlan | null;
+  /** Latest workspace Outcome request/result; null until the drawer is opened. */
+  outcome: OutcomeState | null;
   queue: { steering: string[]; followUp: string[] };
   errors: string[];
   contextUsage: ContextUsage | null;
@@ -347,6 +355,7 @@ const initialState: AgentState = {
   items: [],
   pendingPrompt: null,
   workPlan: null,
+  outcome: null,
   queue: { steering: [], followUp: [] },
   errors: [],
   contextUsage: null,
@@ -417,6 +426,7 @@ type Action =
   | { type: "server_browse_started"; path: string; requestId: string }
   | { type: "server_browse_closed" }
   | { type: "settings_apply_started" }
+  | { type: "outcome_started"; requestId: string; workspaceRoot: string | null; sessionId: string }
   | { type: "branding_settled" }
   | { type: "branding_loaded"; branding: Branding };
 
@@ -487,6 +497,11 @@ function applySnapshot(state: AgentState, message: ServerMessage & { sessionId: 
     // switch — either made it into these items or never landed at all.
     pendingPrompt: null,
     workPlan: message.workPlan ?? null,
+    // An Outcome is a claim about one workspace and one session. Correlation
+    // discards a late response; this discards one already on screen, which the
+    // drawer would otherwise render under whichever session or workspace the
+    // snapshot brings until a refresh lands.
+    outcome: null,
     queue: { steering: [], followUp: [] },
     errors: [],
     contextUsage: message.contextUsage ?? null,
@@ -536,7 +551,8 @@ function reduce(state: AgentState, action: Action): AgentState {
       file?.status === "loaded" && file.pendingSave !== undefined
         ? { ...file, pendingSave: undefined, saveError: { message: "Connection lost while saving — try again", conflict: false } }
         : state.openFile;
-    return { ...state, connected: false, openFile };
+    const outcome = state.outcome?.status === "loading" ? { ...state.outcome, status: "error" as const, message: "Connection lost while loading Outcome." } : state.outcome;
+    return { ...state, connected: false, openFile, outcome };
   }
   // Fetched independently of the WS "hello" so it renders before the session is ready
   // (see the /branding fetch below); "hello" still wins if it arrives with a different value.
@@ -642,6 +658,9 @@ function reduce(state: AgentState, action: Action): AgentState {
   }
   if (action.type === "server_browse_closed") return { ...state, serverBrowse: null };
   if (action.type === "settings_apply_started") return { ...state, settingsApply: { status: "applying" } };
+  if (action.type === "outcome_started") {
+    return { ...state, outcome: { status: "loading", requestId: action.requestId, workspaceRoot: action.workspaceRoot, sessionId: action.sessionId } };
+  }
 
   const message = action.message;
   switch (message.type) {
@@ -714,6 +733,13 @@ function reduce(state: AgentState, action: Action): AgentState {
       return { ...state, thinkingLevel: message.level };
     case "work_plan_changed":
       return { ...state, workPlan: message.workPlan };
+    case "workspace_outcome": {
+      const pending = state.outcome;
+      if (pending === null || pending.requestId !== message.requestId) return state;
+      if (pending.sessionId !== state.sessionId || message.outcome.sessionId !== state.sessionId) return state;
+      if (pending.workspaceRoot !== null && message.outcome.workspaceRoot !== pending.workspaceRoot) return state;
+      return { ...state, outcome: { ...pending, status: "loaded", outcome: message.outcome } };
+    }
     case "user":
       return {
         ...state,
@@ -1177,6 +1203,10 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
   // keeps the root listed across reconnects and snapshots — see its comment.
   const rootListingRequestedRef = useRef(false);
   const terminalListenersRef = useRef(new Map<string, TerminalListeners>());
+  const outcomeIdentityRef = useRef({ workspaceRoot: state.workspace?.root ?? null, sessionId: state.sessionId });
+  useEffect(() => {
+    outcomeIdentityRef.current = { workspaceRoot: state.workspace?.root ?? null, sessionId: state.sessionId };
+  }, [state.workspace?.root, state.sessionId]);
 
   const sendMessage = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
@@ -1184,6 +1214,33 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       socket.send(JSON.stringify(message));
     }
   }, []);
+
+  const outcomeActiveRef = useRef(false);
+  const outcomeInFlightRef = useRef<string | null>(null);
+  const outcomeQueuedRef = useRef(false);
+  const requestOutcomeRef = useRef<() => void>(() => {});
+  const requestOutcome = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (outcomeInFlightRef.current !== null) {
+      outcomeQueuedRef.current = true;
+      return;
+    }
+    const requestId = `outcome:${crypto.randomUUID()}`;
+    outcomeInFlightRef.current = requestId;
+    const identity = outcomeIdentityRef.current;
+    dispatch({ type: "outcome_started", requestId, ...identity });
+    sendMessage({ type: "get_outcome", requestId });
+  }, [sendMessage]);
+  requestOutcomeRef.current = requestOutcome;
+  const invalidateOutcome = useCallback(() => {
+    if (outcomeActiveRef.current) requestOutcomeRef.current();
+  }, []);
+  const setOutcomeActive = useCallback((active: boolean) => {
+    outcomeActiveRef.current = active;
+    if (active) requestOutcome();
+    else outcomeQueuedRef.current = false;
+  }, [requestOutcome]);
 
   const requestDirectory = useCallback(
     (path: string, preserveEntries = false) => {
@@ -1301,6 +1358,20 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
     requestDirectory("");
   }, [state.connected, state.fileTree, requestDirectory]);
 
+  /**
+   * The same gap, for an Outcome drawer left open across a dropped connection:
+   * the socket that owed it an answer is gone, the close handler cleared what was
+   * in flight, and the snapshot that follows the reconnect clears the result. With
+   * nobody asking again the panel sits on "Loading Outcome…" for as long as it
+   * stays open. Asking on every (re)connect also refreshes what the gap may have
+   * changed, which is the truthful thing to render anyway.
+   */
+  useEffect(() => {
+    if (!state.connected || !outcomeActiveRef.current) return;
+    if (outcomeInFlightRef.current !== null) return;
+    requestOutcomeRef.current();
+  }, [state.connected]);
+
   // Branding is pure config (no session dependency) and served as soon as the process
   // starts — fetch it directly instead of waiting on the WS "hello", which only arrives
   // once the (slower) AgentSession runtime is ready.
@@ -1384,6 +1455,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           return;
         }
         if (message.type === "file_changed") {
+          invalidateOutcome();
           relistDirectory(parentDirectory(message.path));
           const openFile = openFileRef.current;
           if (openFile?.status === "loaded" && openFile.path === message.path) {
@@ -1401,6 +1473,7 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           return;
         }
         if (message.type === "directory_changed") {
+          invalidateOutcome();
           relistDirectory(message.path);
           // The watcher reports the directory, not the entry, so anything living
           // in it may be what moved. Re-reading the open file is one read and
@@ -1428,8 +1501,12 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
           if (message.type === "hello") refreshGitStatus();
         }
         // Bash commands can change git state without any file_changed broadcast
-        if (message.type === "agent_end") refreshGitStatus();
+        if (message.type === "agent_end") {
+          refreshGitStatus();
+          invalidateOutcome();
+        }
         if (message.type === "git_repositories_changed") {
+          invalidateOutcome();
           // The gate this ref holds is why the message exists: a client told at
           // connect that there was no repository here would otherwise never ask again
           gitAvailableRef.current = message.available;
@@ -1437,6 +1514,14 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         }
         if (message.type === "git_status" || (message.type === "git_error" && message.requestId.startsWith("git:"))) {
           gitStatusSettled(message.requestId);
+        }
+        if (message.type === "work_plan_changed") invalidateOutcome();
+        if (message.type === "workspace_outcome" && outcomeInFlightRef.current === message.requestId) {
+          outcomeInFlightRef.current = null;
+          if (outcomeQueuedRef.current) {
+            outcomeQueuedRef.current = false;
+            queueMicrotask(() => requestOutcomeRef.current());
+          }
         }
         if (message.type === "file_operation_result") {
           // `file_changed` notifications follow the acknowledgement immediately.
@@ -1464,6 +1549,8 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
         gitStatusInFlight.current.clear();
         gitStatusQueued.current.clear();
         gitStatusScopes.current.clear();
+        outcomeInFlightRef.current = null;
+        outcomeQueuedRef.current = false;
         // Same reasoning, but a stuck upload is worse than a stale badge: the
         // composer blocks submission while one is in flight, so an unanswered
         // promise would wedge the whole editor rather than one indicator.
@@ -1489,10 +1576,13 @@ export function useAgent(serverUrl = "", explicitToken?: string, embedded = fals
       socketRef.current = null;
       socket?.close();
     };
-  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, relistDirectory, requestDirectory, authNonce, workspaceRoot]);
+  }, [sendMessage, serverUrl, refreshGitStatus, gitStatusSettled, relistDirectory, requestDirectory, invalidateOutcome, authNonce, workspaceRoot]);
 
   return {
     state,
+    /** Keep the server-derived Outcome fresh only while its drawer is visible. */
+    setOutcomeActive,
+    refreshOutcome: requestOutcome,
     /** Current auth token (null when none) — for building /files/raw image URLs. */
     authToken: tokenRef.current,
     /**

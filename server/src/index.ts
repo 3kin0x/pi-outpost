@@ -45,6 +45,7 @@ import { readStructuredExchangeDocument } from "@pi-outpost/shared/structured-ex
 import { checkStructuredExchangeSchema } from "@pi-outpost/shared/structured-exchange/schema-node";
 import { isWorkPlanReadyForReview, validateWorkPlan } from "@pi-outpost/shared/work-plan";
 import { describeProviderError } from "@pi-outpost/shared/provider-error";
+import { composeWorkspaceOutcome, evidenceContributor, repositoryContributor, workPlanContributor } from "./outcome.ts";
 import {
   type AgentRuntime,
   type RuntimeEvent,
@@ -2963,6 +2964,18 @@ async function handleGitStatus(workspace: Workspace, socket: WebSocket, scope: s
   }
 }
 
+/** Compose only from the workspace bound to this socket; never broadcast Outcome content. */
+async function handleGetOutcome(workspace: Workspace, socket: WebSocket, requestId: string): Promise<void> {
+  await workspace.workPlanSync;
+  const snapshot = workspace.agent.snapshot();
+  const plan = sameSessionFile(snapshot.sessionFile, workspace.workPlanSessionFile) ? workspace.workPlan : null;
+  const outcome = await composeWorkspaceOutcome(
+    { workspaceRoot: workspace.root, sessionId: snapshot.sessionId },
+    [workPlanContributor(plan), evidenceContributor(plan), repositoryContributor({ repos: workspace.repos, gitUnavailable: workspace.gitUnavailable })],
+  );
+  send(socket, { type: "workspace_outcome", requestId, outcome });
+}
+
 /** Worktree-vs-HEAD contents of one file; missing sides (untracked/deleted) are "". */
 async function handleGitDiff(workspace: Workspace, socket: WebSocket, filePath: string, requestId: string): Promise<void> {
   if (workspace.repos.length === 0) return send(socket, { type: "git_error", requestId, message: "git is not available" });
@@ -3368,6 +3381,10 @@ function handleClientMessage(socket: WebSocket, raw: string): void {
       if (typeof message.requestId !== "string") return;
       if (message.repo !== undefined && typeof message.repo !== "string") return;
       handleGitStatus(workspace, socket, message.repo, message.requestId).catch(reportError);
+      break;
+    case "get_outcome":
+      if (typeof message.requestId !== "string") return;
+      handleGetOutcome(workspace, socket, message.requestId).catch(reportError);
       break;
     case "git_diff":
       if (typeof message.path !== "string" || typeof message.requestId !== "string") return;

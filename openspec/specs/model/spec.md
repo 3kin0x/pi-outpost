@@ -110,7 +110,9 @@ File-sandbox settings; when present, built-in file tools are replaced by scoped 
 | allowWrite | boolean | Enable edit/write; default false (read-only) |
 | writableRoot | string? | Subdirectory of root that edit/write are further confined to (read-write zone); defaults to root |
 | allowBash | boolean | Enable the bash tool; default false (bash cannot be path-scoped) |
+
 ## Requirements
+
 ### Requirement: ClientMessageValidation
 
 The system SHALL validate ClientMessage according to these rules:
@@ -378,16 +380,36 @@ The client/server protocol SHALL carry requests and responses for browsing serve
 - **THEN** the server returns the directory entries and acknowledges only a successfully persisted settings update
 
 ### Requirement: Work Plan protocol state
-The typed server protocol SHALL carry the current session Work Plan in authoritative state snapshots and SHALL broadcast accepted Work Plan changes to connected clients. The serialized form SHALL include stable task IDs, hierarchy, status, dependencies, generic resources, and status reason; it SHALL not expose UI-specific markup or domain-specific resource types.
+The typed server protocol SHALL carry the current session Work Plan in authoritative state snapshots and SHALL broadcast accepted Work Plan changes to connected clients. The serialized form SHALL include stable task IDs, hierarchy, status, dependencies, generic resources, status reason, and each task's generic evidence records including their result; it SHALL not expose UI-specific markup, provider-specific evidence fields, or domain-specific resource types.
 
 #### Scenario: Snapshot supplies Work Plan
-- **WHEN** a client connects to a session with a Work Plan
-- **THEN** its initial authoritative state includes that plan
+- **WHEN** a client connects to a session whose Work Plan contains successful and unsuccessful task evidence
+- **THEN** its initial authoritative state includes the exact plan, evidence records, and results
 
 #### Scenario: Change reaches all clients
 - **GIVEN** two clients display the same session
-- **WHEN** the agent changes the Work Plan
-- **THEN** both clients receive the same updated authoritative plan
+- **WHEN** the agent accepts a Work Plan evidence change
+- **THEN** both clients receive the same updated authoritative plan including the exact evidence records and results
+
+### Requirement: Workspace review-readiness protocol state
+
+The typed server protocol SHALL represent `ready-for-review` as a workspace activity distinct from `working`, `waiting`, and `idle`. Each server-wide workspace summary SHALL carry only workspace identity, generic activity, and generic attention metadata; review readiness SHALL NOT cause the Work Plan, tasks, artifacts, results, conversation, or other workspace-scoped content to cross the existing subscription boundary. Existing protocol states SHALL retain their meanings.
+
+#### Scenario: Workspace summary carries review readiness
+- **GIVEN** an open workspace whose authoritative Work Plan makes it ready for review
+- **WHEN** the server sends an initial workspace summary or a workspace activity update
+- **THEN** that workspace is typed as `ready-for-review`
+- **AND** its generic attention metadata indicates that user attention is required
+
+#### Scenario: Workspace summary preserves isolation
+- **GIVEN** a client subscribed to workspace A and workspace B is ready for review
+- **WHEN** the client receives the server-wide workspace summary
+- **THEN** the summary identifies B and its generic review-ready activity
+- **AND** it contains no Work Plan, task, artifact, result, conversation, or other workspace-scoped content from B
+
+#### Scenario: Existing activity meanings remain compatible
+- **WHEN** a workspace is stopped, starting, actively running a turn, blocked on a user answer, or inactive without a review-ready plan
+- **THEN** it remains represented by the existing `stopped`, `starting`, `working`, `waiting`, or `idle` activity respectively
 
 ## Technical Notes
 

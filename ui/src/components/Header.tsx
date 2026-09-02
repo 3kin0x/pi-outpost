@@ -46,6 +46,7 @@ interface HeaderProps {
   /** Extension setStatus() key/text pairs — see extensions.md#custom-ui. */
   statuses: Record<string, string>;
   sidebarOpen: boolean;
+  outcomeOpen: boolean;
   /** Tool-noise filter: tool cards are hidden from the conversation. */
   hideTools: boolean;
   gitAvailable: boolean;
@@ -79,6 +80,7 @@ interface HeaderProps {
     userExtensionPaths?: string[];
   }) => void;
   onToggleSidebar: () => void;
+  onToggleOutcome: () => void;
   onToggleHideTools: () => void;
   onToggleTheme: () => void;
   onNewSession: () => void;
@@ -382,6 +384,21 @@ export function Header(props: HeaderProps) {
         }`}
       >
         {props.sidebarOpen ? "◧" : "◨"} files
+      </button>
+      <button
+        type="button"
+        onClick={props.onToggleOutcome}
+        aria-pressed={props.outcomeOpen}
+        title="Review structured workspace Outcome"
+        className={`rounded-md border px-2 py-1 text-xs ${
+          props.outcomeOpen
+            ? "border-zinc-400 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
+            : props.workspace?.activity === "ready-for-review"
+              ? "border-amber-400 text-amber-700 dark:text-amber-300"
+              : "border-zinc-300 text-zinc-500 hover:border-zinc-400 dark:border-zinc-800 dark:text-zinc-400"
+        }`}
+      >
+        Outcome{props.workspace?.activity === "ready-for-review" ? " •" : ""}
       </button>
       {props.gitAvailable && (
         <GitMenu

@@ -27,6 +27,7 @@ function setup(overrides: Partial<Props> = {}) {
     onBrowseServerPath: vi.fn(),
     onCloseServerBrowser: vi.fn(),
     onToggleSidebar: vi.fn(),
+    onToggleOutcome: vi.fn(),
     onToggleHideTools: vi.fn(),
     onToggleTheme: vi.fn(),
     onNewSession: vi.fn(),
@@ -59,6 +60,7 @@ function setup(overrides: Partial<Props> = {}) {
     showThemeToggle: true,
     statuses: {},
     sidebarOpen: false,
+    outcomeOpen: false,
     hideTools: false,
     gitAvailable: false,
     gitStatus: null,
@@ -339,6 +341,14 @@ describe("Header", () => {
     const { onToggleSidebar } = setup();
     fireEvent.click(screen.getByRole("button", { name: /files/ }));
     expect(onToggleSidebar).toHaveBeenCalled();
+  });
+
+  it("keeps Outcome available and emphasizes review readiness", () => {
+    const { onToggleOutcome, rerenderWith } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Outcome" }));
+    expect(onToggleOutcome).toHaveBeenCalled();
+    rerenderWith({ workspace: { root: "/work", name: "work", activity: "ready-for-review", needsAttention: true } });
+    expect(screen.getByRole("button", { name: /Outcome/ })).toHaveTextContent("•");
   });
 
   it("reports the connection state", () => {
