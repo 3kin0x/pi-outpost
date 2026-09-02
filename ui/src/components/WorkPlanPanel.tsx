@@ -16,6 +16,9 @@ interface WorkPlanPanelProps {
   open: boolean;
   onToggle(): void;
   onOpenWorkspace(path: string): void;
+  requestedTaskId?: string | null;
+  /** Called once the request above has been applied, so it is not replayed. */
+  onTaskRequestHandled?(): void;
 }
 
 function workspacePath(resource: WorkPlanResource): string | null {
@@ -29,10 +32,25 @@ function workspacePath(resource: WorkPlanResource): string | null {
   return candidate;
 }
 
-export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPlanPanelProps) {
+export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace, requestedTaskId, onTaskRequestHandled }: WorkPlanPanelProps) {
   const previewId = useId();
   const [previewVisible, setPreviewVisible] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [missingTaskId, setMissingTaskId] = useState<string | null>(null);
+  // A navigation is an event, not a mode: applied once and then given back. Left
+  // standing it would re-select its task on every plan update — the agent edits
+  // the plan constantly — and quietly undo whatever the reader had selected since.
+  useEffect(() => {
+    if (!requestedTaskId) return;
+    if (plan.tasks.some((task) => task.id === requestedTaskId)) {
+      setSelectedId(requestedTaskId);
+      setMissingTaskId(null);
+    } else {
+      setSelectedId(null);
+      setMissingTaskId(requestedTaskId);
+    }
+    onTaskRequestHandled?.();
+  }, [plan.tasks, requestedTaskId, onTaskRequestHandled]);
   useEffect(() => {
     if (selectedId !== null && !plan.tasks.some((task) => task.id === selectedId)) setSelectedId(null);
   }, [plan, selectedId]);
@@ -103,6 +121,7 @@ export function WorkPlanPanel({ plan, open, onToggle, onOpenWorkspace }: WorkPla
         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800" aria-hidden><div className="h-full bg-emerald-500" style={{ width: `${plan.tasks.length === 0 ? 0 : (done / plan.tasks.length) * 100}%` }} /></div>
       </header>
       <div role="tree" aria-label="Work Plan tasks" className="min-h-0 flex-1 overflow-y-auto p-2">{rows(undefined)}</div>
+      {missingTaskId && <div role="status" className="border-t border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">That Outcome task no longer exists in the current Work Plan.</div>}
       {selected && <section aria-label="Task details" className="max-h-[45%] overflow-y-auto border-t border-zinc-200 p-3 text-xs dark:border-zinc-800">
         <div className={`font-semibold ${STATUS[selected.status].className}`}>{STATUS[selected.status].label}</div><h3 className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{selected.title}</h3>
         {selected.description && <p className="mt-2 whitespace-pre-wrap text-zinc-600 dark:text-zinc-300">{selected.description}</p>}

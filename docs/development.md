@@ -47,6 +47,15 @@ Server integration tests boot a real server against a throwaway workspace (isola
 `agentDir`, so your own sessions and extensions are never touched) and talk to it over
 HTTP/WebSocket. See [`server/test/README.md`](../server/test/README.md).
 
+Outcome uses the shared WebSocket protocol rather than a generated prose field. The client sends
+`{ "type": "get_outcome", "requestId": "…" }`; the bound workspace replies only to that
+connection with `{ "type": "workspace_outcome", "requestId": "…", "outcome": … }`.
+`outcome.workspaceRoot` and `outcome.sessionId` are authoritative correlation fields. Consumers
+must reject a response whose request, workspace, or session no longer matches their active view.
+The payload is a list of ordered structured sections and closed navigation-target variants—never
+HTML or executable actions. See `shared/src/outcome.ts` and `shared/src/protocol.ts` for the
+canonical message and section shapes.
+
 UI component tests run under vitest with jsdom and `@testing-library/react`, covering
 `ui/src/components/` and `ui/src/util/`. They need no model auth and cost no tokens.
 

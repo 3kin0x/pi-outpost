@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useCallback, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkPlan } from "@pi-outpost/shared";
 import { WorkPlanPanel } from "./WorkPlanPanel";
@@ -79,5 +80,35 @@ describe("WorkPlanPanel", () => {
     expect(preview).toHaveClass("hidden");
     fireEvent.click(control);
     expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("selects a task requested by Outcome and reports one that disappeared", async () => {
+    const handled = vi.fn();
+    const { rerender } = render(<WorkPlanPanel plan={plan} open onToggle={() => {}} onOpenWorkspace={() => {}} requestedTaskId="build" onTaskRequestHandled={handled} />);
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: /Build UI/ })).toHaveAttribute("aria-selected", "true"));
+    expect(handled).toHaveBeenCalled();
+    rerender(<WorkPlanPanel plan={plan} open onToggle={() => {}} onOpenWorkspace={() => {}} requestedTaskId="removed" onTaskRequestHandled={handled} />);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/no longer exists/i));
+  });
+
+  it("does not replay a handled request over what the reader selected afterwards", async () => {
+    // The agent rewrites the plan constantly. A request left standing would be
+    // re-applied on each of those updates and pull the selection back. The
+    // wrapper mirrors what App does: hold the request, drop it once applied.
+    function Host({ plan: current }: { plan: WorkPlan }) {
+      const [requestedTaskId, setRequestedTaskId] = useState<string | null>("build");
+      const clear = useCallback(() => setRequestedTaskId(null), []);
+      return <WorkPlanPanel plan={current} open onToggle={() => {}} onOpenWorkspace={() => {}} requestedTaskId={requestedTaskId} onTaskRequestHandled={clear} />;
+    }
+    const { rerender } = render(<Host plan={plan} />);
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: /Build UI/ })).toHaveAttribute("aria-selected", "true"));
+
+    fireEvent.click(screen.getByRole("treeitem", { name: /Publish/ }));
+    expect(screen.getByRole("treeitem", { name: /Publish/ })).toHaveAttribute("aria-selected", "true");
+
+    const updated: WorkPlan = { ...plan, updatedAt: "2026-08-24T00:00:00.000Z", tasks: plan.tasks.map((task) => ({ ...task })) };
+    rerender(<Host plan={updated} />);
+    await waitFor(() => expect(screen.getByRole("treeitem", { name: /Publish/ })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByRole("treeitem", { name: /Build UI/ })).toHaveAttribute("aria-selected", "false");
   });
 });

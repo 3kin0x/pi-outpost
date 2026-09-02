@@ -44,6 +44,8 @@ function agentState(overrides: Record<string, unknown> = {}) {
     tree: null,
     isStreaming: false,
     items: [] as ChatItem[],
+    workPlan: null,
+    outcome: null,
     queue: { steering: [], followUp: [] },
     errors: [],
     contextUsage: null,
@@ -126,12 +128,63 @@ function agentApi(state: ReturnType<typeof agentState>) {
     switchWorkspace: vi.fn(),
     openProject: vi.fn(),
     closeProject: vi.fn(),
+    setOutcomeActive: vi.fn(),
+    refreshOutcome: vi.fn(),
     closeServerBrowser: vi.fn(),
   };
 }
 
 beforeEach(() => {
   mockUseAgent.mockReset();
+});
+
+describe("Workspace Outcome", () => {
+  const workPlan = {
+    version: 1 as const,
+    id: "p",
+    title: "Outcome plan",
+    updatedAt: "2026-09-01T00:00:00Z",
+    tasks: [{ id: "task", title: "Review task", status: "needs_review" as const, dependsOn: [], resources: [], evidence: [] }],
+  };
+  const outcome = {
+    status: "loaded" as const,
+    requestId: "r",
+    workspaceRoot: null,
+    sessionId: "sess_1",
+    outcome: {
+      workspaceRoot: "/work",
+      sessionId: "sess_1",
+      sections: [
+        { id: "work-plan", title: "Work Plan", order: 10, availability: "available" as const, entries: [
+          { id: "task", source: "Work Plan", title: "Review task", status: "needs_review" as const, target: { kind: "work-plan-task" as const, taskId: "task" } },
+        ] },
+        { id: "verification", title: "Verification", order: 20, availability: "empty" as const, summary: "Verification not recorded.", entries: [] },
+        { id: "changed-files", title: "Changed files", order: 30, availability: "available" as const, entries: [
+          { id: "file", source: "Git working tree", title: "src/app.ts", status: "modified" as const, target: { kind: "workspace-diff" as const, path: "src/app.ts" } },
+        ] },
+      ],
+    },
+  };
+
+  it("opens the always-available drawer and switches from it to the requested Work Plan task", () => {
+    const api = agentApi(agentState({ workPlan, outcome }));
+    mockUseAgent.mockReturnValue(api);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Outcome" }));
+    expect(screen.getByRole("complementary", { name: "Workspace Outcome" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Review task/ }));
+    expect(screen.queryByRole("complementary", { name: "Workspace Outcome" })).toBeNull();
+    expect(screen.getByRole("treeitem", { name: /Review task/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("routes changed files through the existing diff-opening path", () => {
+    const api = agentApi(agentState({ workPlan, outcome }));
+    mockUseAgent.mockReturnValue(api);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Outcome" }));
+    fireEvent.click(screen.getByRole("button", { name: /src\/app.ts/ }));
+    expect(api.readFile).toHaveBeenCalledWith("src/app.ts");
+  });
 });
 
 // ---------------------------------------------------------------------------
